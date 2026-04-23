@@ -13,3 +13,4 @@ COPY . .
 
 # 5. 프로그램 실행 (예: main.py 실행)
 CMD ["python", "main.py"]
+지나갑니다!
