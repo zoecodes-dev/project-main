@@ -2,13 +2,33 @@ from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.sql import func
 from database import Base
 
-# 우리가 만들 '협력사' 테이블의 설계도(ORM 모델)
-class Supplier(Base):
-    __tablename__ = "suppliers" # 실제 DB에 생성될 테이블 이름
+# [User] 입주민: 회원 정보를 담는 테이블
+# 로그인을 하려면 이 설계도가 있어야 DB에 아이디와 비밀번호를 저장할 수 있습니다.
+class User(Base):
+    __tablename__ = "users" # 실제 DB에 생성될 테이블 이름
 
-    # index=True로 설정해두면 나중에 id로 데이터를 검색할 때 훨씬 빠름
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), nullable=False)       # 협력사명 (빈 값 안 됨)
-    country = Column(String(50), nullable=False)      # 국가 (빈 값 안 됨)
-    # 데이터가 추가될 때의 시간을 자동으로 기록해주는 컬럼
+    # unique=True: 똑같은 아이디로 중복 가입하는 것을 방지합니다.
+    username = Column(String(50), unique=True, index=True, nullable=False)
+    # pwd: 암호화된(Hash) 비밀번호가 저장되는 곳입니다. 
+    # 보안을 위해 길이를 200으로 넉넉하게 설정했습니다.
+    pwd = Column(String(200), nullable=False)
+    # 가입일자 자동 기록
     created_at = Column(DateTime, server_default=func.now())
+
+
+# [Post/Supplier] 활동: 협력사 정보를 담는 테이블
+class Supplier(Base):
+    __tablename__ = "suppliers" 
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)       # 협력사명
+    country = Column(String(50), nullable=False)      # 국가
+    created_at = Column(DateTime, server_default=func.now())
+
+'''
+[ Model 설계 설명 ]
+1. User 모델: 회원가입 및 JWT 인증의 바탕이 되는 테이블입니다. 
+   비밀번호를 생으로 저장하지 않고, 암호화된 문자열을 수용할 수 있도록 설계
+2. Supplier 모델: 실제 서비스의 핵심 데이터인 협력사 정보를 관리합니다.
+'''
