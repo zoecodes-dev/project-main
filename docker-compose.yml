@@ -1,0 +1,70 @@
+services:
+  # Layer 1: 공급망 데이터 백본 (PostgreSQL + PostGIS + pgvector)
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: kira-postgres
+    networks:
+      - project_net
+    env_file:
+      - ./.env
+    ports:
+      - "5432:5432"
+    volumes:
+      - kira_pgdata:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-kira_admin} -d $${POSTGRES_DB:-kira_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  # Async Workflow Queue용 Redis
+  redis:
+    image: redis:7-alpine
+    container_name: kira-redis
+    networks:
+      - project_net
+    ports:
+      - "6379:6379"
+    volumes:
+      - kira_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: always
+
+  # Layer 2: KIRA 에이전트 통합 백엔드
+  app:
+    platform: linux/amd64
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: kira-backend
+    networks:
+      - project_net
+    env_file:
+      - ./.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - /app/__pycache__
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  kira_pgdata:
+    name: kira_pgdata
+  kira_redisdata:
+    name: kira_redisdata
+
+networks:
+  project_net:
+    driver: bridge
