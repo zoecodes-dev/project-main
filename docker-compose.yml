@@ -1,27 +1,47 @@
+version: '3.8'
+
 services:
+  # Layer 1: 공급망 데이터 백본 (PostgreSQL + PostGIS + pgvector)
   db:
-    image: mysql:8.4
-    container_name: mysql
+    image: postgis/postgis:16-3.4
+    container_name: kira-postgres
     networks:
       - project_net
     env_file:
       - ./.env
     ports:
-      - "3307:3306"
+      - "5432:5432"
     volumes:
-      - ./db/conf.d:/etc/mysql/conf.d
-      - ./db/data:/var/lib/mysql
-      - ./db/initdb.d:/docker-entrypoint-initdb.d
+      - kira_pgdata:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-kira_admin} -d $${POSTGRES_DB:-kira_db}"]
+      interval: 5s
       timeout: 5s
       retries: 5
     restart: always
 
+  # Async Workflow Queue용 Redis
+  redis:
+    image: redis:7-alpine
+    container_name: kira-redis
+    networks:
+      - project_net
+    ports:
+      - "6379:6379"
+    volumes:
+      - kira_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: always
+
+  # Layer 2: KIRA 에이전트 통합 백엔드
   app:
     build: .
-    container_name: backend
+    container_name: kira-backend
     networks:
       - project_net
     env_file:
@@ -33,7 +53,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: always
+
+volumes:
+  kira_pgdata:
+    name: kira_pgdata
+  kira_redisdata:
+    name: kira_redisdata
 
 networks:
   project_net:
