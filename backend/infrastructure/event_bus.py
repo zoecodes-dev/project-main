@@ -1,33 +1,58 @@
-import json
-import logging
-from typing import Callable, Dict
+"""
+infrastructure/event_bus.py  (담당: 팀원 B)
 
-from backend.infrastructure.database import async_session_maker
+PostgreSQL LISTEN / NOTIFY 래퍼. 추가 인프라 없이 트랜잭션과 일체화된다.
+
+스펙 1-2 인터페이스:
+    async def publish(event_name: str, payload: dict) -> None
+    async def subscribe(event_name: str, handler: Callable) -> None
+
+W1 범위: publish만 동작. subscribe는 핸들러 등록만(실제 LISTEN 루프는 W2).
+이벤트 이름·payload는 events/types.py 및 spec 7장 계약을 따른다.
+"""
+import json
+import os
+from typing import Awaitable, Callable, Dict, List
+
 from sqlalchemy import text
 
-logger = logging.getLogger("kira.infrastructure.event_bus")
+from infrastructure.database import engine
 
-# 구독 핸들러 깡통 딕셔너리 (실제 LISTEN 루프는 W2 구현)
-_subscribers: Dict[str, list[Callable]] = {}
+# NOTIFY 채널명. .env의 KIRA_EVENT_CHANNEL과 일치.
+EVENT_CHANNEL = os.getenv("KIRA_EVENT_CHANNEL", "kira_events")
+
+# W1: 구독 핸들러 등록만. 실제 디스패치는 W2 LISTEN 루프에서.
+_subscribers: Dict[str, List[Callable[[dict], Awaitable[None]]]] = {}
+
 
 async def publish(event_name: str, payload: dict) -> None:
-    """PostgreSQL NOTIFY를 사용해 도메인 이벤트를 발행합니다."""
-    async with async_session_maker() as session:
-        try:
-            message = json.dumps({"event": event_name, "data": payload}, default=str)
-            message_escaped = message.replace("'", "''")
-            
-            # kira_events 단일 채널 사용
-            query = text(f"NOTIFY kira_events, '{message_escaped}'")
-            await session.execute(query)
-            await session.commit()
-            logger.info(f"[EventBus] Published: {event_name}")
-        except Exception as e:
-            logger.error(f"[EventBus] Failed to publish {event_name}: {e}")
+    """
+    이벤트를 PostgreSQL NOTIFY로 발행한다.
+    payload는 JSON 직렬화 가능한 dict여야 한다.
+    envelope: {"event_name": ..., "payload": {...}}
+    """
+    envelope = json.dumps(
+        {"event_name": event_name, "payload": payload},
+        default=str,
+        ensure_ascii=False,
+    )
+    # NOTIFY는 페이로드 8000바이트 제한 → 큰 payload는 큐/테이블 참조로 우회 (W2)
+    async with engine.connect() as conn:
+        await conn.execute(
+            text("SELECT pg_notify(:channel, :msg)"),
+            {"channel": EVENT_CHANNEL, "msg": envelope},
+        )
+        await conn.commit()
+    print(f"[EVENT PUBLISHED] {event_name} -> NOTIFY {EVENT_CHANNEL}")
 
-def subscribe(event_name: str, handler: Callable) -> None:
-    """W1 단계: 함수 등록만 수행합니다."""
-    if event_name not in _subscribers:
-        _subscribers[event_name] = []
-    _subscribers[event_name].append(handler)
-    logger.info(f"[EventBus] Subscribed to {event_name}")
+
+async def subscribe(
+    event_name: str,
+    handler: Callable[[dict], Awaitable[None]],
+) -> None:
+    """
+    이벤트 핸들러 등록. W1에서는 등록만 수행한다.
+    실제 LISTEN 구독 루프는 W2에서 구현한다.
+    """
+    _subscribers.setdefault(event_name, []).append(handler)
+    print(f"[EVENT SUBSCRIBED] {event_name} <- {handler.__name__}")
