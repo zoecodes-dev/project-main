@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from typing import Optional
 from sqlalchemy import Integer, String, DateTime, Text, ForeignKey, Enum
+from sqlalchemy import Integer, String, DateTime, Text, ForeignKey, Enum, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 # 최상위 루트에 위치한 공통 Base 클래스 연동 (인프라 통합 규칙 준수)
@@ -42,7 +43,7 @@ class DataRequestLog(Base):
     target_supplier_id: Mapped[int] = mapped_column(Integer, nullable=False)                # 데이터를 제출해야 하는 협력사 ID
     requested_data_type: Mapped[str] = mapped_column(String(50), nullable=False)            # 요청하는 ESG 데이터 종류 (예: 탄소배출량, 원산지서류)
     requested_at: Mapped[datetime] = mapped_column(                                         # 요청서 발송 시각 (자동 입력되는 표준 UTC 시간)
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     due_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)                    # 데이터 제출 마감일 (SLA 관리 기준점)
     response_status: Mapped[ResponseStatus] = mapped_column(                                # 단순 제출 여부 상태 (PENDING / SUBMITTED / DELAYED)
@@ -75,7 +76,7 @@ class SubmissionStatusHistory(Base):
     actor_id: Mapped[int] = mapped_column(Integer, nullable=False)                          # 상태 전이를 발생시킨 주체 ID (유저 혹은 시스템 ID)
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)                      # 상태 변경 및 반려 사유 설명 (텍스트, 공란 허용)
     changed_at: Mapped[datetime] = mapped_column(                                           # 상태 전이가 일어난 정확한 시각 (자동 입력 표준 UTC)
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     # DataRequestLog 모델과의 N:1 관계 설정
@@ -90,7 +91,7 @@ SUBMISSION_TRANSITIONS = {
     SubmissionStatus.PENDING:     [SubmissionStatus.REQUESTED],
     SubmissionStatus.REQUESTED:   [SubmissionStatus.IN_PROGRESS],
     SubmissionStatus.IN_PROGRESS: [SubmissionStatus.SUBMITTED],
-    SubmissionStatus.SUBMITTED:   [SubmissionStatus.REVIEW, SubmissionStatus.REJECTED],
+    SubmissionStatus.SUBMITTED:   [SubmissionStatus.REVIEW],
     SubmissionStatus.REVIEW:      [SubmissionStatus.APPROVED, SubmissionStatus.REJECTED],
     SubmissionStatus.REJECTED:    [SubmissionStatus.IN_PROGRESS],
     SubmissionStatus.APPROVED:    [SubmissionStatus.ARCHIVED, SubmissionStatus.VIOLATION],
