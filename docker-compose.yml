@@ -74,7 +74,7 @@ services:
       context: .
       dockerfile: docker/app.Dockerfile
     container_name: kira-worker
-    command: ["arq", "workers.geo_risk_worker.WorkerSettings"]
+    command: ["arq", "backend.workers.geo_risk_worker.WorkerSettings"]
     networks:
       - project_net
     env_file:
