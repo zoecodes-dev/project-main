@@ -1,97 +1,66 @@
-import logging
+"""
+infrastructure/queue.py  (담당: 팀원 B)
+
+ARQ + Redis. 비동기 작업을 Queue에 넣는 단일 인터페이스만 제공한다.
+
+스펙 1-3 인터페이스:
+    async def enqueue(queue_name: str, func_name: str, **kwargs) -> str
+    # 반환값: job_id (클라이언트에게 202 Accepted 응답 시 포함)
+
+Queue 이름 6종: ocr / validation / risk / hitl / notification / dpp_publish
+Retry: 지수 백오프, 최대 3회. 3회 실패 시 dead_letter_queue.
+Idempotency: 각 작업 함수는 동일 인자로 두 번 호출돼도 같은 결과를 내야 한다.
+"""
 import os
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
 
-logger = logging.getLogger("kira.infrastructure.queue")
+# ----- Queue 이름 상수 (스펙 1-3) -----
+OCR_QUEUE = "ocr_queue"
+VALIDATION_QUEUE = "validation_queue"
+RISK_QUEUE = "risk_queue"
+HITL_QUEUE = "hitl_queue"
+NOTIFICATION_QUEUE = "notification_queue"
+DPP_PUBLISH_QUEUE = "dpp_publish_queue"
+DEAD_LETTER_QUEUE = "dead_letter_queue"
 
-# spec 1-3: Queue 이름 6종 (단일 책임 원칙)
-# 한 워커가 한 큐만 처리하므로 풀도 큐별로 분리한다.
-QUEUE_OCR = "ocr_queue"
-QUEUE_VALIDATION = "validation_queue"
-QUEUE_RISK = "risk_queue"
-QUEUE_HITL = "hitl_queue"
-QUEUE_NOTIFICATION = "notification_queue"
-QUEUE_DPP_PUBLISH = "dpp_publish_queue"
-
-ALLOWED_QUEUES = {
-    QUEUE_OCR,
-    QUEUE_VALIDATION,
-    QUEUE_RISK,
-    QUEUE_HITL,
-    QUEUE_NOTIFICATION,
-    QUEUE_DPP_PUBLISH,
+QUEUE_NAMES = {
+    OCR_QUEUE,
+    VALIDATION_QUEUE,
+    RISK_QUEUE,
+    HITL_QUEUE,
+    NOTIFICATION_QUEUE,
+    DPP_PUBLISH_QUEUE,
 }
 
-# 큐별 풀 캐시. 첫 enqueue 호출 시 lazy 생성.
-_pools: Dict[str, ArqRedis] = {}
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+_redis_pool: Optional[ArqRedis] = None
 
 
-def _redis_settings() -> RedisSettings:
-    """환경변수 기반 Redis 설정.
+async def get_redis_pool() -> ArqRedis:
+    """ARQ Redis 풀 싱글톤."""
+    global _redis_pool
+    if _redis_pool is None:
+        _redis_pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
+    return _redis_pool
 
-    docker-compose 내부에서는 host='redis', 로컬 디버깅에서는 'localhost'.
+
+async def enqueue(queue_name: str, func_name: str, **kwargs) -> str:
     """
-    return RedisSettings(
-        host=os.getenv("REDIS_HOST", "localhost"),
-        port=int(os.getenv("REDIS_PORT", "6379")),
-        database=int(os.getenv("REDIS_DB", "0")),
-    )
-
-
-async def get_redis_pool(queue_name: str) -> ArqRedis:
-    """큐 이름별 ArqRedis 풀을 반환한다.
-
-    spec 5-3: Worker 단일 책임 — 한 워커가 한 큐만 처리.
-    풀의 default_queue_name을 큐 이름으로 지정해야 워커 통계와 일치한다.
+    작업을 지정 Queue에 넣고 job_id를 반환한다.
+    queue_name은 QUEUE_NAMES 중 하나여야 한다.
     """
-    if queue_name not in ALLOWED_QUEUES:
+    if queue_name not in QUEUE_NAMES:
         raise ValueError(
-            f"[Queue] Unknown queue '{queue_name}'. "
-            f"Allowed: {sorted(ALLOWED_QUEUES)}"
+            f"알 수 없는 Queue: {queue_name}. 허용: {sorted(QUEUE_NAMES)}"
         )
 
-    if queue_name not in _pools:
-        _pools[queue_name] = await create_pool(
-            _redis_settings(),
-            default_queue_name=queue_name,
-        )
-        logger.info(f"[Queue] Pool created for {queue_name}")
-    return _pools[queue_name]
-
-
-async def enqueue(queue_name: str, func_name: str, **kwargs: Any) -> Optional[str]:
-    """W1 단계: enqueue 인터페이스만 제공. 실제 워커 컨슈머는 W2.
-
-    spec 1-3 반환 계약: job_id (202 Accepted 응답에 포함).
-    Idempotency Key는 _job_id로 전달 — 같은 _job_id로 두 번 enqueue되면 중복 무시.
-    """
-    try:
-        pool = await get_redis_pool(queue_name)
-        job = await pool.enqueue_job(func_name, **kwargs)
-        if job is None:
-            # 같은 _job_id로 이미 enqueue된 경우 ARQ가 None을 반환 (idempotency)
-            logger.info(
-                f"[Queue] Duplicate suppressed for {func_name} on {queue_name}"
-            )
-            return None
-        logger.info(
-            f"[Queue] Enqueued {func_name} to {queue_name} (job_id={job.job_id})"
-        )
-        return job.job_id
-    except Exception as e:
-        logger.error(f"[Queue] Failed to enqueue {func_name} to {queue_name}: {e}")
-        return None
-
-
-async def close_pools() -> None:
-    """FastAPI shutdown 시 호출. 모든 풀의 Redis 연결을 정리한다."""
-    for queue_name, pool in list(_pools.items()):
-        try:
-            await pool.aclose()
-            logger.info(f"[Queue] Pool closed for {queue_name}")
-        except Exception as e:
-            logger.warning(f"[Queue] Pool close failed for {queue_name}: {e}")
-    _pools.clear()
+    pool = await get_redis_pool()
+    # ARQ는 _queue_name으로 큐 분리. job 함수명은 worker에 등록된 이름과 일치해야 함.
+    job = await pool.enqueue_job(func_name, _queue_name=queue_name, **kwargs)
+    job_id = job.job_id if job else "duplicate"
+    print(f"[ENQUEUED] {func_name} -> {queue_name} (job_id={job_id})")
+    return job_id
