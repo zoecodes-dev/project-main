@@ -1,25 +1,19 @@
-# 1. 환경 변수 및 민감 정보
+# Environments
+venv/
+env/
+.venv/
 .env
 
-# 2. 로컬 데이터 및 DB 백업
-db/data/
-
-# 3. 파이썬 및 가상환경 (보완)
+# Python
 __pycache__/
-*.pyc
-venv/
-.venv/
-env/
-.env.local
+*.py[cod]
+*$py.class
 .pytest_cache/
 
-# 4. OS 시스템 파일 (기존 유지)
-Thumbs.db
-desktop.ini
-.DS_Store
-
-# 5. IDE 설정 및 로그 (보완)
+# IDE & OS
 .vscode/
 .idea/
+.DS_Store
+
+# Logs
 *.log
-*.sqlite

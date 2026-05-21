@@ -6,3 +6,12 @@ __pycache__
 *.pyc
 .env
 .DS_Store
+.ai_rules
+
+# 불필요한 설정 파일 및 문서 제외 (이미지 경량화)
+.vscode/
+.idea/
+*.md
+docker-compose*.yml
+Dockerfile*
+.git/

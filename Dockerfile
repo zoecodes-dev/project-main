@@ -23,4 +23,4 @@ COPY . .
 # 개발 모드: uvicorn으로 FastAPI 서버 띄우기 (경로 주의!)
 # backend 폴더 안의 main.py를 바라보도록 지정
 # --reload 옵션 덕분에 코드를 수정하고 저장만 해도 서버가 알아서 재시작
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
