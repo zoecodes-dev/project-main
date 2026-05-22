@@ -1,7 +1,6 @@
 services:
   # Layer 1: 공급망 데이터 백본 (PostgreSQL + PostGIS + pgvector)
   db:
-    platform: linux/amd64
     build:
       context: .
       dockerfile: docker/db.Dockerfile
@@ -23,7 +22,6 @@ services:
 
   # Async Workflow Queue용 Redis (ARQ)
   redis:
-    platform: linux/amd64
     build:
       context: .
       dockerfile: docker/redis.Dockerfile
@@ -43,7 +41,6 @@ services:
 
   # Layer 2: KIRA 에이전트 통합 백엔드 (FastAPI)
   app:
-    platform: linux/amd64
     build:
       context: .
       dockerfile: docker/app.Dockerfile
@@ -69,7 +66,6 @@ services:
 
   # Layer 2: ARQ 워커 (Queue 컨슈머) — app과 동일 이미지, 실행 커맨드만 다름
   worker:
-    platform: linux/amd64
     build:
       context: .
       dockerfile: docker/app.Dockerfile
