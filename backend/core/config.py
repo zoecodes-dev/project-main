@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     
     # Redis 설정
     REDIS_URL: str
+    
+    KIRA_EVENT_CHANNEL: str = "kira_events"
 
     # JWT 인증 설정 (기본값을 지워서 강력하게 강제)
     SECRET_KEY: str

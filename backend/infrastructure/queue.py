@@ -58,8 +58,21 @@ async def enqueue(queue_name: str, func_name: str, **kwargs) -> str:
         )
 
     pool = await get_redis_pool()
+    
+    # 클라이언트가 넘긴 Idempotency Key(예: 이벤트 해시값, 고유 ID)를 ARQ _job_id로 매핑
+    # kwargs에서 멱등성 키를 빼내어 ARQ에 전달합니다. 없으면 ARQ가 자동 생성합니다.
+    idempotency_key = kwargs.pop("job_id", None)
+    
     # ARQ는 _queue_name으로 큐 분리. job 함수명은 worker에 등록된 이름과 일치해야 함.
-    job = await pool.enqueue_job(func_name, _queue_name=queue_name, **kwargs)
-    job_id = job.job_id if job else "duplicate"
+    job = await pool.enqueue_job(
+        func_name, 
+        _queue_name=queue_name, 
+        _job_id=idempotency_key, 
+        **kwargs
+    )
+    
+    # job이 None이라는 것은 동일한 _job_id를 가진 작업이 이미 큐에 존재한다는 의미 (멱등성 방어 성공)
+    job_id = job.job_id if job else (idempotency_key or "duplicate")
     print(f"[ENQUEUED] {func_name} -> {queue_name} (job_id={job_id})")
+    
     return job_id

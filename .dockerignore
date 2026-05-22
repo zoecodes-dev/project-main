@@ -5,6 +5,8 @@ db/data
 __pycache__
 *.pyc
 .env
+.env.local
+.env.example
 .DS_Store
 .ai_rules
 
