@@ -1,11 +1,21 @@
+from typing import Any, Dict
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.infrastructure.trace import trace_node
+from backend.domains.supplier.models import Supplier
 
 @trace_node(node_name="verify_supplier_node", node_type="state_machine")
-async def verify_supplier(state: dict, db: AsyncSession) -> dict:
-    """
-    공급업체의 진위 여부 및 제재 등급에 따른 물리적 수용 제어를 전담할 상태 머신 (골격)
-    TODO: W2 - PENDING -> VERIFIED 전이 로직 및 SupplierStatusChanged 이벤트 발행 구현 예정
-    """
-    # 1주차는 인프라 파이프라인 우회 및 에러 방지를 위해 입력받은 state를 그대로 반환하는 깡통 상태 유지
+async def verify_supplier(state: Dict[str, Any], db: Any) -> Dict[str, Any]:
+    # 1. DB에서 Supplier 조회
+    stmt = select(Supplier).where(Supplier.supplier_id == state["supplier_id"])
+    res = await db.execute(stmt)
+    supplier = res.scalar_one()
+
+    # 2. 상태 변경
+    supplier.status = "verified"
+    
+    # 3. 중요: 커밋 누락 시 상태는 바뀌지 않습니다!
+    await db.commit() 
+    
     return state
