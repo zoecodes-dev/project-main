@@ -1,10 +1,9 @@
 services:
   # Layer 1: 공급망 데이터 백본 (PostgreSQL + PostGIS + pgvector)
   db:
-    platform: linux/amd64
     build:
       context: .
-      dockerfile: db.Dockerfile
+      dockerfile: docker/db.Dockerfile
     container_name: kira-postgres
     networks:
       - project_net
@@ -21,12 +20,11 @@ services:
       retries: 5
     restart: always
 
-  # Async Workflow Queue용 Redis
+  # Async Workflow Queue용 Redis (ARQ)
   redis:
-    platform: linux/amd64
     build:
       context: .
-      dockerfile: redis.Dockerfile
+      dockerfile: docker/redis.Dockerfile
     container_name: kira-redis
     networks:
       - project_net
@@ -41,12 +39,11 @@ services:
       retries: 10
     restart: always
 
-  # Layer 2: KIRA 에이전트 통합 백엔드
+  # Layer 2: KIRA 에이전트 통합 백엔드 (FastAPI)
   app:
-    platform: linux/amd64
-    build: 
+    build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/app.Dockerfile
     container_name: kira-backend
     networks:
       - project_net
@@ -57,6 +54,30 @@ services:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     ports:
       - "8000:8000"
+    volumes:
+      - .:/app
+      - /app/__pycache__
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+
+  # Layer 2: ARQ 워커 (Queue 컨슈머) — app과 동일 이미지, 실행 커맨드만 다름
+  worker:
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    container_name: kira-worker
+    command: ["arq", "backend.workers.geo_risk_worker.WorkerSettings"]
+    networks:
+      - project_net
+    env_file:
+      - ./.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     volumes:
       - .:/app
       - /app/__pycache__
