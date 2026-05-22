@@ -10,12 +10,11 @@ from typing import Any, Dict, List
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from events.types import GeoRiskDetectedEvent
-from infrastructure.event_bus import publish
-from infrastructure.queue import RISK_QUEUE, enqueue
-from infrastructure.trace import trace_node
-
-from domains.supplychain.repository import SupplyChainRepository
+from backend.events.types import GeoRiskDetectedEvent
+from backend.infrastructure.event_bus import publish
+from backend.infrastructure.queue import RISK_QUEUE, enqueue
+from backend.infrastructure.trace import trace_node
+from backend.domains.supplychain.repository import SupplyChainRepository
 
 
 class SupplyChainCycleError(ValueError):

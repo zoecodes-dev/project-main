@@ -7,19 +7,14 @@ infrastructure 계층에 둔다. (기존 flat 루트의 security.py에서 이동
 - 비밀번호 bcrypt 해싱/검증
 - JWT Access Token 발급/검증
 """
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from backend.core.config import config
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-change-me")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-
 
 # ----- 1. 비밀번호 암호화/검증 -----
 def get_password_hash(password: str) -> str:
@@ -43,16 +38,17 @@ def create_access_token(
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(
-            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+            minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES
         )
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    
+    return jwt.encode(to_encode, config.SECRET_KEY, algorithm=config.ALGORITHM)
 
 
 # ----- 3. 토큰 검증 -----
 def verify_access_token(token: str) -> Optional[dict]:
     """토큰 유효성·만료 검증. 성공 시 payload, 실패 시 None."""
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return jwt.decode(token, config.SECRET_KEY, algorithms=[config.ALGORITHM])
     except JWTError:
         return None

@@ -10,9 +10,9 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from infrastructure.database import get_db
-from domains.supplychain.repository import SupplyChainRepository
-from domains.supplychain.service import SupplyChainService
+from backend.infrastructure.database import get_db
+from backend.domains.supplychain.repository import SupplyChainRepository
+from backend.domains.supplychain.service import SupplyChainService
 
 router = APIRouter(prefix="/supply-chain", tags=["Supply Chain Domain"])
 

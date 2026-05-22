@@ -24,3 +24,5 @@ desktop.ini
 # Logs
 *.log
 *.sqlite
+
+backend/tests/

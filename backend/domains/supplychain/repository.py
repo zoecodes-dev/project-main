@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from infrastructure.trace import trace_tool
+from backend.infrastructure.trace import trace_tool
 
 # 신장 위구르 자치구 경계 (스펙 5-2). SRID 4326 기준.
 XINJIANG_REGION_WKT = (

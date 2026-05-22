@@ -8,8 +8,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from infrastructure.database import verify_extensions
-from domains.supplychain.router import router as supplychain_router
+from backend.infrastructure.database import verify_extensions
+from backend.domains.supplychain.router import router as supplychain_router
 
 
 @asynccontextmanager

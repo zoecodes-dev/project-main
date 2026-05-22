@@ -30,7 +30,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _stable_hash(obj: Any) -> str:
-    """JSON 직렬화 가능한 객체를 SHA-256으로 해싱. 직렬화 불가 값은 str 폴백."""
+    """
+    [데이터 지장 찍기]
+    입력된 객체를 글자(JSON)로 바꾼 뒤 SHA-256 알고리즘으로 64자리 고유 해시값을 만듭니다.
+    내용이 0.0001%만 바뀌어도 완전히 다른 해시값이 나와 위변조를 방지합니다.
+    """
     try:
         serialized = json.dumps(obj, sort_keys=True, default=str, ensure_ascii=False)
     except (TypeError, ValueError):
@@ -39,7 +43,10 @@ def _stable_hash(obj: Any) -> str:
 
 
 def _extract_batch_id(args: tuple, kwargs: dict) -> Optional[str]:
-    """함수 인자에서 batch_id를 추출. kwargs 우선, 없으면 BatchState dict 탐색."""
+    """
+    [배치 ID 찾기]
+    함수에 들어온 인자(args, kwargs) 뒤져서 어떤 작업(batch_id)에 대한 기록인지 찾아냅니다.
+    """
     if "batch_id" in kwargs and kwargs["batch_id"] is not None:
         return str(kwargs["batch_id"])
     for arg in args:
@@ -49,7 +56,10 @@ def _extract_batch_id(args: tuple, kwargs: dict) -> Optional[str]:
 
 
 def _extract_session(args: tuple, kwargs: dict) -> Optional[AsyncSession]:
-    """함수 인자에서 AsyncSession을 추출 (audit_trail INSERT용)."""
+    """
+    [DB 연결통로 찾기]
+    DB에 기록을 남겨야 하므로, 함수 인자 중에서 SQLAlchemy의 DB 세션(AsyncSession)을 찾아냅니다.
+    """
     if "db" in kwargs and isinstance(kwargs["db"], AsyncSession):
         return kwargs["db"]
     for arg in args:
@@ -67,7 +77,12 @@ async def _write_audit(
     output_hash: str,
     duration_ms: int,
 ) -> None:
-    """audit_trail에 INSERT. 같은 batch_id의 직전 output_hash를 prev_hash로 연결."""
+    """
+    [해시 체인 연결 및 DB 저장]
+    1. 이 배치의 바로 직전 기록을 조회해서 그 기록의 '결과 지장(output_hash)'을 가져옵니다.
+    2. 그 값을 나의 '이전 지장(prev_hash)' 칸에 넣어서 체인처럼 엮어버립니다. (순서 조작 방지)
+    3. 단계 번호(step_number)를 1 올린 뒤 audit_trail 테이블에 최종 INSERT 합니다.
+    """
     if batch_id is None:
         # batch_id 없으면 해시 체인 구성 불가 → 기록 생략 (테스트 편의)
         return
@@ -115,10 +130,10 @@ async def _write_audit(
 
 def trace_node(node_name: str, node_type: str = "agent"):
     """
-    함수 실행 전후의 input/output을 SHA-256 해싱하고 audit_trail에 INSERT.
-    상태 변경 함수(에이전트 노드)에 필수 적용.
+    [핵심 스티커 - 에이전트 노드용]
+    팀원들이 상태 변경 함수 위에 @trace_node("노드명")을 붙이면 작동하는 메인 데코레이터입니다.
+    함수 실행 전후의 시간을 재고, 인자와 결과값을 자동으로 해싱하여 DB에 기록합니다.
     """
-
     def decorator(func: Callable):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
@@ -149,5 +164,8 @@ def trace_node(node_name: str, node_type: str = "agent"):
 
 
 def trace_tool(tool_name: str):
-    """외부 API 호출, DB 쿼리 등 툴 단위 추적 (단순 버전)."""
+    """
+    [핵심 스티커 - 외부 툴/API용]
+    외부 API 호출이나 단순 DB 쿼리를 수행하는 함수 위에 @trace_tool("툴명")으로 붙여 사용합니다.
+    """
     return trace_node(node_name=tool_name, node_type="tool")

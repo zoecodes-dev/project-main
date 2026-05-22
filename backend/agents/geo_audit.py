@@ -9,8 +9,8 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agents.state import BatchState
-from infrastructure.trace import trace_node, trace_tool
+from backend.agents.state import BatchState
+from backend.infrastructure.trace import trace_node, trace_tool
 
 # 신장 위구르 자치구 경계 (SRID 4326)
 XINJIANG_REGION_WKT = (
