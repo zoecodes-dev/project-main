@@ -24,3 +24,6 @@ desktop.ini
 # Logs
 *.log
 *.sqlite
+
+# 개인적으로 적용할 깃이그노어
+.ai_rules
