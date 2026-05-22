@@ -36,7 +36,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.types import TIMESTAMP
 
@@ -44,23 +44,7 @@ from sqlalchemy.types import TIMESTAMP
 # ---------------------------------------------------------------------------
 # Base
 # ---------------------------------------------------------------------------
-
-class Base(DeclarativeBase):
-    """
-    Product 도메인 전용 DeclarativeBase.
-
-    주의: 프로젝트 전체 공유 Base가 별도로 존재한다면
-    ( infrastructure/database.py 등 ) 해당 Base를 import해서 교체할 것.
-    도메인 격리 원칙에 따라 현 단계에서는 도메인 내 독립 Base를 사용하되,
-    인프라 레이어 확정 후 통합 Base로 일괄 교체를 권장.
-    """
-    pass
-
-
-# ---------------------------------------------------------------------------
-# Enum — BomVersion.status 허용값
-# (PROJECT_CORE.md 3-1: 'draft / active / deprecated' 3종 불변)
-# ---------------------------------------------------------------------------
+from backend.infrastructure.database import Base
 
 class BomVersionStatus(str, enum.Enum):
     """
@@ -74,11 +58,6 @@ class BomVersionStatus(str, enum.Enum):
     DRAFT      = "draft"
     ACTIVE     = "active"
     DEPRECATED = "deprecated"
-
-
-# ---------------------------------------------------------------------------
-# 1. Product
-# ---------------------------------------------------------------------------
 
 class Product(Base):
     """
