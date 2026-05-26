@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agents.state import BatchState
+    from backend.agents.state import BatchState
 
 
 def route(state: "BatchState") -> str:

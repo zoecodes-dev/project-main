@@ -10,6 +10,13 @@ from backend.domains.audit import repository
 from backend.domains.audit.models import AuditTrail
 
 
+class BatchNotFound(Exception):
+    """batches 에 batch_id 가 없을 때. router 가 404 로 변환한다."""
+    def __init__(self, batch_id: UUID):
+        self.batch_id = batch_id
+        super().__init__(f"batch not found: {batch_id}")
+
+
 @trace_node(node_name="create_audit_entry", node_type="human")
 async def create_audit_entry(
     db: AsyncSession,
@@ -29,20 +36,20 @@ async def create_audit_entry(
     }
 
 
-# === 조회·검증 (이번 주 할일 1·2) ===
+# === 조회·검증 ===
 
 @dataclass
 class ChainBreak:
     """해시 체인이 끊긴 지점 한 건 — 강한 신호(위변조 확정)."""
     step_number: int | None
-    expected_prev_hash: str | None   # 직전 row의 output_hash
-    actual_prev_hash: str | None     # 이 row에 실제 박힌 prev_hash
+    expected_prev_hash: str | None
+    actual_prev_hash: str | None
     reason: str
 
 
 @dataclass
 class ChainWarning:
-    """step_number 연속성 이상 — 약한 신호(사람이 맥락 판단). chain_valid 에는 영향 없음."""
+    """step_number 연속성 이상 — 약한 신호. chain_valid 에는 영향 없음."""
     step_number: int | None
     reason: str
 
@@ -51,7 +58,7 @@ class ChainWarning:
 class ChainVerification:
     batch_id: UUID
     total_steps: int
-    chain_valid: bool                       # 해시 무결성만 반영
+    chain_valid: bool
     breaks: list[ChainBreak] = field(default_factory=list)
     warnings: list[ChainWarning] = field(default_factory=list)
 
@@ -71,26 +78,27 @@ async def verify_chain(db: AsyncSession, batch_id: UUID) -> ChainVerification:
     """
     해시 체인 무결성 검증.
 
-    [chain_valid 에 반영되는 강한 신호 — breaks]
+    존재하지 않는 batch_id 면 BatchNotFound 를 던진다 — 없는 배치가
+    chain_valid=true 로 통과하는 거짓 양성을 막기 위함(verify 는 적극적 보증 API).
+
+    [chain_valid 강한 신호 — breaks]
       - 첫 step: prev_hash 는 NULL
       - 이후 step: prev_hash == 직전 step 의 output_hash
-      하나라도 어긋나면 chain_valid=False.
-
-    [chain_valid 에 반영되지 않는 약한 신호 — warnings]
-      - step_number 가 1씩 연속이 아님 (gap) — 꼬리 잘림 등 삭제 탐지 보조
-      - step_number 중복
-      gap·중복은 정상 흐름(HITL rejected·재시도)일 수 있으므로 경고로만 둔다.
+    [chain_valid 미반영 약한 신호 — warnings]
+      - step_number gap / 중복 (정상 흐름일 수 있음)
     """
+    if not await repository.batch_exists(db, batch_id):
+        raise BatchNotFound(batch_id)
+
     rows = await repository.list_full_chain(db, batch_id)
     breaks: list[ChainBreak] = []
     warnings: list[ChainWarning] = []
 
-    prev_output: str | None = None    # 직전 row의 output_hash. 첫 row 직전은 None.
-    expected_step: int | None = None  # 직전 step_number + 1. 연속성 비교용.
+    prev_output: str | None = None
+    expected_step: int | None = None
     seen_steps: set[int] = set()
 
     for idx, row in enumerate(rows):
-        # --- 해시 체인 (강한 신호) ---
         if idx == 0:
             if row.prev_hash is not None:
                 breaks.append(ChainBreak(
@@ -109,7 +117,6 @@ async def verify_chain(db: AsyncSession, batch_id: UUID) -> ChainVerification:
                 ))
         prev_output = row.output_hash
 
-        # --- step_number 연속성 (약한 신호) ---
         if row.step_number is not None:
             if row.step_number in seen_steps:
                 warnings.append(ChainWarning(

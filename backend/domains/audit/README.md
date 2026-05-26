@@ -1,129 +1,115 @@
 # Audit Domain — README
 
-담당: 팀원 A (지혜) | Pipeline Coordinator
+담당: 윤지혜(A) | Audit
 
 ---
 
-## 1. 담당 역할 요약
+## 1. 역할
 
-파이프라인의 모든 단계에서 **무슨 일이 일어났는지 자동으로 기록**하고,
-신뢰도가 낮거나 판단이 모호한 경우 **사람 검토(HITL)로 파이프라인을 정지**하는 역할.
-
-LLM 호출 없음. 조건 분기와 기록만.
+파이프라인 각 단계의 실행을 `@trace_node`/`@trace_tool`로 자동 기록(Provenance)하고,
+그 기록을 **조회·검증**한다. 해시 체인으로 위변조를 검증한다. LLM 호출 없음.
 
 ---
 
 ## 2. 담당 테이블
 
-### `audit_trail`
-파이프라인 각 단계의 실행 결과를 row로 기록. 해시 체인으로 무결성 보장.
+### `audit_trail` — 단계별 실행 기록 (해시 체인)
 
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
-| `audit_id` | UUID PK | 감사 기록 고유 식별자 |
-| `batch_id` | UUID FK → batches | 어떤 배치의 기록인지 |
+| `audit_id` | UUID PK | 기록 고유 ID |
+| `batch_id` | UUID FK → batches | 소속 배치 |
 | `step_number` | INT | 배치 내 실행 순서 |
-| `node_type` | VARCHAR | agent / tool / human |
-| `node_name` | VARCHAR | 실행된 노드 이름 (예: data_gateway) |
-| `model_version` | VARCHAR | 사용된 LLM 버전 (없으면 NULL) |
-| `input_hash` | VARCHAR(64) | 입력값의 SHA-256 해시 |
-| `output_hash` | VARCHAR(64) | 출력값의 SHA-256 해시 → 다음 row의 prev_hash |
-| `prev_hash` | VARCHAR(64) | 직전 step의 output_hash. NULL이면 첫 번째 step |
-| `decision_text` | TEXT | 해당 노드의 판단 내용 |
-| `citations` | JSONB | Compliance Agent 인용 법조항 목록 |
+| `timestamp` | TIMESTAMPTZ | 기록 시각 (DEFAULT now()) |
+| `node_type` | VARCHAR(20) | agent / tool / human |
+| `node_name` | VARCHAR(100) | 노드 이름 (예: data_gateway) |
+| `model_version` | VARCHAR(50) | LLM 버전 (없으면 NULL) |
+| `prompt_version` | VARCHAR(20) | 프롬프트 버전 (없으면 NULL) |
+| `duration_ms` | INT | 단계 소요시간(ms) |
+| `input_hash` | VARCHAR(64) | 입력값 SHA-256 |
+| `output_hash` | VARCHAR(64) | 출력값 SHA-256 → 다음 row의 prev_hash |
+| `prev_hash` | VARCHAR(64) | 직전 step의 output_hash. NULL이면 첫 step |
+| `decision_text` | TEXT | 노드 판단 내용 |
+| `citations` | JSONB | 인용 법조항 목록 |
 
-> 해시 체인 규칙: 새 row INSERT 전 동일 batch_id의 MAX(step_number) row 조회 →
-> 그 output_hash를 새 row의 prev_hash에 복사. 첫 row는 prev_hash = NULL.
+> 해시 체인: 새 row INSERT 전 동일 batch_id의 MAX(step_number) row의 output_hash를
+> 새 row의 prev_hash에 복사. 첫 row는 prev_hash = NULL.
 
-### `gap_analysis_results`
-규제 개정 시 영향받는 협력사와 신규 필수 항목을 분석한 결과 저장.
+### `gap_analysis_results` — 규제 개정 영향 분석
 
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
-| `analysis_id` | UUID PK | 분석 결과 고유 식별자 |
-| `regulation_id` | UUID FK | 개정된 규제 ID |
-| `previous_version_id` | UUID FK | 이전 규제 버전 ID |
+| `analysis_id` | UUID PK | 분석 결과 ID |
+| `regulation_id` | UUID FK | 개정된 규제 |
+| `previous_version_id` | UUID FK | 이전 규제 버전 |
 | `affected_supplier_ids` | JSONB | 영향받는 협력사 ID 배열 |
-| `newly_required_fields` | JSONB | 신규 필수 항목 목록 |
+| `newly_required_fields` | JSONB | 신규 필수 항목 |
 | `gray_zone_items` | JSONB | HITL 검토 필요 회색지대 항목 |
-| `reviewed_by` | UUID FK | 검토한 사용자 ID |
+| `reviewed_by` | UUID FK | 검토 사용자 |
 
 ---
 
 ## 3. 담당 이벤트
 
-| 이벤트 | 발생 시점 | 처리 내용 |
-|--------|----------|----------|
-| `AuditEntryCreated` | `@trace_node` 데코레이터가 붙은 함수 실행 시 자동 발생 | audit_trail에 row INSERT |
-| `HitlRequested` | confidence_score < 0.85 또는 gray_zone 판정 시 | 파이프라인 interrupt(), hitl_wait 상태로 전환 |
-| `HitlReviewed` | 사람 검토 완료 시 | audit_trail에 human 타입 row INSERT, 파이프라인 재개 |
+> dataclass는 `events/types.py`에 정의됨. **publish 호출은 W2 이후** (W1은 조회·검증 전용, 발행 없음).
+
+| 이벤트 | 발생 시점 | 처리 |
+|--------|----------|------|
+| `AuditEntryCreated` | `@trace_node`/`@trace_tool` 함수 실행 시 | audit_trail row INSERT |
+| `HitlRequested` | confidence_score < 0.85 또는 gray_zone 판정 | interrupt(), hitl_wait 전환 |
+| `HitlReviewed` | 사람 검토 완료 | human 타입 row INSERT, 파이프라인 재개 |
 
 ---
 
-## 4. 핵심 함수 목록
+## 4. 파일 구성
 
 ```
 domains/audit/
-├── models.py         # AuditTrail ORM (Day 2)
-├── service.py        # create_audit_entry() (Day 3 깡통)
-├── router.py         # GET /audit/trail/{batch_id}
-│                     # GET /audit/gap-analysis/{regulation_id}
-└── README.md         # 이 파일
-
-agents/
-└── supervisor.py     # route(state) -> str (Day 3 깡통)
-```
-
-### `create_audit_entry()` — Day 3 구현 예정
-```python
-@trace_node("audit_entry_create", "agent")
-async def create_audit_entry(
-    db: AsyncSession,
-    batch_id: UUID,
-    step_number: int,
-    node_type: str,       # agent / tool / human
-    node_name: str,
-    decision_text: str,
-    citations: list[str] | None = None,
-    model_version: str | None = None,
-) -> AuditTrail:
-    ...
-```
-
-### `route(state) -> str` — Day 3 구현 예정
-```python
-def route(state: BatchState) -> str:
-    if state["confidence_score"] < 0.85:
-        return "hitl_interrupt"
-    if state["current_stage"] == "queued":
-        return "data_gateway"
-    if state["current_stage"] == "extraction":
-        return "verification"
-    if state["current_stage"] == "verification":
-        return "geo_audit"
-    if state["current_stage"] == "geo_analysis":
-        return "compliance"
-    if state["current_stage"] == "compliance":
-        return "readiness"
-    return "completed"
+├── models.py       # AuditTrail ORM (schema.sql과 1:1)
+├── repository.py   # list_trail_by_batch() / list_full_chain()  — SELECT 전용
+├── service.py      # create_audit_entry() 깡통(W2) + get_trail() / verify_chain()
+├── router.py       # GET /audit/trail/{batch_id}, /verify
+└── README.md
 ```
 
 ---
 
-## 5. 완료 기준
+## 5. API
 
-- `@trace_node` 데코레이터가 붙은 함수 호출 시 `audit_trail`에 row 자동 생성
-- `GET /audit/trail/{batch_id}` 응답의 `chain_valid: true` 반환
-- `route(state)` 함수가 각 stage 조건에 맞는 노드 이름 반환
+### `GET /audit/trail/{batch_id}`
+audit_trail을 **step_number 순**으로 반환. `node_type`·기간(`start`/`end`) 필터 선택.
+
+```bash
+curl -X GET "http://localhost:8000/audit/trail/{batch_id}"
+curl -X GET "http://localhost:8000/audit/trail/{batch_id}?node_type=agent&start=2026-05-14T00:00:00Z&end=2026-05-14T23:59:59Z"
+```
+응답: `AuditTrailRow` 배열. 데이터 없으면 `200 []`.
+
+### `GET /audit/trail/{batch_id}/verify`
+해시 체인 무결성 검증.
+- `chain_valid` — 해시 무결성만 (첫 step prev_hash=NULL, 이후 prev_hash==직전 output_hash)
+- `breaks` — 체인 끊긴 지점 (강한 신호=위변조)
+- `warnings` — step_number gap·중복 (약한 신호, chain_valid엔 영향 없음)
+
+```bash
+curl -X GET "http://localhost:8000/audit/trail/{batch_id}/verify"
+```
+```json
+{ "batch_id": "...", "total_steps": 7, "chain_valid": true, "breaks": [], "warnings": [] }
+```
+
+> 조회·검증 API → 이벤트 발행 없음 → 테이블 변경 없음 (audit_trail read-only).
+> row가 생기는 건 노드·툴의 `@trace_node`/`@trace_tool` 자동 INSERT 시점.
+> `create_audit_entry`(human 기록용, W2)만 쓰기 함수 → audit_trail INSERT (현재 깡통).
 
 ---
 
-## 6. 이번 주 범위 (W1)
+## 6. 주차별 범위
 
-| Day | 할 일 |
-|-----|-------|
-| Day 1 (오늘) | 이 README 작성 ✅ |
-| Day 2 | `domains/audit/models.py` — AuditTrail ORM 작성 |
-| Day 3 | `route(state) -> str` 깡통 함수 + `create_audit_entry()` 깡통 함수 |
-
-> LangGraph StateGraph 조립은 W2. 이번 주는 ORM + 깡통 함수만.
+| 주차 | 할 일 | 상태 |
+|------|-------|------|
+| W1 | README + models.py | ✅ |
+| W1 | repository / service / router — trail·verify·필터 | ✅ |
+| W2 | `create_audit_entry()` 실제 INSERT (decision_text/citations 저장) | ⏳ |
+| W2 | 이벤트 publish 연결 | ⏳ |
+| W2~ | supervisor `route(state)`, LangGraph StateGraph 조립 | ⏳ |

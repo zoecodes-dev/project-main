@@ -3,12 +3,13 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.database import get_db
 from backend.domains.audit import service
+from backend.domains.audit.service import BatchNotFound
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -40,7 +41,6 @@ class AuditTrailRow(BaseModel):
 
 class ChainBreakOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     step_number: int | None
     expected_prev_hash: str | None
     actual_prev_hash: str | None
@@ -49,14 +49,12 @@ class ChainBreakOut(BaseModel):
 
 class ChainWarningOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     step_number: int | None
     reason: str
 
 
 class ChainVerificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     batch_id: UUID
     total_steps: int
     chain_valid: bool
@@ -82,5 +80,8 @@ async def verify_audit_chain(
     batch_id: UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    """배치의 해시 체인 무결성을 검증해 chain_valid·끊긴 지점·연속성 경고를 반환."""
-    return await service.verify_chain(db, batch_id)
+    """배치의 해시 체인 무결성을 검증. 없는 batch_id 는 404."""
+    try:
+        return await service.verify_chain(db, batch_id)
+    except BatchNotFound:
+        raise HTTPException(status_code=404, detail=f"batch not found: {batch_id}")

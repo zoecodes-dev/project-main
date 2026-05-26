@@ -2,10 +2,21 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.audit.models import AuditTrail
+
+
+async def batch_exists(db: AsyncSession, batch_id: UUID) -> bool:
+    """
+    batches 에 해당 batch_id 가 실재하는지 확인.
+    audit_trail 이 FK로 참조하는 공용 배치 테이블을 읽는 것이므로
+    다른 도메인 ORM 을 import 하지 않고 raw 조회로 처리한다.
+    """
+    stmt = text("SELECT 1 FROM batches WHERE batch_id = :bid LIMIT 1")
+    result = await db.execute(stmt, {"bid": str(batch_id)})
+    return result.first() is not None
 
 
 async def list_trail_by_batch(
