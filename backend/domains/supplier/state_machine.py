@@ -19,3 +19,17 @@ async def verify_supplier(state: Dict[str, Any], db: Any) -> Dict[str, Any]:
     await db.commit() 
     
     return state
+
+@trace_node(node_name="transition_supplier_status", node_type="system")
+async def transition_supplier_status(db: AsyncSession, supplier: Supplier, new_status: str, batch_id: str = None) -> Supplier:
+    allowed_statuses = [
+        "pending", "requested", "in_progress", "review", 
+        "verified", "violation", "suspended"
+    ]
+    if new_status not in allowed_statuses:
+        raise ValueError(f"Invalid status transition to: {new_status}")
+    
+    supplier.status = new_status
+    db.add(supplier)
+    await db.flush()
+    return supplier
