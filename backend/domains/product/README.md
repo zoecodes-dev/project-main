@@ -1,7 +1,7 @@
 # Product Domain — 설계 명세서
 
 > **담당**: 팀원 C (Product Domain)
-> **최종 수정**: 2025-05-20
+> **최종 수정**: 2026-05-26 (W2 화·수 작업 반영)
 > **참조**: `PROJECT_CORE.md` 4-2절 / `schema.sql` 영역 7
 
 ---
@@ -381,19 +381,220 @@ Product Domain은 이벤트를 **발행만** 한다. 다른 도메인을 직접 
 
 ---
 
-## 9. 구현 파일 구조 (예정)
+## 9. 구현 파일 구조
 
 ```
 backend/domains/product/
   ├── README.md               ← 이 문서
   ├── __init__.py
   ├── models.py               ← SQLAlchemy ORM (schema.sql 영역 7 대응)
-  ├── schemas.py              ← Pydantic 요청/응답 스키마
-  ├── service.py              ← 비즈니스 로직. PARTS_TREE_QUERY 포함.
-  ├── state_machine.py        ← BOM 버전 상태 전이 함수
-  ├── router.py               ← FastAPI APIRouter
-  └── events.py               ← ProductCreated 등 도메인 이벤트 정의
+  ├── repository.py           ← DB 입출력 (create/get/list/bom_tree). crud.py 대체. ✅ W2 완료
+  ├── service.py              ← 비즈니스 로직 + 이벤트 발행 + 404 분기. ✅ W2 완료
+  ├── router.py               ← FastAPI APIRouter (엔드포인트 4개). ✅ W2 완료
+  └── state_machine.py        ← BOM 버전 상태 전이 함수
 ```
+
+> `crud.py`는 `repository.py`로 완전히 대체됐으므로 PR 머지 전 삭제 필요.
+
+---
+
+## 10. W2 자가검증 4종 (화·수)
+
+### ① 계약 위반 스캔 결과
+
+| 규칙 | repository.py | service.py | router.py |
+|---|---|---|---|
+| `backend.` import | ✅ 위반 0 | ✅ 위반 0 | ✅ 위반 0 |
+| 인프라 시그니처 (`publish` 2-인자) | ✅ 해당 없음 | ✅ `publish("ProductCreated", payload)` | ✅ 해당 없음 |
+| 상태값 언더스코어 | ✅ `'active'`, `'draft'`, `'deprecated'` | ✅ 해당 없음 | ✅ 해당 없음 |
+| ORM/쿼리 컬럼명 schema 일치 | ✅ 위반 0 | ✅ 위반 0 | ✅ 해당 없음 |
+
+**전체 위반 0**
+
+---
+
+### ② schema 컬럼 대조표
+
+**`products` 테이블**
+
+| 내 코드 컬럼 | schema.sql 컬럼 | 일치 |
+|---|---|---|
+| `product_id` | `product_id UUID PK` | ✅ |
+| `product_code` | `product_code VARCHAR(50) UNIQUE NOT NULL` | ✅ |
+| `product_name` | `product_name VARCHAR(255)` | ✅ |
+| `manufacturer_id` | `manufacturer_id UUID REFERENCES suppliers` | ✅ |
+| `type` | `type VARCHAR(50)` | ✅ |
+| `specs` | `specs JSONB` | ✅ |
+| `created_at` | `created_at TIMESTAMPTZ` | ✅ |
+| `updated_at` | `updated_at TIMESTAMPTZ` | ✅ |
+
+**`bom_versions` 테이블**
+
+| 내 코드 컬럼 | schema.sql 컬럼 | 일치 |
+|---|---|---|
+| `bom_version_id` | `bom_version_id UUID PK` | ✅ |
+| `product_id` | `product_id UUID` | ✅ |
+| `version_number` | `version_number VARCHAR(20)` | ✅ |
+| `status` | `status VARCHAR(20) DEFAULT 'draft'` | ✅ |
+
+**`parts` / `bom_items` 테이블 (BOM 트리 CTE 사용 컬럼)**
+
+| 내 코드 컬럼 | schema.sql 컬럼 | 일치 |
+|---|---|---|
+| `part_id` | `part_id UUID PK` | ✅ |
+| `part_code` | `part_code VARCHAR(50)` | ✅ |
+| `tier_level` | `tier_level INT` | ✅ |
+| `parent_part_id` | `parent_part_id UUID REFERENCES parts` | ✅ |
+| `hs_code` | `hs_code VARCHAR(15)` | ✅ |
+| `unit_price` | `unit_price NUMERIC(15,4)` | ✅ |
+| `required_quantity` | `required_quantity NUMERIC(15,4)` | ✅ |
+| `origin_country` | `origin_country VARCHAR(2)` | ✅ |
+| `direct_material_cost` | `direct_material_cost NUMERIC(15,4)` | ✅ |
+
+**불일치 0건 확인**
+
+---
+
+### ③ curl 시나리오
+
+#### POST /api/v1/products — 제품 등록
+```bash
+curl -X POST http://localhost:8000/api/v1/products \
+  -H "Content-Type: application/json" \
+  -d '{
+    "product_code": "BAT-NCM811-200Ah",
+    "product_name": "NCM811 High Capacity Battery 200Ah",
+    "type": "각형",
+    "specs": {"용량": "200Ah", "전압": "3.7V"}
+  }'
+```
+
+예상 응답 (201):
+```json
+{
+  "product_id": "<<새로 생성된 UUID>>",
+  "product_code": "BAT-NCM811-200Ah",
+  "product_name": "NCM811 High Capacity Battery 200Ah",
+  "manufacturer_id": null,
+  "type": "각형",
+  "specs": {"용량": "200Ah", "전압": "3.7V"},
+  "created_at": "2026-05-26T09:00:00+00:00"
+}
+```
+
+중복 등록 시 예상 응답 (409):
+```json
+{ "detail": "이미 존재하는 product_code입니다: BAT-NCM811-200Ah" }
+```
+
+> `POST /products` 호출 → `ProductCreated` 이벤트 발행 → `products` 테이블에 row 1건 INSERT
+
+---
+
+#### GET /api/v1/products — 제품 목록
+```bash
+curl "http://localhost:8000/api/v1/products?limit=20&offset=0"
+```
+
+예상 응답 (200):
+```json
+[
+  {
+    "product_id": "d1eebc99-6666-4ef8-bb6d-6bb9bd380a77",
+    "product_code": "BAT-NCM811-100Ah",
+    "product_name": "NCM811 High Capacity Battery",
+    "manufacturer_id": null,
+    "type": null,
+    "created_at": "2026-05-26T09:00:00+00:00"
+  }
+]
+```
+
+> `GET /products` 호출 → 이벤트 없음 → `products` 테이블 SELECT (읽기 전용)
+
+---
+
+#### GET /api/v1/products/{id} — 제품 단건
+```bash
+curl http://localhost:8000/api/v1/products/d1eebc99-6666-4ef8-bb6d-6bb9bd380a77
+```
+
+예상 응답 (200):
+```json
+{
+  "product_id": "d1eebc99-6666-4ef8-bb6d-6bb9bd380a77",
+  "product_code": "BAT-NCM811-100Ah",
+  "product_name": "NCM811 High Capacity Battery",
+  "manufacturer_id": null,
+  "type": null,
+  "specs": null,
+  "created_at": "2026-05-26T09:00:00+00:00",
+  "updated_at": "2026-05-26T09:00:00+00:00"
+}
+```
+
+존재하지 않는 ID (404):
+```json
+{ "detail": "제품을 찾을 수 없습니다." }
+```
+
+> `GET /products/{id}` 호출 → 이벤트 없음 → `products` 테이블 SELECT (읽기 전용)
+
+---
+
+#### GET /api/v1/products/{id}/bom — BOM 트리 (404 분기)
+```bash
+curl http://localhost:8000/api/v1/products/d1eebc99-6666-4ef8-bb6d-6bb9bd380a77/bom
+```
+
+예상 응답 (200):
+```json
+{
+  "product_id": "d1eebc99-6666-4ef8-bb6d-6bb9bd380a77",
+  "product_code": "BAT-NCM811-100Ah",
+  "product_name": "NCM811 High Capacity Battery",
+  "bom_version": "1.0",
+  "bom_status": "active",
+  "tree": {
+    "part_code": "CELL-NCM811",
+    "part_name": "Battery Cell",
+    "tier_level": 1,
+    "hs_code": "850760",
+    "children": [
+      {
+        "part_code": "MIN-LITHIUM",
+        "part_name": "Raw Lithium",
+        "tier_level": 2,
+        "hs_code": "283691",
+        "children": []
+      }
+    ]
+  }
+}
+```
+
+product_id 자체가 없는 경우 (404):
+```json
+{ "detail": "제품을 찾을 수 없습니다." }
+```
+
+제품은 있으나 active BOM 없는 경우 (404):
+```json
+{ "detail": "해당 제품에 active BOM 버전이 존재하지 않습니다." }
+```
+
+> `GET /products/{id}/bom` 호출 → 이벤트 없음 → `products` + `bom_versions` + `parts` + `bom_items` 재귀 CTE SELECT
+
+---
+
+### ④ 동작 흐름 한 줄
+
+| API | 이벤트 | 테이블 변화 |
+|---|---|---|
+| `POST /products` | `ProductCreated` 발행 | `products` 테이블에 row 1건 INSERT |
+| `GET /products` | 없음 | `products` 테이블 SELECT (읽기 전용) |
+| `GET /products/{id}` | 없음 | `products` 테이블 SELECT (읽기 전용) |
+| `GET /products/{id}/bom` | 없음 | `products` + `bom_versions` + `parts` + `bom_items` SELECT (읽기 전용) |
 
 ---
 
