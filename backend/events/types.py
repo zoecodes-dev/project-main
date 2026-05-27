@@ -79,13 +79,14 @@ class SupplierStatusChangedEvent:
 @dataclass
 class RiskProfileUpdatedEvent:
     """
-    overall_risk_score 변경 시 발행. (backend_md_additions I절)
-    발행: B → 수신: A(StateGraph 참조)
+    overall_risk_score 변경 시 발행. 발행: B / 수신: A(StateGraph 참조).
+    payload 핵심 필드: supplier_id, overall_risk_score (+ 수신측 편의로 risk_level 동봉).
     """
-    supplier_id: Optional[UUID] = None
-    overall_risk_score: Optional[float] = None
+    supplier_id: UUID = None
+    overall_risk_score: int = None
+    risk_level: str = None
     event_name: str = "RiskProfileUpdated"
-    occurred_at: datetime = field(default_factory=_now_utc)
+    occurred_at: datetime = None
 
 
 @dataclass

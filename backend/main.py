@@ -13,6 +13,9 @@ from backend.domains.supplychain.router import router as supplychain_router
 from backend.domains.submission.router import router as submission_router
 from backend.domains.verification.router import router as verification_router
 
+from backend.domains.product.router import router as product_router
+from backend.domains.supplier.router import router as supplier_router
+from backend.domains.audit.router import router as audit_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,6 +36,9 @@ app.include_router(supplychain_router)
 app.include_router(submission_router)
 app.include_router(verification_router)
 
+app.include_router(supplier_router)
+app.include_router(product_router, prefix="/api/v1/products")
+app.include_router(audit_router)
 
 @app.get("/health")
 async def health_check():

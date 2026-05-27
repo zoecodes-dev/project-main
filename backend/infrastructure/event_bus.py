@@ -13,7 +13,6 @@ W1 범위: publish만 동작. subscribe는 핸들러 등록만(실제 LISTEN 루
 import json
 from typing import Awaitable, Callable, Dict, List
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.config import config
 from backend.infrastructure.database import engine
 
@@ -21,7 +20,7 @@ from backend.infrastructure.database import engine
 _subscribers: Dict[str, List[Callable[[dict], Awaitable[None]]]] = {}
 
 
-async def publish(db: AsyncSession, event_name: str, payload: dict) -> None:
+async def publish(event_name: str, payload: dict) -> None:
     """
     이벤트를 PostgreSQL NOTIFY로 발행한다.
     payload는 JSON 직렬화 가능한 dict여야 한다.

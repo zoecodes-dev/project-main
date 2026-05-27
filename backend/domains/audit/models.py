@@ -1,9 +1,10 @@
-from sqlalchemy import Column, Integer, String, Text, TIMESTAMP
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
 
-# TODO: B가 infrastructure/database.py 경로 확정되면 아래 import 수정
-from infrastructure.database import Base
+from sqlalchemy import Column, Integer, String, Text, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMP
+from sqlalchemy.sql import func
+
+from backend.infrastructure.database import Base
 
 
 class AuditTrail(Base):

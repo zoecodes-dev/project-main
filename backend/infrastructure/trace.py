@@ -17,6 +17,15 @@ audit_trail 컬럼 매핑:
 
 규칙: batch_id가 없으면 None 허용(테스트 편의). 추적 실패가
       비즈니스 로직을 깨뜨리면 안 되므로 기록 실패는 로그만 남기고 통과.
+
+[입력 해시 대상 선정 — 함수/메서드 혼용 대응]
+    이 데코레이터는 메서드(self를 첫 인자로 받음)와 일반 함수(첫 인자가
+    진짜 데이터)에 모두 붙는다. 과거엔 args[1:]로 무조건 첫 인자를 버려
+    일반 함수의 첫 인자(request_id 등)가 해시에서 누락됐다.
+    이제는 타입으로 판별한다:
+      - AsyncSession 인스턴스 → DB 세션이므로 해시 대상에서 제외
+      - dict/기본타입(str,int,float,bool,UUID,None)이 아닌 객체 → self로 추정, 제외
+      - 그 외(진짜 데이터 인자) → 해시 대상에 포함
 """
 import functools
 import hashlib
@@ -26,7 +35,10 @@ from typing import Any, Callable, Optional
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession 
+
+# 해시 대상에 그대로 포함하는 "값 타입"
+_VALUE_TYPES = (str, int, float, bool, UUID)
 
 
 def _stable_hash(obj: Any) -> str:
@@ -40,6 +52,29 @@ def _stable_hash(obj: Any) -> str:
     except (TypeError, ValueError):
         serialized = str(obj)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _hashable_args(args: tuple) -> list:
+    """
+    [입력 해시 대상 골라내기]
+    위치 인자 중 진짜 데이터만 남긴다.
+    - DB 세션(AsyncSession)은 제외 (기록 대상이 아니라 도구)
+    - dict는 포함 (state dict 등 진짜 입력)
+    - 값 타입(str/int/float/bool/UUID)은 포함
+    - 그 외 클래스 인스턴스(메서드의 self로 추정)는 제외
+    이렇게 하면 일반 함수의 첫 인자(request_id 등)는 보존되고,
+    메서드의 self나 DB 세션만 빠진다.
+    """
+    kept = []
+    for a in args:
+        if isinstance(a, AsyncSession):
+            continue                      # DB 세션 제외
+        if isinstance(a, dict) or isinstance(a, _VALUE_TYPES) or a is None:
+            kept.append(a)                # 진짜 데이터 포함
+            continue
+        # dict도 값 타입도 아닌 객체 = self(클래스 인스턴스)로 추정 → 제외
+        continue
+    return kept
 
 
 def _extract_batch_id(args: tuple, kwargs: dict) -> Optional[str]:
@@ -133,12 +168,17 @@ def trace_node(node_name: str, node_type: str = "agent"):
     [핵심 스티커 - 에이전트 노드용]
     팀원들이 상태 변경 함수 위에 @trace_node("노드명")을 붙이면 작동하는 메인 데코레이터입니다.
     함수 실행 전후의 시간을 재고, 인자와 결과값을 자동으로 해싱하여 DB에 기록합니다.
+
+    input_hash는 _hashable_args로 self/DB세션을 제외한 '진짜 데이터 인자'와
+    kwargs를 함께 해싱한다(메서드/일반함수 모두 첫 인자가 누락되지 않음).
     """
     def decorator(func: Callable):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
             start = time.perf_counter()
-            input_hash = _stable_hash({"args": args[1:], "kwargs": kwargs})
+            input_hash = _stable_hash(
+                {"args": _hashable_args(args), "kwargs": kwargs}
+            )
 
             result = await func(*args, **kwargs)
 

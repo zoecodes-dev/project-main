@@ -8,7 +8,7 @@ __pycache__
 .env.local
 .env.example
 .DS_Store
-.ai_rules
+.rules
 
 # 불필요한 설정 파일 및 문서 제외 (이미지 경량화)
 .vscode/

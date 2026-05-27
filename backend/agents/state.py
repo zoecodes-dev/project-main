@@ -4,9 +4,12 @@ agents/state.py  (담당: 팀원 B — BatchState 공유)
 LangGraph 5인 에이전트 파이프라인의 공통 State 구조체.
 모든 에이전트가 공유하는 단일 진실 공급원.
 
-스키마 매핑: batches 테이블의 batch_id/product_id/destination/current_stage/
-confidence_score 컬럼과 1:1 대응. status는 LangGraph 내부에서 current_stage로
-표현되므로 별도 필드를 두지 않음.
+스키마 매핑: batches 테이블과 1:1 대응.
+- status        : 처리의 큰 상태 (processing / hitl_wait / completed / rejected)
+- current_stage : 파이프라인 세부 단계 (extraction / geo_analysis / compliance ...)
+두 컬럼은 schema.sql batches에 모두 존재하며 역할이 다르다.
+status는 "처리가 어떤 국면인가", current_stage는 "지금 어느 노드인가"를 가리킨다.
+Supervisor 라우팅은 두 값을 함께 본다.
 
 total=False: LangGraph 노드가 {**state, "key": ...}로 부분 갱신하는 패턴을
 허용하기 위함. 초기 invoke 시 모든 필드를 채우지 않아도 타입체커가 통과.
@@ -21,7 +24,9 @@ class BatchState(TypedDict, total=False):
     product_id: str
     # batches.destination — 허용값: US / EU / KR
     destination: str
-    # batches.current_stage — Supervisor 라우팅 키
+    # batches.status — 처리의 큰 상태. 허용값: processing / hitl_wait / completed / rejected
+    status: Literal["processing", "hitl_wait", "completed", "rejected"]
+    # batches.current_stage — Supervisor 라우팅 키 (세부 단계)
     current_stage: Literal[
         "queued", "extraction", "verification",
         "geo_analysis", "compliance", "readiness",
