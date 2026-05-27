@@ -1,11 +1,14 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, Text, ForeignKey
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import Column, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMP
-from sqlalchemy.sql import func
 
 from backend.infrastructure.database import Base
 
+
+# === ORM (DB 테이블 매핑) ===
 
 class AuditTrail(Base):
     __tablename__ = "audit_trail"
@@ -24,3 +27,47 @@ class AuditTrail(Base):
     prev_hash      = Column(String(64), nullable=True)            # NULL = 첫 번째 step
     decision_text  = Column(Text, nullable=True)
     citations      = Column(JSONB, nullable=True)
+
+
+# === API 응답 스키마 (Pydantic) ===
+
+class AuditTrailRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    audit_id: uuid.UUID
+    batch_id: uuid.UUID | None
+    step_number: int | None
+    timestamp: datetime | None
+    node_type: str | None
+    node_name: str | None
+    model_version: str | None
+    prompt_version: str | None
+    duration_ms: int | None
+    input_hash: str | None
+    output_hash: str | None
+    prev_hash: str | None
+    decision_text: str | None
+    citations: object | None
+
+
+class ChainBreakOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    step_number: int | None
+    expected_prev_hash: str | None
+    actual_prev_hash: str | None
+    reason: str
+
+
+class ChainWarningOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    step_number: int | None
+    reason: str
+
+
+class ChainVerificationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    batch_id: uuid.UUID
+    total_steps: int
+    chain_valid: bool
+    breaks: list[ChainBreakOut]
+    warnings: list[ChainWarningOut]
