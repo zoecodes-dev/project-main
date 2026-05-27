@@ -38,7 +38,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship  # Mapped 추가
 from sqlalchemy.sql import func
 from sqlalchemy.types import TIMESTAMP
 
@@ -159,9 +159,9 @@ class Product(Base):
     )
 
     # ------------------------------------------------------------------
-    # 도메인 내부 Relationships
+    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
     # ------------------------------------------------------------------
-    bom_versions: List["BomVersion"] = relationship(
+    bom_versions: Mapped[List["BomVersion"]] = relationship(
         "BomVersion",
         back_populates="product",
         cascade="all, delete-orphan",
@@ -279,14 +279,14 @@ class BomVersion(Base):
     )
 
     # ------------------------------------------------------------------
-    # 도메인 내부 Relationships
+    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
     # ------------------------------------------------------------------
-    product: "Product" = relationship(
+    product: Mapped["Product"] = relationship(
         "Product",
         back_populates="bom_versions",
     )
 
-    bom_items: List["BomItem"] = relationship(
+    bom_items: Mapped[List["BomItem"]] = relationship(
         "BomItem",
         back_populates="bom_version",
         cascade="all, delete-orphan",
@@ -440,19 +440,9 @@ class Part(Base):
     )
 
     # ------------------------------------------------------------------
-    # 자기참조 Relationships
-    #
-    # children: 이 부품의 직접 하위 부품 목록 (단일 레벨)
-    # parent:   이 부품의 직접 상위 부품
-    #
-    # remote_side=[part_id] 필수:
-    #   - SQLAlchemy는 같은 테이블 내 FK를 보고 "어느 쪽이 부모냐"를
-    #     자동 판단하지 못함.
-    #   - remote_side에 PK 컬럼을 지정하면
-    #     "part_id가 있는 쪽 = 부모(one)"
-    #     "parent_part_id가 있는 쪽 = 자식(many)" 으로 확정됨.
+    # 자기참조 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
     # ------------------------------------------------------------------
-    children: List["Part"] = relationship(
+    children: Mapped[List["Part"]] = relationship(
         "Part",
         back_populates="parent",
         foreign_keys=[parent_part_id],
@@ -460,7 +450,7 @@ class Part(Base):
         cascade="all",
     )
 
-    parent: Optional["Part"] = relationship(
+    parent: Mapped[Optional["Part"]] = relationship(
         "Part",
         back_populates="children",
         foreign_keys=[parent_part_id],
@@ -469,22 +459,22 @@ class Part(Base):
     )
 
     # ------------------------------------------------------------------
-    # 도메인 내부 Relationships
+    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
     # ------------------------------------------------------------------
-    bom_items: List["BomItem"] = relationship(
+    bom_items: Mapped[List["BomItem"]] = relationship(
         "BomItem",
         back_populates="part",
         lazy="select",
     )
 
-    part_code_mappings: List["PartCodeMapping"] = relationship(
+    part_code_mappings: Mapped[List["PartCodeMapping"]] = relationship(
         "PartCodeMapping",
         back_populates="part",
         cascade="all, delete-orphan",
         lazy="select",
     )
 
-    manufacturing_processes: List["ManufacturingProcess"] = relationship(
+    manufacturing_processes: Mapped[List["ManufacturingProcess"]] = relationship(
         "ManufacturingProcess",
         back_populates="part",
         cascade="all, delete-orphan",
@@ -594,14 +584,14 @@ class BomItem(Base):
     )
 
     # ------------------------------------------------------------------
-    # 도메인 내부 Relationships
+    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
     # ------------------------------------------------------------------
-    bom_version: "BomVersion" = relationship(
+    bom_version: Mapped["BomVersion"] = relationship(
         "BomVersion",
         back_populates="bom_items",
     )
 
-    part: Optional["Part"] = relationship(
+    part: Mapped[Optional["Part"]] = relationship(
         "Part",
         back_populates="bom_items",
     )
@@ -680,9 +670,9 @@ class PartCodeMapping(Base):
     )
 
     # ------------------------------------------------------------------
-    # 도메인 내부 Relationships
+    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
     # ------------------------------------------------------------------
-    part: "Part" = relationship(
+    part: Mapped["Part"] = relationship(
         "Part",
         back_populates="part_code_mappings",
     )
@@ -799,9 +789,9 @@ class ManufacturingProcess(Base):
     )
 
     # ------------------------------------------------------------------
-    # 도메인 내부 Relationships
+    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
     # ------------------------------------------------------------------
-    part: "Part" = relationship(
+    part: Mapped["Part"] = relationship(
         "Part",
         back_populates="manufacturing_processes",
     )
