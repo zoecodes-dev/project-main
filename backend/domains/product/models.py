@@ -129,7 +129,7 @@ class Product(Base):
     # 제품 속성
     # ------------------------------------------------------------------
     type = Column(
-        String(50),
+        String(50),   
         nullable=True,
         comment="배터리 형태. 예: 각형 / 파우치형 / 원통형",
     )
