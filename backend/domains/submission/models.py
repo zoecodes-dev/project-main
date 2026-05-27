@@ -3,7 +3,7 @@ from enum import Enum as PyEnum
 from typing import Optional, List
 from decimal import Decimal
 import uuid
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Integer, String, DateTime, Text, ForeignKey, Enum, func, Numeric
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -165,8 +165,7 @@ class DataRequestResponse(BaseModel):
     response_status: Optional[str] = None
     submission_status: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DataRequestStatusUpdateRequest(BaseModel):
     """

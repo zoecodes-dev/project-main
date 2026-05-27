@@ -4,12 +4,12 @@ from enum import Enum
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.database import get_db
 from backend.domains.audit import service
 from backend.domains.audit.service import BatchNotFound
+from backend.domains.audit.models import AuditTrailRow, ChainVerificationOut
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -18,48 +18,6 @@ class NodeType(str, Enum):
     agent = "agent"
     tool = "tool"
     human = "human"
-
-
-class AuditTrailRow(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    audit_id: UUID
-    batch_id: UUID | None
-    step_number: int | None
-    timestamp: datetime | None
-    node_type: str | None
-    node_name: str | None
-    model_version: str | None
-    prompt_version: str | None
-    duration_ms: int | None
-    input_hash: str | None
-    output_hash: str | None
-    prev_hash: str | None
-    decision_text: str | None
-    citations: object | None
-
-
-class ChainBreakOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    step_number: int | None
-    expected_prev_hash: str | None
-    actual_prev_hash: str | None
-    reason: str
-
-
-class ChainWarningOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    step_number: int | None
-    reason: str
-
-
-class ChainVerificationOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    batch_id: UUID
-    total_steps: int
-    chain_valid: bool
-    breaks: list[ChainBreakOut]
-    warnings: list[ChainWarningOut]
 
 
 @router.get("/trail/{batch_id}", response_model=list[AuditTrailRow])

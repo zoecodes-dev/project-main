@@ -42,6 +42,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship  # Mapped 추가
 from sqlalchemy.sql import func
 from sqlalchemy.types import TIMESTAMP
 
+# 인프라 레이어의 공유 Base 클래스를 import하여 사용합니다.
+# 이를 통해 Product 도메인의 모델들이 다른 도메인(Submission, Supplier 등)의
+# 모델들과 동일한 메타데이터 컨텍스트를 공유하게 되어,
+# 프로젝트 전체의 데이터 모델 일관성과 관계 설정의 안정성을 보장합니다.
 from backend.infrastructure.database import Base
 
 
@@ -129,7 +133,7 @@ class Product(Base):
     # 제품 속성
     # ------------------------------------------------------------------
     type = Column(
-        String(50),
+        String(50),   
         nullable=True,
         comment="배터리 형태. 예: 각형 / 파우치형 / 원통형",
     )

@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from backend.infrastructure.database import verify_extensions
 from backend.domains.supplychain.router import router as supplychain_router
 from backend.domains.submission.router import router as submission_router
+from backend.domains.verification.router import router as verification_router
 
 from backend.domains.product.router import router as product_router
 from backend.domains.supplier.router import router as supplier_router
@@ -33,6 +34,7 @@ app = FastAPI(
 # 도메인 라우터 등록 (도메인 추가 시 여기에 include)
 app.include_router(supplychain_router)
 app.include_router(submission_router)
+app.include_router(verification_router)
 
 app.include_router(supplier_router)
 app.include_router(product_router, prefix="/api/v1/products")

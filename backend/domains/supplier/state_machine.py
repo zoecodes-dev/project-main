@@ -8,13 +8,16 @@ domains/supplier/state_machine.py  (담당: 팀원 B)
 ★ 아래 SUPPLIER_TRANSITIONS의 전이 흐름은 제안값이다. 실제 업무 흐름에 맞는지
    B가 검토해서 확정할 것. (schema.sql suppliers.status 허용값 7종 기준)
 """
+import dataclasses
 from typing import Any, Dict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
 from backend.domains.supplier.models import Supplier
+from backend.events.types import SupplierStatusChangedEvent
 
 
 # ── 상태 전이 매트릭스 (★흐름은 검토 후 확정) ──────────────────
@@ -62,19 +65,34 @@ async def transition_supplier_status(
 @trace_node(node_name="verify_supplier_node", node_type="state_machine")
 async def verify_supplier(state: Dict[str, Any], db: AsyncSession) -> Dict[str, Any]:
     """
-    협력사를 'verified'로 전이한다.
-    ★ 직접 대입하지 않고 transition_supplier_status()를 거쳐 매트릭스 검증을 받는다.
-      (review 상태에서만 verified로 갈 수 있다 — 위 매트릭스 참고)
-    커밋은 service가 일원화하지만, 이 함수는 파이프라인 노드로도 쓰일 수 있어
-    상태 확정을 위해 commit한다. (호출 맥락에 맞게 B가 조정)
+    [상태 전이] 협력사 상태를 'verified'로 변경하고 이벤트를 발행합니다.
     """
-    stmt = select(Supplier).where(Supplier.supplier_id == state["supplier_id"])
-    res = await db.execute(stmt)
-    supplier = res.scalar_one()
+    supplier_id = state.get("supplier_id")
+    if not supplier_id:
+        raise ValueError("State must contain a 'supplier_id'")
 
+    # 1. DB에서 Supplier 조회
+    stmt = select(Supplier).where(Supplier.supplier_id == supplier_id)
+    res = await db.execute(stmt)
+    supplier = res.scalar_one_or_none()
+
+    if not supplier:
+        raise ValueError(f"Supplier with id {supplier_id} not found.")
+
+    # 2. 상태 변경 (직접 대입 금지. 반드시 transition_supplier_status를 통과)
     await transition_supplier_status(
         db, supplier, "verified", batch_id=state.get("batch_id")
     )
+
+    # 3. 커밋 확정
     await db.commit()
+
+    # 4. 이벤트 발행 (types.py 계약에 맞춰 old_status 제거 및 2-인자 호출)
+    event = SupplierStatusChangedEvent(
+        supplier_id=supplier.supplier_id,
+        new_status="verified",
+        event_name="SupplierStatusChanged"
+    )
+    await publish("SupplierStatusChanged", dataclasses.asdict(event))
 
     return state

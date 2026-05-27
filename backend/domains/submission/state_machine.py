@@ -1,16 +1,15 @@
 import uuid
 from typing import Optional
-from dataclasses import asdict
+import dataclasses
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy.exc import IntegrityError
 from backend.infrastructure.trace import trace_node
-from backend.infrastructure.event_bus import publish
 from backend.domains.submission.models import SubmissionStatus, SUBMISSION_TRANSITIONS, DataRequestLog, SubmissionStatusHistory
 from backend.events.types import SubmissionStatusChangedEvent
 
-@trace_node("transition_submission", "agent")
+@trace_node("transition_submission", node_type="agent")
 async def transition_submission(
     db: AsyncSession,
     request_id: uuid.UUID,           # 데이터 수집 및 제출 요청건의 유니크 ID (마스터 테이블 외래키)
@@ -18,7 +17,7 @@ async def transition_submission(
     actor_id: uuid.UUID,             # 본 상태 전이 트랜잭션을 발생시킨 실행 주체자 ID (User ID)
     reason: Optional[str] = None,    # 상태 전이 사유 (특히 REVIEW 단계에서 REJECTED 처리 시 반려 근거 기록)
     batch_id: Optional[str] = None   # Provenance 감사 추적 체인 연동을 위한 인프라 전용 식별 파라미터
-) -> DataRequestLog:
+) -> tuple[DataRequestLog, SubmissionStatusChangedEvent]:
     """
     Pipeline Coordinator: Submission 상태 전이를 제어하는 비즈니스 로직
     """
@@ -59,9 +58,9 @@ async def transition_submission(
     event = SubmissionStatusChangedEvent(
         request_id=request_id,
         old_status=current_status.value if current_status else None,
-        new_status=to_status.value
+        new_status=to_status.value,
+        event_name="SubmissionStatusChanged"
     )
-    # db 객체를 넘기지 않는 2-인자 인프라 호출 스펙 엄수
-    await publish("SubmissionStatusChanged", asdict(event))
     
-    return log_record
+    # 트랜잭션 롤백 대비 고스트 이벤트 방지: 서비스 계층에서 DB 커밋 성공 후 발행하도록 이벤트 객체 반환
+    return log_record, event
