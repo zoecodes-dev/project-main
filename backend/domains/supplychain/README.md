@@ -19,6 +19,42 @@
 - **입력**: `product_id`, `bom_version_id`
 - **출력**: 계층별(depth), 차수별(tier) 협력사 및 공장 위치 정보 정보가 포함된 트리 구조 JSON.
 
+### 동작 흐름 및 응답 예시
+1. `products` 및 `bom_versions`를 기준으로 최상위 루트 노드(Pack)를 앵커로 설정.
+2. `supply_chain_map`의 `parent_supplier_id` ↔ `child_supplier_id` 관계를 따라 재귀적으로 하위 협력사를 탐색.
+3. 각 노드에 `supplier_factories`의 위치 좌표 및 규제 적용 정보를 조인하여 반환.
+
+**[응답 예시: GET /supply-chain/{product_id}/tree]**
+```json
+{
+  "product_id": "550e8400-e29b-41d4-a716-446655440000",
+  "bom_version": "v1.0",
+  "supply_tree": [
+    {
+      "map_id": "...",
+      "part_id": "...",
+      "supplier_name": "한양셀 제조(주)",
+      "tier": 1,
+      "depth": 0,
+      "children": [
+        {
+          "map_id": "...",
+          "part_id": "...",
+          "supplier_name": "포스코퓨처엠",
+          "tier": 2,
+          "depth": 1,
+          "factory_location": {
+            "country": "KR",
+            "coordinates": {"type": "Point", "coordinates": [129.36, 36.03]}
+          },
+          "children": []
+        }
+      ]
+    }
+  ]
+}
+```
+
 ## 5. Geo Audit 검증 항목
 - **신장 위구르 자치구 근접성**: `ST_DWithin` 함수를 사용하여 경계 내부 또는 50km 이내 여부 판정.
 - **국가 정합성**: 신고된 국가(`country`)와 좌표(`location`)의 실제 일치 여부 검증.

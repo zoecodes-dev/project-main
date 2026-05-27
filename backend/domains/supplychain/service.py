@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.events.types import GeoRiskDetectedEvent
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.queue import RISK_QUEUE, enqueue
-from backend.infrastructure.trace import trace_node
+from backend.infrastructure.trace import trace_node, trace_tool
 from backend.domains.supplychain.repository import SupplyChainRepository
 
 
@@ -30,6 +30,7 @@ class SupplyChainService:
         self.repository = repository
 
     # ---------- 공급망 그래프 ----------
+    @trace_tool("get_supply_chain_tree")
     async def get_supply_tree(self, product_id: str) -> List[Dict[str, Any]]:
         """product_id 기준 N차 공급망 트리 조회."""
         return await self.repository.get_n_tier_supply_chain(product_id)
