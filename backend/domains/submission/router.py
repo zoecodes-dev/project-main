@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.database import get_db
@@ -34,7 +34,7 @@ async def list_data_requests_endpoint(
         db=db, supplier_id=supplier_id, status=status.value if status else None, skip=skip, limit=limit
     )
 
-@router.post("", response_model=DataRequestResponse)
+@router.post("", response_model=DataRequestResponse, status_code=status.HTTP_201_CREATED)
 async def create_data_request_endpoint(req: DataRequestCreateRequest, db: AsyncSession = Depends(get_db)):
     """
     [API] POST /data-requests

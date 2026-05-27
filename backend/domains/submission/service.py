@@ -1,12 +1,12 @@
 import uuid
-from dataclasses import asdict
+import dataclasses
 from datetime import datetime
 from typing import Optional
+from typing import List
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.infrastructure.queue import enqueue, VALIDATION_QUEUE
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node, trace_tool
 from backend.domains.submission.models import DataRequestLog, SubmissionStatus
@@ -16,9 +16,8 @@ from backend.events.types import (
     SubmissionRequestedEvent,
     SubmissionStartedEvent,
     SubmissionCompletedEvent,
-    ValidationStartedEvent,
-    ValidationFailedEvent,
-    ValidationCompletedEvent,
+    SubmissionApprovedEvent,
+    SubmissionRejectedEvent,
 )
 
 @trace_node("create_and_request_submission", node_type="agent")
@@ -53,7 +52,7 @@ async def create_and_request_submission(
     try:
         req_log = await create_data_request(db, new_log)
         # 2. 전이 규칙을 통한 상태 변경 (PENDING -> REQUESTED)
-        await transition_submission(
+        _, status_event = await transition_submission(
             db=db,
             request_id=req_log.request_id,
             to_status=SubmissionStatus.REQUESTED,
@@ -71,9 +70,11 @@ async def create_and_request_submission(
     event = SubmissionRequestedEvent(
         request_id=req_log.request_id,
         supplier_id=target_supplier_id,
-        due_date=due_date.isoformat()
+        due_date=due_date,
+        event_name="SubmissionRequested"
     )
-    await publish("SubmissionRequested", asdict(event))
+    await publish("SubmissionRequested", dataclasses.asdict(event))
+    await publish("SubmissionStatusChanged", dataclasses.asdict(status_event))
     
     return req_log
 
@@ -124,7 +125,7 @@ async def update_submission_status(
             raise ValueError("제출 완료(SUBMITTED) 상태로 전이하려면 최소 1개 이상의 파일(file_urls)이 첨부되어야 합니다.")
 
     try:
-        req_log = await transition_submission(
+        req_log, status_event = await transition_submission(
             db=db,
             request_id=request_id,
             to_status=to_status,
@@ -137,31 +138,25 @@ async def update_submission_status(
         await db.rollback()
         raise
 
+    # 공통: 상태 전이 완료(커밋 성공) 후 상태 변경 이벤트 일괄 발행
+    await publish("SubmissionStatusChanged", dataclasses.asdict(status_event))
+
     # 도메인 이벤트 발행: IN_PROGRESS(제출 시작) / SUBMITTED(제출 완료) / APPROVED(승인) / REJECTED(반려)
     if to_status == SubmissionStatus.IN_PROGRESS and req_log:
-        await publish("SubmissionStarted", asdict(SubmissionStartedEvent(
-            request_id=request_id, supplier_id=req_log.target_supplier_id
+        await publish("SubmissionStarted", dataclasses.asdict(SubmissionStartedEvent(
+            request_id=request_id, supplier_id=req_log.target_supplier_id, event_name="SubmissionStarted"
         )))
     elif to_status == SubmissionStatus.SUBMITTED and req_log:
-        await publish("SubmissionCompleted", asdict(SubmissionCompletedEvent(
-            request_id=request_id, batch_id=batch_id, file_urls=file_urls or []
+        await publish("SubmissionCompleted", dataclasses.asdict(SubmissionCompletedEvent(
+            request_id=request_id, batch_id=batch_id, file_urls=file_urls or [], event_name="SubmissionCompleted"
+        )))
+    elif to_status == SubmissionStatus.APPROVED and req_log:
+        await publish("SubmissionApproved", dataclasses.asdict(SubmissionApprovedEvent(
+            request_id=request_id, batch_id=batch_id, event_name="SubmissionApproved"
+        )))
+    elif to_status == SubmissionStatus.REJECTED and req_log:
+        await publish("SubmissionRejected", dataclasses.asdict(SubmissionRejectedEvent(
+            request_id=request_id, reason=reason, event_name="SubmissionRejected"
         )))
 
     return req_log
-
-@trace_tool("verify_feoc_rule")
-async def verify_feoc_rule(batch_id: str, supplier_id: uuid.UUID, ownership_percent: float) -> bool:
-    """
-    [Verification Engine] FEOC 지분율 규제 심사
-    - 지분율 25% 초과 시 ValidationFailedEvent 발행 및 VALIDATION_QUEUE 큐잉.
-    """
-    await publish("ValidationStarted", asdict(ValidationStartedEvent(batch_id=batch_id)))
-
-    if ownership_percent > 25.0:
-        reason = "FEOC ownership exceeded 25%"
-        await enqueue(VALIDATION_QUEUE, "process_feoc_violation", batch_id=batch_id, supplier_id=str(supplier_id), ownership_percent=ownership_percent, reason=reason)
-        await publish("ValidationFailed", asdict(ValidationFailedEvent(batch_id=batch_id, reason=reason)))
-        return False
-
-    await publish("ValidationCompleted", asdict(ValidationCompletedEvent(batch_id=batch_id)))
-    return True
