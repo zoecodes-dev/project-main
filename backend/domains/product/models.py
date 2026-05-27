@@ -22,8 +22,10 @@
 from __future__ import annotations
 
 import enum
-from typing import List, Optional
+import uuid
+from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel
 from sqlalchemy import (
     Boolean,
     Column,
@@ -40,11 +42,16 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.types import TIMESTAMP
 
+from backend.infrastructure.database import Base
+
+
+# ============================================================
+# [1] SQLAlchemy ORM 모델 영역
+# ============================================================
 
 # ---------------------------------------------------------------------------
-# Base
+# BomVersionStatus Enum
 # ---------------------------------------------------------------------------
-from backend.infrastructure.database import Base
 
 class BomVersionStatus(str, enum.Enum):
     """
@@ -58,6 +65,11 @@ class BomVersionStatus(str, enum.Enum):
     DRAFT      = "draft"
     ACTIVE     = "active"
     DEPRECATED = "deprecated"
+
+
+# ---------------------------------------------------------------------------
+# 1. Product
+# ---------------------------------------------------------------------------
 
 class Product(Base):
     """
@@ -434,10 +446,10 @@ class Part(Base):
     # parent:   이 부품의 직접 상위 부품
     #
     # remote_side=[part_id] 필수:
-    #   - SQLAlchemy는 같은 테이블 내 FK를 보고 "어느 쪽이 부모냐"를 
+    #   - SQLAlchemy는 같은 테이블 내 FK를 보고 "어느 쪽이 부모냐"를
     #     자동 판단하지 못함.
     #   - remote_side에 PK 컬럼을 지정하면
-    #     "part_id가 있는 쪽 = 부모(one)" 
+    #     "part_id가 있는 쪽 = 부모(one)"
     #     "parent_part_id가 있는 쪽 = 자식(many)" 으로 확정됨.
     # ------------------------------------------------------------------
     children: List["Part"] = relationship(
@@ -803,9 +815,52 @@ class ManufacturingProcess(Base):
         )
 
 
-# ---------------------------------------------------------------------------
+# ============================================================
+# [2] Pydantic 입출력 스키마(DTO) 영역
+# ============================================================
+
+class ProductCreateRequest(BaseModel):
+    """제품 등록 요청 바디. product_code UNIQUE — 중복 시 409."""
+    product_code: str
+    product_name: Optional[str] = None
+    manufacturer_id: Optional[uuid.UUID] = None
+    type: Optional[str] = None
+    specs: Optional[Dict[str, Any]] = None
+
+
+class ProductBrief(BaseModel):
+    """
+    목록·단건 응답용 직렬화 스키마.
+    ORM 객체를 그대로 반환하면 relationship lazy load에서 직렬화 에러가
+    날 수 있으므로, 명시적 스키마로 변환해 반환한다(직렬화 안전).
+    from_attributes=True 로 ORM 인스턴스에서 바로 만든다.
+    """
+    product_id: uuid.UUID
+    product_code: str
+    product_name: Optional[str] = None
+    type: Optional[str] = None
+    manufacturer_id: Optional[uuid.UUID] = None
+
+    model_config = {"from_attributes": True}
+
+
+class BomTreeResponse(BaseModel):
+    """
+    BOM 트리 응답 스키마.
+    active BOM 버전이 없으면 service에서 404 반환.
+    """
+    product_id: uuid.UUID
+    product_code: str
+    bom_version: str
+    bom_status: str
+    tree: Dict[str, Any]
+
+    model_config = {"from_attributes": False}
+
+
+# ============================================================
 # 편의 상수 — Service/State Machine 레이어에서 import하여 사용
-# ---------------------------------------------------------------------------
+# ============================================================
 
 # BOM 버전 상태 허용값 집합 (state_machine.py 전이 검증용)
 VALID_BOM_STATUSES: frozenset[str] = frozenset(
