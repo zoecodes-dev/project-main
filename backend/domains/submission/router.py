@@ -54,7 +54,9 @@ async def create_data_request_endpoint(req: DataRequestCreateRequest, db: AsyncS
         )
     except ValueError as e:
         # 비즈니스 규칙 위반 또는 DB 참조 무결성 위반 시 422 반환
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
 
 @router.get("/{request_id}", response_model=DataRequestResponse)
 async def get_data_request_endpoint(request_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
@@ -65,7 +67,7 @@ async def get_data_request_endpoint(request_id: uuid.UUID, db: AsyncSession = De
     """
     log_record = await get_submission_detail(db, request_id)
     if not log_record:
-        raise HTTPException(status_code=404, detail="Data request not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data request not found")
     return log_record
 
 @router.patch("/{request_id}/status", response_model=DataRequestResponse)
@@ -91,5 +93,7 @@ async def update_data_request_status_endpoint(request_id: uuid.UUID, req: DataRe
     except ValueError as e:
         # 에러 메시지에 'not found'가 포함되면 404, 허용되지 않은 상태 전이 등의 규칙 위반이면 422 반환
         if "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=422, detail=str(e))
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")

@@ -27,6 +27,7 @@ class SubmissionStatus(str, PyEnum):
     PENDING = "pending"
     REQUESTED = "requested"
     IN_PROGRESS = "in_progress"  # schema.sql 명세 기준 언더스코어(_) 사용
+    PARSED = "parsed"            # [Decision #3 반영] AI 파싱 완료 후 협력사 눈으로 확인 대기
     SUBMITTED = "submitted"
     REVIEW = "review"
     APPROVED = "approved"
@@ -126,7 +127,8 @@ class Notification(Base):
 SUBMISSION_TRANSITIONS = {
     SubmissionStatus.PENDING:     [SubmissionStatus.REQUESTED],
     SubmissionStatus.REQUESTED:   [SubmissionStatus.IN_PROGRESS],
-    SubmissionStatus.IN_PROGRESS: [SubmissionStatus.SUBMITTED],
+    SubmissionStatus.IN_PROGRESS: [SubmissionStatus.PARSED, SubmissionStatus.SUBMITTED], # 파일 업로드 시 PARSED, 직접 폼 입력 시 SUBMITTED
+    SubmissionStatus.PARSED:      [SubmissionStatus.SUBMITTED, SubmissionStatus.IN_PROGRESS], # 확정하면 제출, 틀려서 재수정하면 IN_PROGRESS
     SubmissionStatus.SUBMITTED:   [SubmissionStatus.REVIEW],
     SubmissionStatus.REVIEW:      [SubmissionStatus.APPROVED, SubmissionStatus.REJECTED],
     SubmissionStatus.REJECTED:    [SubmissionStatus.IN_PROGRESS],

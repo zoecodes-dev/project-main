@@ -1,3 +1,115 @@
+```
+나는 KIRA Compliance Intelligence Platform 백엔드 팀원이다.
+배터리 EV 공급망 DPP 자동 발행 플랫폼이고, 너는 내 백엔드 코드를 작성한다.
+아래 규칙은 절대 변경 금지다. 답하기 전에 반드시 지켜라.
+
+[기술 스택 — 변경/대체 제안 금지]
+- DB: PostgreSQL 16 + PostGIS + pgvector
+- API: FastAPI (async)
+- Queue: ARQ + Redis
+- Event Bus: PostgreSQL LISTEN/NOTIFY
+- AI: LangGraph
+(MySQL·MongoDB·NestJS·Kafka·GraphQL·Kubernetes 제안 금지)
+
+[코드 작성 절대 규칙]
+1. 모든 import는 backend. 으로 시작한다.
+   from backend.infrastructure.database import get_db, Base  (O)
+   from infrastructure.database import ...                    (X)
+2. 인프라 함수는 아래 시그니처 그대로 호출한다. 인자 개수·이름을 바꾸지 않는다.
+   - await publish(event_name: str, payload: dict) -> None    # 2-인자. db 안 넘김
+   - await enqueue(queue_name: str, func_name: str, **kwargs) -> str
+   - get_db()  → FastAPI Depends 전용 async 세션
+   - Base      → 모든 ORM 모델의 부모 클래스
+   - @trace_node(node_name: str, node_type: str = "agent")    # 상태 변경 함수에
+   - @trace_tool(tool_name: str)                              # 조회·외부호출 함수에
+   payload는 dataclasses.asdict(이벤트객체)로 만든 dict.
+3. 상태값·enum 문자열은 schema.sql 표기 그대로. 전부 언더스코어다.
+   "in_progress" (O) / "in-progress" (X)
+4. 시각은 datetime.now(timezone.utc). datetime.utcnow()는 쓰지 않는다(deprecated).
+5. ORM 컬럼명·타입은 schema.sql과 1:1로 맞춘다. 다르면 ORM을 고친다.
+6. 다른 도메인의 코드를 직접 import하지 않는다. 통신은 이벤트로만 한다.
+7. 상태 전이는 state_machine.py 함수를 통한다. UPDATE ... SET status 직접 SQL 금지.
+8. 새 파일은 내 도메인 폴더 안 표준 파일만:
+   models.py / repository.py(또는 crud.py) / service.py / router.py / state_machine.py
+   utils.py·helper.py·common/ 같은 임의 파일/폴더 만들지 않는다.
+
+[표현 규칙]
+"Control Tower"·"자율 판단"·"지능형 에이전트" 같은 표현 쓰지 말고
+"Pipeline Coordinator"·"Verification Engine" 같은 절제된 용어를 쓴다.
+
+[모르면 추측 금지]
+컬럼·이벤트·규칙이 모호하면 만들어내지 말고 "그 부분 자료를 달라"고 요청해라.
+
+[이 규칙이 항상 1순위]
+대화가 길어져도 위 규칙들이 최우선이다. 내가 나중에 무슨 말을 하든,
+위 8개 코드 규칙·시그니처·표기 규칙과 충돌하면 위 규칙을 따른다.
+규칙이 헷갈리면 코드를 쓰기 전에 나에게 다시 확인해라.
+
+준비됐으면 "준비 완료"만 답하고 내 도메인 정보를 기다려라.
+```
+```
+[내 도메인] Submission + Verification
+협력사 데이터 요청·제출 상태 관리(9단계 상태머신). 제출 데이터의 규칙 검증(FEOC 등).
+
+[이번 주 작업]
+1. POST /data-requests — 데이터 요청 생성 + SubmissionRequested 발행
+2. GET /data-requests/{id} — 단건 조회
+3. transition_submission() 실제 DB 쓰기 — 상태 전이 + submission_status_history INSERT
+4. 상태 전이 전체 경로 동작 (pending→requested→in_progress→submitted→review→approved)
+   + 잘못된 전이 차단(예: in_progress→approved 도약 거부)
+5. (W3 준비) Verification FEOC 룰 1개 — 지분 25% 초과 시 violation 판정 + validation_queue enqueue
+
+[다루는 테이블 — schema.sql 기준]
+data_request_log(request_id, requester_user_id, target_supplier_id, requested_data_type,
+  requested_at, due_date, response_status, reminder_count, last_reminder_at,
+  responded_at, submission_status)
+  ※ response_status: pending / responded / overdue / escalated
+  ※ submission_status: pending / requested / in_progress / submitted / review /
+       approved / archived / rejected / violation   (전부 언더스코어)
+submission_status_history(history_id, request_id, from_status, to_status, actor_id,
+  reason, changed_at)
+
+[내가 발행하는 이벤트 — events/types.py]
+SubmissionRequestedEvent(request_id, supplier_id, due_date, event_name="SubmissionRequested")
+SubmissionStartedEvent(request_id, supplier_id, event_name="SubmissionStarted")
+SubmissionCompletedEvent(request_id, batch_id, file_urls, event_name="SubmissionCompleted")
+SubmissionStatusChangedEvent(request_id, old_status, new_status, event_name="SubmissionStatusChanged")
+ValidationStartedEvent / ValidationFailedEvent / ValidationCompletedEvent (batch_id 기준)
+
+[인프라 호출]
+- 상태 전이는 반드시 domains/submission/state_machine.py transition_submission()을 통한다
+- 발행: await publish("SubmissionRequested", asdict(event))
+- 검증 작업 위임: await enqueue(VALIDATION_QUEUE, "...", **kwargs)
+```
+### 점검 ① 계약 위반 스캔
+```
+방금 코드를 아래 4가지로 스캔해서 위반된 줄을 표로 보여줘. 없으면 "위반 0"이라고 해.
+1. import가 backend.으로 시작 안 하는 줄
+2. 인프라 호출이 시그니처와 인자 개수·이름이 다른 줄 (특히 publish는 2-인자)
+3. 상태값/enum이 하이픈이거나 위에 준 schema 허용값과 다른 값
+4. ORM/쿼리 컬럼명이 위에 준 schema와 다른 것
+```
+
+### 점검 ② schema 컬럼 대조
+```
+방금 ORM(또는 쿼리)의 컬럼명·타입을 위에 준 schema.sql 발췌와 표로 대조해줘.
+좌: 내 코드 / 우: schema / 일치 여부. 불일치가 하나라도 있으면 코드를 고쳐서 다시 줘.
+```
+
+### 점검 ③ 동작 시나리오 (README용)
+```
+이 엔드포인트를 호출하는 curl 예시와, 성공 시 예상 응답(JSON)을 만들어줘.
+그리고 "이 API 호출 → 어떤 이벤트 발행 → 어떤 테이블에 row가 생기는지" 한 줄로 정리해줘.
+(이걸 내 도메인 README에 붙인다)
+```
+
+### 점검 ④ 누락 점검
+```
+이 작업에서 빠지기 쉬운 것 체크해줘:
+- 상태 변경 함수인데 @trace_node가 없는 곳
+- 이벤트를 발행해야 하는데 안 한 곳
+- 예외 상황(없는 ID, 잘못된 상태 전이, active BOM 없음 등) 처리 누락
+```
 # KIRA Compliance Intelligence Platform — 프로젝트 코어 인계 문서
 
 > **문서 목적**
@@ -70,7 +182,7 @@
 | **Database** | PostgreSQL 16 + PostGIS + pgvector | 공간 쿼리(공장/광산 좌표) + 법령 RAG 임베딩을 한 DB에서 처리 |
 | **API** | FastAPI (Python) | LangGraph·LLM 생태계와 자연스러운 연동 |
 | **AI Orchestration** | LangGraph | 5인 에이전트의 상태 머신·HITL 인터럽트 지원 |
-| **Frontend** | Next.js 14 + TypeScript + Tailwind + Recharts | App Router, RSC, 하얀 바탕에+청록 액센트 톤 |
+| **Frontend** | Next.js 14 + TypeScript + Tailwind + Recharts | App Router, RSC, 다크 차콜+청록 액센트 톤 |
 | **Container** | Docker + Docker Compose | 팀원 환경 통일 (`docker-compose up` 한 줄로 환경 구동) |
 | **Deploy Target** | AWS EC2 (Backend), Vercel (Frontend) | 시연 수준 배포 |
 
@@ -231,16 +343,24 @@ queued → extraction → verification → geo-analysis → compliance → readi
 **6개 Queue**:
 - OCR Queue, Validation Queue, Risk Queue, HITL Queue, Notification Queue, DPP Publish Queue
 
-**핵심 이벤트** (28종):
+**핵심 이벤트** (30종):
 ```
-Product:       Created, LotCreated, BOMMapped
-Supplier:      Invited, Connected, StatusChanged
-Submission:    Requested, Started, Completed, Rejected, Approved
-Verification:  Started, Failed, Completed
-Risk:          Detected, Escalated, Resolved
-HITL:          Requested, Assigned, Approved, Rejected
-DPP:           ReadinessUpdated, Issued
+Product:       Created, LotCreated, BOMMapped                              (3)
+Supplier:      Invited, Connected, StatusChanged,
+               RiskProfileUpdated, FactoryRegulationChanged                (5)
+Submission:    Requested, Started, Completed, Rejected, Approved,
+               StatusChanged                                              (6)
+Validation:    Started, Failed, Completed                                  (3)  ← 폴더는 verification/, 이벤트는 Validation*
+Risk:          Detected, Escalated, Resolved                               (3)
+Geo:           GeoRiskDetected                                             (1)  ← D→A 라우팅
+Compliance:    ComplianceCompleted                                        (1)  ← C→E Readiness 재계산
+HITL:          Requested, Assigned, Approved, Rejected                     (4)
+DPP:           ReadinessUpdated, Issued                                    (2)
+Origin:        OriginCertExpiring                                          (1)  ← B 스케줄러
+Training:      TrainingOverdue                                            (1)  ← B 스케줄러
 ```
+> 출처: 23종은 spec 7장 본문, `GeoRiskDetected`/`ComplianceCompleted`는 spec 7장 표(라인 1080·1084), 나머지 5종(`RiskProfileUpdated`/`FactoryRegulationChanged`/`SubmissionStatusChanged`/`OriginCertExpiring`/`TrainingOverdue`)은 `backend_md_additions.md` I절·E-1절. `SubmissionStatusChanged`는 spec과 additions 양쪽에 나오나 동일 이벤트이므로 1회만 카운트.
+> 주의: 도메인 폴더명은 `verification/`이지만 그 안에서 발행하는 이벤트는 `ValidationStarted/Failed/Completed`다. 폴더 이름(검증 범주)과 이벤트 이름(룰 적용 동작)이 다른 것은 의도된 것이 아니라 영어 표현 차이이며, 이벤트는 spec 7장의 `Validation*`이 단일 진실 공급원이다.
 
 ### 4-3. 재설계 우선순위 매트릭스
 
@@ -261,28 +381,166 @@ DPP:           ReadinessUpdated, Issued
 ### 5-1. 코드 구조 원칙
 
 1. **Modular Monolith 우선** — 8개 도메인을 패키지로 분리하되, 한 프로세스 내에서 동작. 마이크로서비스 분리는 시연 후 검토.
-   ```
-   backend/
-     ├── domains/
-     │    ├── product/
-     │    ├── supplychain/
-     │    ├── supplier/
-     │    ├── submission/
-     │    ├── verification/
-     │    ├── risk/
-     │    ├── dpp/
-     │    └── audit/
-     ├── agents/        # LangGraph 5인 에이전트
-     ├── workers/       # Queue 컨슈머
-     ├── events/        # Event Bus
-     └── infrastructure/  # DB, Storage, External APIs
-   ```
 
-2. **도메인 간 통신은 이벤트로** — 도메인 서비스가 다른 도메인 서비스를 직접 import하지 않는다. 이벤트 발행으로만 통신.
+#### 확정 디렉토리 트리 (단일 진실 공급원)
 
-3. **상태 전이는 State Machine으로** — Submission/DPP/Batch의 상태 전이는 명시적 함수로 작성. 임의 UPDATE 금지.
+아래 트리가 프로젝트의 **확정된 구조**다. 새 파일·폴더는 이 트리 안에서, 아래 도메인 표준 패턴을 따라서만 생성한다.
 
-### 5-2. 이벤트 버스 선택
+```
+project-root/
+├── backend/
+│   ├── main.py
+│   ├── __init__.py
+│   ├── agents/                  # LangGraph 5인 에이전트
+│   │   ├── state.py             # BatchState 공유 (B)
+│   │   ├── supervisor.py        # 지혜 (A)
+│   │   ├── geo_audit.py         # 영수 (D)
+│   │   ├── data_gateway.py      # 은진 (B)        ← 미생성, W3
+│   │   ├── compliance.py        # 은지 (C)        ← 미생성, W3
+│   │   ├── automation.py        # 차윤 (E)        ← 미생성, W3
+│   │   └── __init__.py
+│   ├── domains/
+│   │   ├── audit/               # A
+│   │   ├── supplier/            # B
+│   │   ├── product/             # C
+│   │   ├── supplychain/         # D  ← 3계층 표준의 참고 예시
+│   │   ├── submission/          # E
+│   │   ├── verification/        # E
+│   │   ├── risk/                # E
+│   │   ├── dpp/                 # E
+│   │   └── __init__.py
+│   ├── events/
+│   │   ├── types.py             # 25종 이벤트 dataclass (팀 전체 공유)
+│   │   └── __init__.py
+│   ├── infrastructure/
+│   │   ├── database.py          # B
+│   │   ├── event_bus.py         # B
+│   │   ├── queue.py             # B
+│   │   ├── trace.py             # B
+│   │   ├── security.py          # B (권한·마스킹, W2)
+│   │   └── __init__.py
+│   └── workers/                 # Queue 컨슈머 (담당자별 자기 Queue)
+│       ├── geo_risk_worker.py   # D
+│       └── __init__.py
+├── db/
+│   ├── conf.d/
+│   └── initdb.d/
+├── docker/
+│   ├── app.Dockerfile
+│   ├── db.Dockerfile
+│   ├── init.sql
+│   └── redis.Dockerfile
+├── .dockerignore
+├── .env                         # 커밋 금지 (.gitignore 포함)
+├── .gitignore
+├── docker-compose.yml
+└── requirements.txt
+```
+
+#### 도메인 폴더 표준 패턴
+
+모든 도메인 폴더(`domains/<name>/`)는 **최종적으로** 아래 4파일 + README로 구성한다. `supplychain/`이 이미 이 패턴을 따르고 있으므로 참고 예시로 삼는다.
+
+| 파일 | 책임 | 규칙 |
+|---|---|---|
+| `models.py` | SQLAlchemy ORM 모델 | 컬럼명·타입은 schema.sql과 1:1 일치 |
+| `repository.py` | DB 입출력 (쿼리·CRUD) | 재귀 CTE·PostGIS 쿼리는 여기 |
+| `service.py` | 비즈니스 로직 | 상태 전이는 state_machine 함수 호출, 이벤트 발행 |
+| `router.py` | FastAPI 엔드포인트 | service만 호출, DB 직접 접근 금지 |
+| `state_machine.py` | (상태 가진 도메인만) 상태 전이 함수 | submission/dpp/audit 등 |
+| `README.md` | 담당자·담당 이벤트·관련 테이블 | Day 1 산출물 |
+| `__init__.py` | 패키지 | |
+
+**계층 호출 방향(단방향)**: `router.py → service.py → repository.py → models.py`. 역방향 호출 금지. router가 repository를 직접 부르지 않는다.
+
+#### 단계별 생성 범위 (중요)
+
+표준은 위 4파일이되, **단계별로 나눠서** 만든다. 한 번에 다 만들지 않는다.
+
+- **W1 (이번주)**: `models.py` + `README.md`까지만. (트리 학습·재귀 CTE 학습 포함)
+- **W2**: `repository.py` + `service.py` + `router.py` + `state_machine.py` 추가, CRUD·이벤트 발행 동작.
+- **W3 이후**: `agents/` 노드 함수, `workers/` 컨슈머 추가.
+
+> `supplychain/`이 이미 router/service/repository를 갖고 있는 것은 D가 표준을 먼저 구현해 둔 것이며, 나머지 도메인의 참고 예시다. 다른 도메인이 W1에 아직 `models.py`만 있는 것은 정상이다.
+
+#### 파일 생성 규칙 (LLM·팀원 공통, 위반 시 PR 차단)
+
+1. **새 파일은 위 트리 구조 안에서만 생성.** 트리에 없는 최상위 폴더(예: `utils/`, `common/`, `helpers/`, `services/`)를 임의로 만들지 않는다.
+2. **도메인 코드는 반드시 해당 도메인 폴더 안에.** 공통으로 쓰고 싶은 코드가 생기면 `infrastructure/`에 두고, 그조차 애매하면 만들기 전에 PM(B)에게 확인.
+3. **도메인 폴더 안 파일은 표준 패턴 5종(+README)만.** `models.py`, `repository.py`, `service.py`, `router.py`, `state_machine.py` 외 임의 파일(예: `helper.py`, `utils.py`) 생성 금지.
+4. **`events/types.py`는 새로 만들지 않는다.** 이미 존재하며, 자기 이벤트 dataclass만 채운다.
+5. **인프라 파일(database/event_bus/queue/trace/security)은 B만 생성·수정.** 다른 팀원은 import만.
+6. **애매하면 만들지 말고 PM에게 묻는다.** "이 파일을 어디에 둘지 모르겠다"는 곧 트리에 자리가 없다는 신호다.
+
+추가 두 가지 구조 원칙:
+- **도메인 간 통신은 이벤트로** — 도메인 서비스가 다른 도메인 서비스를 직접 import하지 않는다. 이벤트 발행으로만 통신.
+- **상태 전이는 State Machine으로** — Submission/DPP/Batch의 상태 전이는 명시적 함수로 작성. 임의 UPDATE 금지.
+
+### 5-2. 인터페이스 계약 + 참조 절차 (정합성의 핵심)
+
+> **왜 이 절이 존재하는가**: 원칙("이벤트로 통신해라")만으로는 정합성이 안 맞는다. LLM은 원칙은 읽어도 **정확한 글자**(함수 인자 개수, import 경로, 상태값 표기)는 추측으로 채운다. 추측이 들어가는 순간 팀원마다 결과가 갈리고 통합 때 깨진다. 이 절은 **추측의 여지 자체를 없애기 위해** 정확한 계약과 그 계약을 매번 참조시키는 절차를 박는다. 이 절은 spec과 충돌 시 spec 7장(이벤트)·1장(인터페이스)을 따르되, 아래 시그니처가 현재 구현된 실제 코드와 일치하는 단일 진실 공급원이다.
+
+#### (1) 단일 진실 공급원 (SSOT) 우선순위
+
+작업 중 두 자료가 충돌하면 **위쪽이 이긴다.**
+1. `schema.sql` — 테이블·컬럼·타입·허용값의 최종 진실
+2. `events/types.py` — 이벤트 이름·payload 필드의 최종 진실
+3. 아래 인프라 시그니처 (이 절) — 함수 호출 방식의 최종 진실
+4. PROJECT_CORE 본문 / spec / 기타 문서 — 위 1~3과 다르면 1~3이 맞다
+
+> 예: PROJECT_CORE 어딘가에 "in-progress(하이픈)"이라 적혀 있어도, schema.sql이 `in_progress`(언더스코어)면 **schema가 맞다.** 문서 메모는 틀릴 수 있고 schema는 틀릴 수 없다(코드가 그걸로 도는 중이므로).
+
+#### (2) 인프라 함수 시그니처 계약 (이 글자 그대로 호출. 변형 금지)
+
+도메인·에이전트·워커 코드가 인프라를 호출할 때는 **아래 시그니처 그대로** 쓴다. 인자 개수·순서·이름을 바꾸지 않는다.
+
+```python
+# 이벤트 발행 (infrastructure/event_bus.py)
+await publish(event_name: str, payload: dict) -> None
+#   ↑ 첫 인자는 event_name. db 세션을 넘기지 않는다.
+#   payload는 dataclasses.asdict(이벤트객체)로 만든 dict.
+
+# 큐 적재 (infrastructure/queue.py)
+await enqueue(queue_name: str, func_name: str, **kwargs) -> str   # job_id 반환
+#   queue_name은 정의된 상수만: OCR_QUEUE / VALIDATION_QUEUE / RISK_QUEUE /
+#   HITL_QUEUE / NOTIFICATION_QUEUE / DPP_PUBLISH_QUEUE
+
+# DB 세션 (infrastructure/database.py)
+async def get_db() -> AsyncGenerator[AsyncSession, None]   # FastAPI Depends 전용
+Base                                                       # 모든 ORM 모델의 부모
+
+# 감사 추적 데코레이터 (infrastructure/trace.py)
+@trace_node(node_name: str, node_type: str = "agent")      # 상태 변경 함수에
+@trace_tool(tool_name: str)                                # 외부호출·단순쿼리 함수에
+#   데코레이트된 함수의 인자에 db(AsyncSession)와 batch_id가 있으면 자동 기록.
+#   batch_id가 없으면 기록을 조용히 건너뛴다(에러 아님).
+```
+
+새 인프라 함수가 필요하면 **B가 시그니처를 먼저 이 절에 추가**한 뒤 팀원이 사용한다. 팀원이 임의로 인프라 함수를 만들거나 시그니처를 바꾸지 않는다.
+
+#### (3) 표기 컨벤션 계약 (단어 수준)
+
+- **import 경로는 항상 `backend.`로 시작.** `from backend.agents.state import ...` (O) / `from agents.state import ...` (X). 컨테이너가 `backend.main:app`으로 뜨므로 flat import는 ModuleNotFoundError.
+- **상태값·enum 문자열은 schema.sql 표기 그대로.** 전 프로젝트가 **언더스코어**(`in_progress`, `not_started`). 하이픈 금지.
+- **시각은 timezone-aware UTC.** `datetime.now(timezone.utc)` (O) / `datetime.utcnow()` (X, deprecated).
+- **컬럼명은 schema.sql과 1:1.** ORM이 schema와 다르면 **ORM을 고친다**(마이그레이션 아님).
+
+#### (4) 참조 절차 — LLM에게 작업 시킬 때 반드시 함께 첨부 (재발 방지 핵심)
+
+팀원이 LLM에 코드를 시킬 때, 프롬프트에 **아래 4종을 매번 같이 넣는다.** 하나라도 빠지면 LLM이 그 부분을 추측한다.
+
+1. **PROJECT_CORE의 이 5-2절** (계약)
+2. **작업 대상 테이블의 schema.sql 발췌** (컬럼·타입·허용값)
+3. **작업이 호출할 인프라 함수 시그니처** (위 (2)에서 해당 줄)
+4. **작업이 발행/수신할 이벤트의 events/types.py 발췌** (해당 dataclass)
+
+> 핵심: "PROJECT_CORE를 참조하라"만으로는 부족하다. **그 작업이 건드리는 schema 테이블과 인프라 시그니처를 콕 집어 같이 붙여야** LLM이 추측 없이 정확한 글자를 쓴다. 이 절차를 팀원 LLM 프롬프트 가이드(별도 문서)에 체크리스트로 둔다 — 세부는 W2에서 정리.
+
+#### (5) 통합 검증은 B가 주 1회 (팀원은 작성, B는 정합성 책임)
+
+팀원은 자기 도메인 코드를 LLM으로 작성하고, **주말에 B가 일괄 통합 검증**한다. 검증의 1차 관문은 위 (2)(3) 계약 위반 여부 — 시그니처·import·표기 4종만 먼저 보면 P0급 버그 대부분이 잡힌다. 상세 검증 항목은 W2 문서에 둔다.
+
+### 5-3. 이벤트 버스 선택
 
 **원칙**: "최대한 쉬운 구현이 가능한 방향" (백엔드 명세 11장 명시).
 
@@ -293,14 +551,14 @@ DPP:           ReadinessUpdated, Issued
 
 **금지**: SQS/SNS 등 외부 클라우드 의존 — EC2 배포 단순화에 방해
 
-### 5-3. Queue 구현 원칙
+### 5-4. Queue 구현 원칙
 
 - **Celery 또는 ARQ** (Python 친화) 중 택일. ARQ가 더 가벼움 (Redis 단일 의존).
 - **Idempotency Key 필수** — 같은 이벤트가 두 번 들어와도 한 번만 처리되도록.
 - **Retry는 지수 백오프** — 최대 3회, 그 이후 DLQ(Dead Letter Queue)로.
 - **Worker는 단일 책임** — 한 워커가 한 Queue만 처리.
 
-### 5-4. AI 오케스트레이션 원칙
+### 5-5. AI 오케스트레이션 원칙
 
 1. **LangGraph가 상태의 단일 진실 공급원** — 배치의 `current_stage`는 LangGraph가 갱신.
 2. **Supervisor Agent (지혜)는 라우팅만** — LLM 호출 거의 없음. 결정론적 분기.
@@ -308,7 +566,7 @@ DPP:           ReadinessUpdated, Issued
 4. **HITL 인터럽트는 LangGraph `interrupt()` 패턴** — Queue로 우회하지 않음.
 5. **Provenance 데코레이터 `@trace_node` / `@trace_tool` 강제 적용** — 모든 노드·툴 호출이 `audit_trail`에 자동 기록되어야 함.
 
-### 5-5. 데이터베이스 원칙
+### 5-6. 데이터베이스 원칙
 
 1. **N차 공급망 추적은 재귀 CTE** — ORM 우회. SQLAlchemy `text()` 또는 `select().cte(recursive=True)`.
 2. **공간 쿼리는 PostGIS 함수** — `ST_DWithin`, `ST_Within`, `ST_Distance`. 영수 에이전트 전용.
@@ -316,14 +574,14 @@ DPP:           ReadinessUpdated, Issued
 4. **인덱스는 schema.sql 정의 그대로** — 추가 인덱스는 EXPLAIN 분석 후에만.
 5. **DPP issued 후 immutable** — DB 레벨 트리거 또는 애플리케이션 레벨 가드 둘 다 권장.
 
-### 5-6. API 설계 원칙
+### 5-7. API 설계 원칙
 
 1. **REST 우선, GraphQL 도입 금지** — 시연 범위 외.
 2. **읽기/쓰기 분리** — 쓰기는 동기 응답, 비동기 처리는 `202 Accepted + job_id` 반환.
 3. **권한 체크는 미들웨어 한 곳** — `view_permissions` 매트릭스 기반.
 4. **Bulk 엔드포인트 제한적 노출** — N+1 방지, 클라이언트 페이지네이션 강제.
 
-### 5-7. 보안·감사 원칙
+### 5-8. 보안·감사 원칙
 
 1. **민감 데이터 마스킹**:
    - 가격 정보 → API 응답 제외 (Admin Only)
@@ -432,6 +690,8 @@ DPP:           ReadinessUpdated, Issued
 | **5주차** | FastAPI + Next.js 풀스택 연동 |
 | **6주차** | 데모 + 리허설 |
 
+**부하 경고**: PM이 인프라+화면+에이전트(은진)+기술리더를 동시에 짊어진 구조. 4주차 통합 단계에 병목 발생 가능. LangGraph 조립은 영수에게 위임 검토 권장.
+
 ---
 
 ## 9. 새 LLM에게 — 시작 시 권장 행동
@@ -460,6 +720,14 @@ DPP:           ReadinessUpdated, Issued
 | LLM은 어디서 가장 많이 쓰는가? | **은지(Compliance Interpreter)** — Legal RAG + 법조항 인용 강제. Opus 사용. |
 | HITL은 언제 발동? | 신뢰도 0.85 미만 또는 회색지대 판정 시. LangGraph `interrupt()` 패턴. |
 | DPP 수정은 어떻게? | issued 이후 immutable. 새 버전 발행으로만. |
+| 새 파일을 어디에 만들지? | 5-1절 확정 트리 안에서만. 도메인 코드는 해당 도메인 폴더, 공통은 `infrastructure/`. 트리에 자리 없으면 만들지 말고 PM에게 확인. |
+| 도메인 폴더에 뭘 만들지? | 표준 5종(`models/repository/service/router/state_machine`)+README만. `utils.py`·`helper.py` 등 임의 파일 금지. |
+| 이벤트 이름이 Verification인가 Validation인가? | **Validation\*** (`ValidationStarted/Failed/Completed`). 폴더는 `verification/`이지만 이벤트는 Validation. spec 7장이 기준. |
+| 도메인마다 파일 개수가 다른데? | 정상. W1은 `models.py`만, W2에 router/service/repository 추가. `supplychain`이 먼저 3계층 만든 참고 예시. |
+| 문서랑 schema가 다르면? | **schema.sql이 이긴다.** 그다음 events/types.py, 그다음 인프라 시그니처(5-2), 문서 본문은 맨 아래. 코드가 도는 근거가 위쪽이다. (5-2절 SSOT 우선순위) |
+| publish는 인자 몇 개? | **2개**: `publish(event_name, payload)`. db 안 넘긴다. (5-2절 시그니처 계약) |
+| import는 어떻게 시작? | 항상 `backend.`로. `from backend.agents...` (5-2절 표기 계약) |
+| LLM에 코드 시킬 때 뭘 첨부? | 4종: 이 5-2절 + 해당 schema 테이블 발췌 + 호출할 인프라 시그니처 + 관련 이벤트 dataclass. "PROJECT_CORE 참조"만으론 부족. (5-2절 참조 절차) |
 
 ---
 
@@ -479,68 +747,3 @@ DPP:           ReadinessUpdated, Issued
 - **RAG** — Retrieval-Augmented Generation. 법령 검색해서 LLM에 함께 전달.
 
 ---
-
-**문서 끝.**
-이 문서는 프로젝트의 정체성·결정·방향성을 보존한다.
-백엔드 구현을 디벨롭하는 LLM은 이 문서를 단일 진입점으로 사용하라.
-
-```
-나는 KIRA Compliance Intelligence Platform 백엔드 팀원입니다.
-배터리 EV 공급망 DPP(Digital Product Passport) 자동 발행 플랫폼을 만들고 있고,
-당신이 백엔드 코드 작성을 도와줄 겁니다.
-
-이 프로젝트는 변경 불가능한 코어 규칙이 있습니다. 답변하기 전에 반드시 아래 규칙을 지키세요.
-
-[기술 스택 — 변경 금지]
-- DB: PostgreSQL 16 + PostGIS + pgvector (MySQL·MongoDB 제안 금지)
-- API: FastAPI (NestJS·Express·Flask 제안 금지)
-- Queue: ARQ + Redis (Celery·RabbitMQ·Kafka 제안 금지)
-- Event Bus: PostgreSQL LISTEN/NOTIFY (SQS·SNS 제안 금지)
-- AI: LangGraph
-- 인프라: Docker + Docker Compose, AWS EC2 배포 (Kubernetes 제안 금지)
-
-[데이터 모델 — 절대 변경 금지]
-- 35개 테이블, 10개 영역 구조
-- Provider Type 4종(manufacturer/recycler/trader/miner)은 별도 CTI 테이블 — 통합 제안 금지
-- 공장 단위 추적(supplier_factories.location, PostGIS POINT) — 회사 단위 회귀 금지
-- 부품 5계층 자기참조 트리(parts.parent_part_id)
-- BOM 버전 관리 필수(bom_versions.status: draft/active/deprecated)
-- DPP issued 후 immutable — 수정 로직 작성 금지, 새 버전 발행만
-
-[5개 규제 분기 — 추가 금지]
-UFLPA / IRA / EU Battery / EUDR / CSDDD
-(프론트엔드는 11개로 확장됐지만, 백엔드 핵심 5개에서 시작)
-
-[코드 작성 절대 규칙]
-1. 도메인 간 직접 import 금지. 다른 도메인의 함수·모델을 가져오지 않는다.
-   대신 events/types.py에 정의된 이벤트로 통신한다.
-2. 상태 전이는 반드시 state_machine.py 함수를 통해.
-   UPDATE batches SET status = ... 같은 직접 SQL 금지.
-3. 모든 상태 변경 함수에 @trace_node 데코레이터 필수.
-   누락되면 audit_trail에 기록 안 남아 규제 감사 탈락.
-4. 컬럼명·타입은 schema.sql 기준.
-   ORM과 다르면 ORM을 고치는 게 정답이지 마이그레이션이 아니다.
-5. N차 공급망·부품 트리는 재귀 CTE 사용. SQLAlchemy text() 우회.
-6. 공간 쿼리는 PostGIS 함수(ST_DWithin, ST_Within, ST_Distance).
-7. 법령 RAG는 pgvector 사용. 별도 벡터 DB 분리 금지.
-
-[표현 규칙]
-- "Control Tower", "자율 판단", "지능형 에이전트" 같은 표현 회피.
-- "Pipeline Coordinator", "Verification Engine", "Compliance Interpreter" 같은
-  절제된 용어 사용.
-
-[내가 맡은 도메인]
-(여기에 본인 도메인 적기: 예 "Product Domain - 제품/Lot/BOM 관리, 5계층 부품 트리")
-
-[모르면 추측하지 말 것]
-- 컬럼명·타입 모호하면 "schema.sql 해당 부분을 보여주세요"라고 요청.
-- 이벤트 페이로드 모호하면 "events/types.py 정의를 보여주세요"라고 요청.
-- 비즈니스 규칙 모호하면 "PROJECT_CORE.md 해당 절을 보여주세요"라고 요청.
-
-[답변 방식]
-- 단계별로 짧게 답한다. 한 번에 긴 코드 덩어리 토하지 않는다.
-- 코드 작성 전 의도 1~2줄 요약 후 작성.
-- 위 규칙 중 하나라도 위반될 가능성이 있으면 먼저 경고하고 시작.
-
-준비됐으면 "준비 완료"라고만 답하고 내 첫 질문을 기다리세요.
-```

@@ -15,7 +15,8 @@ class FEOCDummyRequest(BaseModel):
     """
     batch_id: uuid.UUID
     supplier_id: uuid.UUID
-    ownership_percent: float
+    direct_ownership: float
+    indirect_ownership: float = 0.0
 
 @router.post("/feoc-test", status_code=status.HTTP_200_OK)
 async def trigger_dummy_feoc_rule(req: FEOCDummyRequest, db: AsyncSession = Depends(get_db)):
@@ -30,7 +31,8 @@ async def trigger_dummy_feoc_rule(req: FEOCDummyRequest, db: AsyncSession = Depe
             db=db,
             batch_id=req.batch_id,
             supplier_id=req.supplier_id,
-            ownership_percent=req.ownership_percent
+            direct_ownership=req.direct_ownership,
+            indirect_ownership=req.indirect_ownership
         )
         
         # [추가] @trace_tool 데코레이터가 남긴 '감사 기록(Audit Trail)'을
@@ -44,7 +46,7 @@ async def trigger_dummy_feoc_rule(req: FEOCDummyRequest, db: AsyncSession = Depe
         # 광범위하게 잡아내어, 테스트 목적에 맞게 무조건 200 OK 결과로 우회시킵니다.
         await db.rollback()
         print(f"[Dummy Test Bypass] Exception ignored: {e}")
-        is_passed = req.ownership_percent < 25.0
+        is_passed = (req.direct_ownership + req.indirect_ownership) < 25.0
     
     if is_passed:
         return {"status": "passed", "message": "FEOC 검증 통과 (우려국 지분 25% 미만)"}
