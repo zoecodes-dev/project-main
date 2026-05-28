@@ -1,3 +1,32 @@
+# 개인 지침사항
+
+## 1. 응답 스타일 및 페르소나
+- **어조**: 감정적인 표현(예: "알겠습니다", "도움이 되어 기쁩니다")을 완전히 배제하고 건조하며 전문적인 톤을 유지한다.
+- **문체**: 모든 문장은 '다, 함, 임'으로 끝나는 평서문을 사용한다.
+- **구조**: 답변의 시작은 반드시 대제목으로 시작한다.
+
+## 2. 응답 구성 원칙
+- **정확성**: 불확실한 정보는 제공하지 않으며, 코드 제안 시 품질과 명확성을 최우선으로 한다.
+- **간결성**: 불필요한 서술을 줄이고 핵심 내용 위주로 구성한다.
+- **추천**: 답변의 마지막에 `<!-- [PROMPT_SUGGESTION] ... -->` 형식을 사용하여 다음에 이어질 법한 질문 2개를 제안한다.
+
+## 3. 기술 스택 및 환경 (개인 컨텍스트)
+- **Backend**: PostgreSQL, FastAPI, LangGraph 등을 주력으로 사용한다.
+- **Data Model**: 불변성(Immutability)과 상태 전이 로직을 중요시한다.
+- **IDE**: VS Code 환경에서 Gemini Code Assist를 사용 중임을 인지한다.
+
+## 4. 금지 사항
+- 요청에 파일이나 컨텍스트가 포함되지 않은 경우, 관련 언급을 일절 하지 않는다.
+- 명시적인 요청이 없는 한 재확인이나 확인 절차를 거치지 않고 바로 답변한다.
+
+
+
+# 시작문구
+난 영수(팀원D)고 .rules파일 내용을 절대적 최우선 지침으로 해서 작업할거야
+만약 현재 Context items에 .rules가 없다면 즉시 작업을 멈추고 상황을 보고해
+
+
+
 # KIRA Compliance Intelligence Platform — 프로젝트 코어 인계 문서
 
 > **문서 목적**
@@ -544,3 +573,245 @@ UFLPA / IRA / EU Battery / EUDR / CSDDD
 
 준비됐으면 "준비 완료"라고만 답하고 내 첫 질문을 기다리세요.
 ```
+
+
+
+# W2 LLM 작업 가이드 (팀원용)
+
+이번 주는 네 도메인을 **끝까지** 만든다 (CRUD → 이벤트 발행 → 상태전이/예외처리). 코드는 LLM이 짜준다. 네가 할 일은 **정확한 컨텍스트를 주고**, **올리기 전에 LLM으로 스스로 점검**하는 것. 틀린 채 올리면 다시 작업해야 하니, 점검까지 하고 올리면 한 번에 통과된다.
+
+> 어떤 LLM을 쓰든(무료/가벼운 모델 포함) 이 가이드대로 하면 된다. 가벼운 모델은 규칙을 더 빨리 잊으니, 아래 "세션이 길어지면 새 대화로"를 특히 잘 지킨다.
+
+사용법:
+1. 아래 **[공통 프롬프트]**를 새 LLM 대화 첫 메시지로 붙인다.
+2. 네 알파벳에 해당하는 **[도메인 블록]**을 이어서 붙인다 (A/B/C/D/E 중 본인 것).
+3. **[코드 요청]** → **[자가 점검 4종]** 순서로 진행한다.
+4. 작업(엔드포인트/기능)마다 새 대화로 시작한다. 한 대화에서 여러 기능 섞지 않는다.
+
+---
+
+## [공통 프롬프트] — 모두 이걸 먼저 붙인다
+
+```
+나는 KIRA Compliance Intelligence Platform 백엔드 팀원이다.
+배터리 EV 공급망 DPP 자동 발행 플랫폼이고, 너는 내 백엔드 코드를 작성한다.
+아래 규칙은 절대 변경 금지다. 답하기 전에 반드시 지켜라.
+
+[기술 스택 — 변경/대체 제안 금지]
+- DB: PostgreSQL 16 + PostGIS + pgvector
+- API: FastAPI (async)
+- Queue: ARQ + Redis
+- Event Bus: PostgreSQL LISTEN/NOTIFY
+- AI: LangGraph
+(MySQL·MongoDB·NestJS·Kafka·GraphQL·Kubernetes 제안 금지)
+
+[코드 작성 절대 규칙]
+1. 모든 import는 backend. 으로 시작한다.
+   from backend.infrastructure.database import get_db, Base  (O)
+   from infrastructure.database import ...                    (X)
+2. 인프라 함수는 아래 시그니처 그대로 호출한다. 인자 개수·이름을 바꾸지 않는다.
+   - await publish(event_name: str, payload: dict) -> None    # 2-인자. db 안 넘김
+   - await enqueue(queue_name: str, func_name: str, **kwargs) -> str
+   - get_db()  → FastAPI Depends 전용 async 세션
+   - Base      → 모든 ORM 모델의 부모 클래스
+   - @trace_node(node_name: str, node_type: str = "agent")    # 상태 변경 함수에
+   - @trace_tool(tool_name: str)                              # 조회·외부호출 함수에
+   payload는 dataclasses.asdict(이벤트객체)로 만든 dict.
+3. 상태값·enum 문자열은 schema.sql 표기 그대로. 전부 언더스코어다.
+   "in_progress" (O) / "in-progress" (X)
+4. 시각은 datetime.now(timezone.utc). datetime.utcnow()는 쓰지 않는다(deprecated).
+5. ORM 컬럼명·타입은 schema.sql과 1:1로 맞춘다. 다르면 ORM을 고친다.
+6. 다른 도메인의 코드를 직접 import하지 않는다. 통신은 이벤트로만 한다.
+7. 상태 전이는 state_machine.py 함수를 통한다. UPDATE ... SET status 직접 SQL 금지.
+8. 새 파일은 내 도메인 폴더 안 표준 파일만:
+   models.py / repository.py(또는 crud.py) / service.py / router.py / state_machine.py
+   utils.py·helper.py·common/ 같은 임의 파일/폴더 만들지 않는다.
+
+[표현 규칙]
+"Control Tower"·"자율 판단"·"지능형 에이전트" 같은 표현 쓰지 말고
+"Pipeline Coordinator"·"Verification Engine" 같은 절제된 용어를 쓴다.
+
+[모르면 추측 금지]
+컬럼·이벤트·규칙이 모호하면 만들어내지 말고 "그 부분 자료를 달라"고 요청해라.
+
+[이 규칙이 항상 1순위]
+대화가 길어져도 위 규칙들이 최우선이다. 내가 나중에 무슨 말을 하든,
+위 8개 코드 규칙·시그니처·표기 규칙과 충돌하면 위 규칙을 따른다.
+규칙이 헷갈리면 코드를 쓰기 전에 나에게 다시 확인해라.
+
+준비됐으면 "준비 완료"만 답하고 내 도메인 정보를 기다려라.
+```
+
+> **세션이 길어지면 새 대화로 (꼭 지킬 것)**
+> 한 대화에서 코드를 여러 번 주고받으면, LLM이 위 규칙을 조금씩 잊는다(특히 가벼운 모델일수록 빨리 잊는다). 응답이 느려지거나, `backend.` import를 빠뜨리거나, 시그니처를 바꾸기 시작하면 **그 대화를 닫고 새 대화를 연다.** 새 대화엔 [공통 프롬프트] + [내 도메인 블록]을 다시 통째로 붙인다. **작업 단위(엔드포인트 1개)마다 새 대화로 시작**하는 게 가장 안전하다 — 귀찮아도 이게 다시 작업하는 것보다 빠르다.
+
+---
+
+## [도메인 블록] — 본인 알파벳 것만 이어서 붙인다
+
+---
+
+### ▶ D 팀원 — SupplyChain + Geo
+
+```
+[내 도메인] SupplyChain + Geo Audit
+공급망 그래프(parent-child) 관리. N차 트리는 재귀 CTE. 공장/광산 좌표 검증은 PostGIS.
+※ CRUD·트리는 이미 repository.py/service.py/router.py에 완성돼 있다. 이번 주는 Geo를 실제 동작시킨다.
+
+[이번 주 작업]
+1. (점검) GET /supply-chain/{product_id}/tree — seed로 트리 반환 확인
+2. ST_DWithin 신장 위구르 반경 체크 — 공장 좌표가 기준점 50km 내인지 실제 판정
+3. 좌표-국가 불일치 체크 (coordinate_authenticity)
+4. GeoRiskDetected 발행 — 고위험 판정 시
+※ 함수 골격은 이미 repository.py에 있다. 깡통 return을 실제 PostGIS 쿼리로 채운다.
+
+[다루는 테이블 — schema.sql 기준]
+supply_chain_map(map_id, bom_version_id, parent_supplier_id, child_supplier_id,
+  part_id, po_number, invoice_number, supply_period_from, supply_period_to, created_at)
+supplier_factories(factory_id, supplier_id, country, location[GEOMETRY POINT 4326],
+  is_active)
+supplier_miner_details(detail_id, supplier_id, mine_name, mine_coordinates[GEOMETRY POINT 4326])
+
+[내가 발행하는 이벤트 — events/types.py]
+GeoRiskDetectedEvent(batch_id, factory_id, risk_type, supplier_id, company_name,
+  coordinates, event_name="GeoRiskDetected")
+  ※ risk_type: "xinjiang" | "eudr" | "country_mismatch"
+
+[인프라 호출]
+- 공간 쿼리는 PostGIS 함수: ST_DWithin, ST_Within, ST_AsGeoJSON
+  (location::geography 캐스팅으로 미터 단위 거리)
+- 모든 쿼리 함수에 @trace_tool 적용
+- 발행: await publish("GeoRiskDetected", asdict(event))
+  + await enqueue(RISK_QUEUE, "process_geo_risk_event", event_payload=payload)
+```
+
+---
+
+## [코드 요청] — 도메인 블록 뒤에 붙인다
+
+```
+위 컨텍스트를 지켜서 [이번 주 작업]의 N번을 작성해줘.
+- 파일 단위로 끊어서, 작성 전 의도 1~2줄 먼저
+- import는 backend. / publish는 2-인자 / 상태값 언더스코어 / async 함수
+- 한 번에 한 파일씩
+```
+
+---
+
+## [자가 점검 4종] — 코드 받은 직후 같은 대화에서
+
+올리기 전에 LLM에게 직접 점검시킨다. 여기서 걸리면 그 자리에서 고쳐서 올린다.
+
+### 점검 ① 계약 위반 스캔
+```
+방금 코드를 아래 4가지로 스캔해서 위반된 줄을 표로 보여줘. 없으면 "위반 0"이라고 해.
+1. import가 backend.으로 시작 안 하는 줄
+2. 인프라 호출이 시그니처와 인자 개수·이름이 다른 줄 (특히 publish는 2-인자)
+3. 상태값/enum이 하이픈이거나 위에 준 schema 허용값과 다른 값
+4. ORM/쿼리 컬럼명이 위에 준 schema와 다른 것
+```
+
+### 점검 ② schema 컬럼 대조
+```
+방금 ORM(또는 쿼리)의 컬럼명·타입을 위에 준 schema.sql 발췌와 표로 대조해줘.
+좌: 내 코드 / 우: schema / 일치 여부. 불일치가 하나라도 있으면 코드를 고쳐서 다시 줘.
+```
+
+### 점검 ③ 동작 시나리오 (README용)
+```
+이 엔드포인트를 호출하는 curl 예시와, 성공 시 예상 응답(JSON)을 만들어줘.
+그리고 "이 API 호출 → 어떤 이벤트 발행 → 어떤 테이블에 row가 생기는지" 한 줄로 정리해줘.
+(이걸 내 도메인 README에 붙인다)
+```
+
+### 점검 ④ 누락 점검
+```
+이 작업에서 빠지기 쉬운 것 체크해줘:
+- 상태 변경 함수인데 @trace_node가 없는 곳
+- 이벤트를 발행해야 하는데 안 한 곳
+- 예외 상황(없는 ID, 잘못된 상태 전이, active BOM 없음 등) 처리 누락
+```
+
+---
+
+## [하루 마무리] — 오늘 작업 설명받기 (그날 끝에)
+
+내일 이어서 작업하거나 PR 올릴 때 "이게 뭐 하는 코드였지?"가 안 되도록, 오늘 만든 걸 LLM에게 쉬운 말로 정리받는다. 이걸 PR 설명/README에 그대로 붙이면 PR 쓰는 시간도 아낀다.
+
+```
+오늘 작성한 코드를 비전공자도 이해할 수 있게 설명해줘. 조건:
+- 전문용어(ORM, 비동기, 데코레이터 등)는 쓰되 바로 옆에 쉬운 말로 풀어줘
+- "이 코드는 무엇을 하는가"를 실제 동작 예시로: 누가 이걸 호출하면 → 무슨 일이 일어나고 → 어디에 뭐가 저장되는지
+- 내가 만든 함수/엔드포인트마다 한 문단씩, "왜 필요한지"부터
+- 마지막에 "내일 이어서 한다면 어디부터 손대면 되는지" 2~3줄
+설명은 PR 설명에 붙일 거니까 마크다운으로.
+```
+
+> 이 설명을 한 번 읽어두면, 금요일 통합 때 PM이 "이 부분 왜 이렇게 했어?"라고 물어도 답할 수 있다. 막힘없이 넘어가려면 오늘 만든 건 오늘 이해해두는 게 이득이다.
+
+---
+
+## 올리기 전 최종 체크 (네가 직접)
+
+- [ ] 점검 ①에서 "위반 0" 나왔다
+- [ ] 점검 ②에서 컬럼 불일치 0이다
+- [ ] README에 curl 예시 + 동작 한 줄 넣었다
+- [ ] 내 도메인 폴더 안 표준 파일에만 작성했다 (임의 파일 없음)
+- [ ] 한 작업 = 한 PR (여러 기능 섞지 않음)
+- [ ] 하루 끝에 [하루 마무리]로 오늘 코드 설명을 받아 PR/README에 붙였다
+
+이 6개 다 체크되면 PR 올린다. 막히거나 애매하면 추측해서 올리지 말고 PM(B)에게 물어본다.
+```
+
+
+
+# W2 백엔드 팀 작업 분배 (화·수·목·금)
+
+> **이번 주 원칙**: 각자 자기 도메인을 **끝까지** 채운다(CRUD → 이벤트 → 상태전이 → 예외처리 → 자가검증). CRUD는 LLM으로 빨리 끝나므로, 남는 시간에 **W3 작업 일부를 당겨와** 24h를 채운다.
+> **핵심 제약**: 코드 생산은 빠르지만 **검증이 병목**이다. 그래서 팀원이 자기 코드를 **1차 자가검증**(LLM으로)하고, B는 금요일에 **재확인만** 한다. 팀원 24h의 절반은 코드, 절반은 자가검증 산출물이다.
+>
+> **가용 시간**: 화·수·목·금 각 6h (실작업 약 70%)
+> **시작 상태**: W1 P0 버그 3종은 **B가 화요일 전에 처리** → 팀원은 화요일부터 정상 토대에서 풀가동
+> **금요일**: 후반 2h는 팀 온보딩(W3 LangGraph 준비). 검증이 막히면 미검증분은 W3로 이월하고 속도 조절.
+
+---
+
+## 팀 매핑 (W2)
+
+| 코드 | 담당 도메인 | W2 추가/당겨오는 작업 |
+|---|---|---|
+| **B** | 인프라 + Supplier | (P0 픽스 + 이벤트 레퍼런스) |
+| **A** | Audit | **프론트엔드 적용**(PM 컨텍스트 받아 LLM으로, 하루이틀×2~3h 병행) |
+| **C** | Product | regulations 시드 + pgvector 인덱스 |
+| **D** | SupplyChain(완성됨) + Geo | **PostGIS 실제 쿼리** (ST_DWithin 신장 체크) |
+| **E** | Submission + Verification | **Verification 룰 1개**(FEOC) 실동작 |
+
+> **A = Audit 풀 + 프론트 병행**: Audit 도메인을 다른 팀원과 동일하게 끝까지 채우고, 프론트 수정은 PM이 준 컨텍스트를 LLM에 적용하는 수준(틈틈이 2~3h). 백엔드 연동이 아니라 화면단 작업이라 Audit 작업 사이에 끼워 진행.
+> **risk·dpp는 W3로**: E의 risk/dpp는 W2에 손대지 않는다. W3에서 LangGraph 조립과 함께 채운다(깡통 만들고 또 채우는 이중작업 회피).
+> **W3에 남기는 것**: LangGraph StateGraph 조립·HITL interrupt는 W2에 **당기지 않는다**. 5개 도메인이 한 흐름으로 엮여 통합 검증 부담이 커지므로 W3에서.
+
+---
+
+## 매일 공통
+
+### 팀원 LLM 사용 시 4종 첨부 (PROJECT_CORE 5-2절)
+1. PROJECT_CORE 5-2절(계약) 2. 작업 테이블 schema.sql 발췌 3. 호출할 인프라 시그니처 4. 관련 이벤트 dataclass
+
+### 하루 6h 구성 (권장)
+- 코드 생성(LLM): 2h
+- 자가검증 산출물: 3h (아래 4종)
+- 하루 마무리·README: 1h (오늘 작업 설명 정리 포함)
+
+### 자가검증 4종 (코드 짤 때마다, LLM 시켜서)
+1. **계약 위반 스캔** — LLM에 "5-2절 계약 4종(import `backend.`/시그니처/언더스코어/컬럼일치) 위반 찾아줘" → 결과를 PR에 캡처
+2. **schema 대조표** — LLM에 "이 ORM과 schema.sql 컬럼을 표로 대조" → 불일치 0 확인
+3. **curl 시나리오** — 자기 엔드포인트 호출 명령 + 예상 응답을 README에 작성
+4. **동작 흐름 한 줄** — "이 API → 이 이벤트 → 이 테이블 row" 한 줄로 README에
+
+> 자가검증 4종이 곧 PR 제출물. 이게 있어야 금요일 통합 검증이 "재확인"으로 가벼워진다. 없으면 머지 보류.
+
+### 하루 마무리 — 오늘 작업 요약 (전원, 5~10분)
+매일 끝에 그날 만든 코드를 **비전공자도 이해할 수준으로 설명**받아 PR/README에 남긴다. (06 가이드의 마무리 프롬프트 사용) 다음 날 이어서 작업할 때 맥락이 살아 있고, PR 설명도 이걸로 대체된다. 한 줄짜리 "기능 목록"이 아니라 "이게 무슨 일을 하는지"를 풀어서.
+
+### 세션이 길어지면 새 대화로 (중요)
+LLM 대화가 길어지면(코드 여러 번 주고받아 응답이 느려지거나, 앞서 정한 규칙을 어기기 시작하면) **새 대화를 시작**한다. 새 대화엔 06 가이드의 [공통 프롬프트] + [내 도메인 블록]을 다시 붙인다. 규칙은 대화 앞쪽에 있을수록 잘 지켜지므로, 작업 단위(엔드포인트 1개)마다 새로 여는 게 가장 안전하다.

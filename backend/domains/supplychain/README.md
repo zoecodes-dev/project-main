@@ -29,7 +29,11 @@
 | :--- | :--- | :--- |
 | `GeoRiskDetected` | 고위험 지역 판정 또는 좌표 불일치 발견 시 | Audit, Risk |
 
-## 7. 제약 사항
+### 7. 큐 적재 흐름 요약
+- 국가 불일치(`country_mismatch`) 등 리스크 감지 시 `publish("GeoRiskDetected", asdict(event))`를 통해 이벤트를 즉시 발행한다.
+- 발행과 동시에 `enqueue(RISK_QUEUE, "process_geo_risk_event", event_payload=payload)`를 실행하여, 후속 비동기 리스크 처리 파이프라인에 원자적으로 적재한다.
+
+## 8. 제약 사항
 - 도메인 외부(`audit`, `supplier` 등) 모델 직접 import 금지.
 - 모든 상태 변경 및 주요 쿼리 실행 시 `@trace_node`, `@trace_tool` 적용 필수.
 - PostGIS 공간 함수 사용 시 반드시 `SRID 4326`(WGS84) 기준 준수.

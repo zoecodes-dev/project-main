@@ -75,13 +75,28 @@ class SupplyChainService:
         db 인자는 @trace_node가 audit_trail 기록에 사용.
         """
         audit_results = await self.repository.check_geo_audit_risk_zone()
+        mismatch_results = await self.repository.check_coordinate_authenticity(db)
 
         detected_risks: List[Dict[str, Any]] = []
         for result in audit_results:
             if result.get("is_in_risk_zone"):
                 event = GeoRiskDetectedEvent(
+                    batch_id=None,
                     factory_id=result["factory_id"],
                     risk_type="xinjiang",
+                    supplier_id=result["supplier_id"],
+                    company_name=result["company_name"],
+                    coordinates=result["coordinates"],
+                )
+                await self._publish_geo_risk(event)
+                detected_risks.append(asdict(event))
+
+        for result in mismatch_results:
+            if not result.get("country_match"):
+                event = GeoRiskDetectedEvent(
+                    batch_id=None,
+                    factory_id=result["factory_id"],
+                    risk_type="country_mismatch",
                     supplier_id=result["supplier_id"],
                     company_name=result["company_name"],
                     coordinates=result["coordinates"],

@@ -174,12 +174,10 @@ class SupplyChainRepository:
     @trace_tool("xinjiang_proximity_check")
     async def check_geo_audit_risk_zone(
         self,
-        lon: float = 87.6271,
-        lat: float = 43.8256,
         radius_meters: int = 50000,  # 스펙 5-2: 50km 이내
     ) -> List[Dict[str, Any]]:
         """
-        협력사 공장/광산 좌표가 신장 위구르 기준점 반경 내(기본 50km)인지 검증.
+        협력사 공장/광산 좌표가 신장 위구르 자치구 경계(Polygon) 반경 내(기본 50km)인지 검증.
         ST_DWithin (geography 캐스팅으로 미터 단위) 사용.
         """
         query = text("""
@@ -189,14 +187,19 @@ class SupplyChainRepository:
                 ST_AsGeoJSON(sf.location) AS coordinates,
                 ST_DWithin(
                     sf.location::geography,
-                    ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
+                    ST_GeomFromText(:xinjiang_wkt, 4326)::geography,
                     :radius
-                ) AS is_in_risk_zone
+                ) AS is_in_risk_zone,
+                ST_Distance(
+                    sf.location::geography,
+                    ST_GeomFromText(:xinjiang_wkt, 4326)::geography
+                ) / 1000.0 AS distance_km
             FROM supplier_factories sf
             JOIN suppliers s ON sf.supplier_id = s.supplier_id
             WHERE sf.location IS NOT NULL;
         """)
         result = await self.session.execute(query, {
-            "lon": lon, "lat": lat, "radius": radius_meters,
+            "xinjiang_wkt": XINJIANG_REGION_WKT, 
+            "radius": radius_meters,
         })
         return [dict(row._mapping) for row in result]

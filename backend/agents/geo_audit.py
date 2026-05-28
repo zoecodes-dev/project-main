@@ -7,6 +7,7 @@ Geo Audit Agent. 공장·광산 좌표 진위성 검사 + 고위험 지역 판�
 from typing import Optional
 from uuid import UUID
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agents.state import BatchState
@@ -23,9 +24,34 @@ async def check_xinjiang_proximity(location_wkt: str, db: AsyncSession) -> dict:
     """
     ST_DWithin으로 신장 경계 내부 또는 50km 이내 여부 판정.
     반환: {"is_high_risk": bool, "distance_km": float, "region": "xinjiang" | None}
-    W1: 깡통. W3에서 PostGIS 실제 쿼리.
+    실제 PostGIS 공간 쿼리로 교체됨.
     """
-    return {"is_high_risk": False, "distance_km": None, "region": None}
+    query = text("""
+        SELECT 
+            ST_DWithin(
+                ST_GeomFromText(:loc_wkt, 4326)::geography,
+                ST_GeomFromText(:xj_wkt, 4326)::geography,
+                50000
+            ) AS is_high_risk,
+            ST_Distance(
+                ST_GeomFromText(:loc_wkt, 4326)::geography,
+                ST_GeomFromText(:xj_wkt, 4326)::geography
+            ) / 1000.0 AS distance_km
+    """)
+    result = await db.execute(query, {
+        "loc_wkt": location_wkt,
+        "xj_wkt": XINJIANG_REGION_WKT
+    })
+    row = result.first()
+    
+    is_high_risk = bool(row.is_high_risk) if row else False
+    distance_km = float(row.distance_km) if row and row.distance_km is not None else None
+
+    return {
+        "is_high_risk": is_high_risk,
+        "distance_km": distance_km,
+        "region": "xinjiang" if is_high_risk else None
+    }
 
 
 @trace_tool("eudr_deforestation_check")
