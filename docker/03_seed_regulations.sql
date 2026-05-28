@@ -1,15 +1,25 @@
 -- ============================================================
--- regulations 시드 데이터 — 11종 전체 적재
+-- regulations 시드 데이터 — 10종 전체 적재
 -- 위치: db/initdb.d/seed_regulations.sql
 --
--- DECISION_LOG 결정 #7 (라인 406~413) 기준:
+-- DECISION_LOG 결정 #7 기준:
 --   실동작 judge(7): UFLPA / IRA / EU_BATTERY / EU_BATTERY_ART7 /
 --                    EU_BATTERY_ART47 / EUDR / CSDDD
---   stub judge(4):   EUDR_FSC / CBAM / CONFLICT_MINERALS / CRMA
+--   stub judge(3):   CBAM / CONFLICT_MINERALS / CRMA
+--
+-- [설계 정정 — 도메인 전문가 피드백 반영]
+--   EUDR_FSC 삭제 이유:
+--     FSC는 강제 법률이 아니라 민간 인증서(산림 보증)임.
+--     EUDR 준수를 증명하기 위해 기업이 자발적으로 제출하는 서류이므로
+--     독립 규제 row로 적재하는 것은 도메인 현실과 불일치.
+--   대신 Compliance Agent(은지)의 judge_eudr() 함수 내부에서
+--     origin_certificates 목록에 'FSC 인증서' 포함 여부를
+--     하위 체크리스트 항목으로 확인하는 방식으로 구현할 것.
+--     (독립 judge_eudr_fsc() 함수 생성 금지)
 --
 -- stub judge row: regulations 테이블에 완전히 적재되나
 --   Compliance Agent REGULATION_JUDGES에서 판정은 'passed' 반환.
---   row 부재로 인한 크래시 방지 목적 (DECISION_LOG 라인 412).
+--   row 부재로 인한 크래시 방지 목적.
 --
 -- embedding_status: 전체 'pending' (임베딩은 운영 시 문서 적재 후 처리).
 -- embedding: NULL (시드 단계에서는 벡터 없음).
@@ -104,6 +114,8 @@ INSERT INTO regulations (
 ),
 
 -- 6. EUDR — EU 산림파괴방지규정
+--    [설계 정정] FSC 인증서 확인은 이 judge의 하위 체크리스트 항목으로 처리.
+--    origin_certificates에 'FSC' 포함 여부를 judge_eudr() 내부에서 확인.
 (
     uuid_generate_v4(),
     'EU Deforestation Regulation (EU) 2023/1115',
@@ -132,24 +144,10 @@ INSERT INTO regulations (
 ),
 
 -- ──────────────────────────────────────────────
--- stub judge 4종 (row 완전 적재, 판정은 통과 반환)
+-- stub judge 3종 (row 완전 적재, 판정은 통과 반환)
 -- ──────────────────────────────────────────────
 
--- 8. EUDR_FSC — EUDR FSC 인증 경로 (향후 확장)
-(
-    uuid_generate_v4(),
-    'EU Deforestation Regulation — FSC Certification Path',
-    'EUDR_FSC',
-    'EU',
-    'EUDR FSC 인증 경로. 국제산림관리협의회(FSC) 인증을 통한 EUDR 준수 경로. 현재 stub — 향후 FSC 인증 데이터 연동 시 실동작 전환.',
-    '2023/1115-FSC',
-    '2023-06-29',
-    NULL,
-    'pending',
-    NULL
-),
-
--- 9. CBAM — EU 탄소국경조정제도
+-- 8. CBAM — EU 탄소국경조정제도
 (
     uuid_generate_v4(),
     'Carbon Border Adjustment Mechanism (EU) 2023/956',
@@ -163,7 +161,7 @@ INSERT INTO regulations (
     NULL
 ),
 
--- 10. CONFLICT_MINERALS — EU 분쟁광물규정
+-- 9. CONFLICT_MINERALS — EU 분쟁광물규정
 (
     uuid_generate_v4(),
     'EU Conflict Minerals Regulation (EU) 2017/821',
@@ -177,7 +175,7 @@ INSERT INTO regulations (
     NULL
 ),
 
--- 11. CRMA — EU 핵심원자재법
+-- 10. CRMA — EU 핵심원자재법
 (
     uuid_generate_v4(),
     'Critical Raw Materials Act (EU) 2024/1252',
