@@ -17,6 +17,15 @@
 #      N차 전체 탐색은 재귀 CTE 사용 (이 파일은 단일 레벨 relationship만 제공).
 #   4. Provenance — 모든 상태 변경은 audit_trail 자동 기록 대상.
 #      (데코레이터 적용은 service/state_machine 레이어에서 수행)
+#
+# [DECISION_LOG 결정 #1 반영 — 2025-W2]
+#   Product / BOM 은 "생성"이 아니라 "외부 원천에서 가져오기(import)".
+#   - products, bom_versions 에 source_system / external_id / synced_at 컬럼 추가.
+#   - created_at / updated_at 의미 = "이 시스템에 동기화된 시각" (원천 생성 시각 아님).
+#   - 시연 환경에서는 source_system = 'SEED'.
+#   - 실제 환경에서는 repository.fetch_from_source() 내부 데이터 소스만 교체하면 됨.
+#   - ProductCreateRequest → ProductImportTrigger 로 의미 변경
+#     (외부에서 필드를 받아 생성하는 폼이 아니라, 동기화를 트리거하는 요청).
 # =============================================================================
 
 from __future__ import annotations
@@ -35,17 +44,12 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
-    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship  # Mapped 추가
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from sqlalchemy.types import TIMESTAMP
 
-# 인프라 레이어의 공유 Base 클래스를 import하여 사용합니다.
-# 이를 통해 Product 도메인의 모델들이 다른 도메인(Submission, Supplier 등)의
-# 모델들과 동일한 메타데이터 컨텍스트를 공유하게 되어,
-# 프로젝트 전체의 데이터 모델 일관성과 관계 설정의 안정성을 보장합니다.
 from backend.infrastructure.database import Base
 
 
@@ -81,6 +85,13 @@ class Product(Base):
 
     모든 공급망·DPP 흐름의 최상위 기준점.
     product_code UNIQUE — 중복 등록 방지.
+
+    [결정 #1] 이 시스템은 제품을 직접 "생성"하지 않는다.
+    원청 ERP/MES/PLM 이 원천. 이 시스템은 동기화된 복사본을 보유(read-mostly).
+      - source_system: 데이터 출처 식별. 시연='SEED', 실환경='ERP'|'MES'|'PLM'
+      - external_id:   원천 시스템의 PK. 원천 row와 1:1 추적에 사용.
+      - synced_at:     이 시스템에 마지막으로 동기화된 UTC 시각.
+                       created_at/updated_at 과 달리 "원천 데이터 최신성" 기준.
 
     [도메인 격리]
     manufacturer_id → suppliers.supplier_id
@@ -133,7 +144,7 @@ class Product(Base):
     # 제품 속성
     # ------------------------------------------------------------------
     type = Column(
-        String(50),   
+        String(50),
         nullable=True,
         comment="배터리 형태. 예: 각형 / 파우치형 / 원통형",
     )
@@ -148,22 +159,60 @@ class Product(Base):
     )
 
     # ------------------------------------------------------------------
+    # [결정 #1] 외부 원천 추적 컬럼 3종
+    # schema.sql 일괄수정 대상 — 컬럼 추가 후 migration 필요
+    # ------------------------------------------------------------------
+    source_system = Column(
+        String(50),
+        nullable=True,
+        comment=(
+            "[결정 #1] 데이터 출처 식별자. "
+            "허용값: 'SEED'(시연) / 'ERP' / 'MES' / 'PLM'. "
+            "NULL이면 출처 미확인 — repository.fetch_from_source()에서 반드시 세팅."
+        ),
+    )
+
+    external_id = Column(
+        String(100),
+        nullable=True,
+        comment=(
+            "[결정 #1] 원천 시스템의 원본 PK(문자열 변환). "
+            "원천 row와 1:1 추적용. UPSERT 시 ON CONFLICT(product_code) 사용."
+        ),
+    )
+
+    synced_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        comment=(
+            "[결정 #1] 이 시스템에 마지막으로 동기화된 UTC 시각. "
+            "fetch_from_source() 호출 시 datetime.now(timezone.utc) 로 갱신. "
+            "datetime.utcnow() 사용 금지(deprecated)."
+        ),
+    )
+
+    # ------------------------------------------------------------------
     # 타임스탬프
+    # [결정 #1] 의미 재정의:
+    #   created_at = 이 시스템에 처음 동기화된 시각 (원천 생성 시각 아님)
+    #   updated_at = 이 시스템에서 마지막으로 갱신된 시각
     # ------------------------------------------------------------------
     created_at = Column(
         TIMESTAMP(timezone=True),
         server_default=func.now(),
         nullable=False,
+        comment="[결정 #1] 이 시스템에 처음 동기화된 시각. 원천 생성 시각 아님.",
     )
     updated_at = Column(
         TIMESTAMP(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+        comment="[결정 #1] 이 시스템에서 마지막으로 갱신된 시각.",
     )
 
     # ------------------------------------------------------------------
-    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
+    # 도메인 내부 Relationships
     # ------------------------------------------------------------------
     bom_versions: Mapped[List["BomVersion"]] = relationship(
         "BomVersion",
@@ -173,7 +222,11 @@ class Product(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Product code={self.product_code!r} name={self.product_name!r}>"
+        return (
+            f"<Product code={self.product_code!r} "
+            f"source={self.source_system!r} "
+            f"synced_at={self.synced_at!r}>"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +238,10 @@ class BomVersion(Base):
     제품 BOM 버전 관리.
 
     같은 제품도 시점별로 다른 BOM을 가질 수 있음.
+
+    [결정 #1] BOM도 외부 원천(ERP/PLM)에서 가져오는 복사본.
+      - source_system / external_id / synced_at 컬럼 동일하게 추가.
+      - BOMImported 이벤트 발행은 service.py 에서 담당.
 
     [불변 규칙 — PROJECT_CORE.md 3-1]
     status ∈ {draft, active, deprecated}
@@ -241,9 +298,8 @@ class BomVersion(Base):
     )
 
     # ------------------------------------------------------------------
-    # 상태 — BomVersionStatus Enum 적용
-    # [핵심] nullable=False, default='draft'
-    #        직접 UPDATE 금지 — state_machine.py 경유 필수
+    # 상태
+    # [핵심] 직접 UPDATE 금지 — state_machine.py 경유 필수
     # ------------------------------------------------------------------
     status = Column(
         String(20),
@@ -258,7 +314,7 @@ class BomVersion(Base):
     )
 
     # ------------------------------------------------------------------
-    # 승인 정보 — 타 도메인 FK (User/Auth Domain), relationship 미선언
+    # 승인 정보 — 타 도메인 FK, relationship 미선언
     # ------------------------------------------------------------------
     approved_by = Column(
         UUID(as_uuid=True),
@@ -280,10 +336,42 @@ class BomVersion(Base):
         TIMESTAMP(timezone=True),
         server_default=func.now(),
         nullable=False,
+        comment="[결정 #1] 이 시스템에 처음 동기화된 시각. 원천 생성 시각 아님.",
     )
 
     # ------------------------------------------------------------------
-    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
+    # [결정 #1] 외부 원천 추적 컬럼 3종 (products와 동일 패턴)
+    # ------------------------------------------------------------------
+    source_system = Column(
+        String(50),
+        nullable=True,
+        comment=(
+            "[결정 #1] 데이터 출처 식별자. "
+            "허용값: 'SEED'(시연) / 'ERP' / 'PLM'. "
+            "fetch_from_source() 에서 반드시 세팅."
+        ),
+    )
+
+    external_id = Column(
+        String(100),
+        nullable=True,
+        comment=(
+            "[결정 #1] 원천 시스템의 원본 BOM PK(문자열). "
+            "원천 BOM row와 1:1 추적용."
+        ),
+    )
+
+    synced_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        comment=(
+            "[결정 #1] 이 시스템에 마지막으로 동기화된 UTC 시각. "
+            "fetch_from_source() 호출 시 datetime.now(timezone.utc) 로 갱신."
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # 도메인 내부 Relationships
     # ------------------------------------------------------------------
     product: Mapped["Product"] = relationship(
         "Product",
@@ -300,7 +388,9 @@ class BomVersion(Base):
     def __repr__(self) -> str:
         return (
             f"<BomVersion product_id={self.product_id!r} "
-            f"version={self.version_number!r} status={self.status!r}>"
+            f"version={self.version_number!r} "
+            f"status={self.status!r} "
+            f"source={self.source_system!r}>"
         )
 
 
@@ -327,15 +417,13 @@ class Part(Base):
     [FTA 필수 조건]
     hs_code 6자리 이상 필수. Service 레이어에서 6자리 미만 입력 시 422 반환.
 
-    [도메인 격리]
-    이 테이블에는 타 도메인 FK 없음. 모든 relationship 정상 선언.
+    [결정 #1 비적용]
+    parts는 결정 #1 일괄수정 대상(products/bom_versions/batches)에 포함되지 않음.
+    source_system 컬럼 추가하지 않음.
     """
 
     __tablename__ = "parts"
 
-    # ------------------------------------------------------------------
-    # PK
-    # ------------------------------------------------------------------
     part_id = Column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -343,9 +431,6 @@ class Part(Base):
         comment="부품 고유 식별자",
     )
 
-    # ------------------------------------------------------------------
-    # 식별·명칭
-    # ------------------------------------------------------------------
     part_code = Column(
         String(50),
         unique=True,
@@ -359,20 +444,12 @@ class Part(Base):
         comment="부품 표시명",
     )
 
-    # ------------------------------------------------------------------
-    # 5계층 트리 — 계층 레벨
-    # 1=Pack / 2=Module / 3=Cell / 4=전구체 / 5=광물
-    # ------------------------------------------------------------------
     tier_level = Column(
         Integer,
         nullable=True,
         comment="부품 계층 레벨. 1=Pack / 2=Module / 3=Cell / 4=전구체 / 5=광물",
     )
 
-    # ------------------------------------------------------------------
-    # 자기참조 FK — 5계층 트리의 핵심
-    # NULL이면 루트(Pack). 광물(tier_level=5)은 자식 없음.
-    # ------------------------------------------------------------------
     parent_part_id = Column(
         UUID(as_uuid=True),
         ForeignKey("parts.part_id"),
@@ -384,10 +461,6 @@ class Part(Base):
         ),
     )
 
-    # ------------------------------------------------------------------
-    # FTA 필수 — HS Code
-    # 6자리 미만 입력 시 Service 레이어에서 HTTP 422 반환
-    # ------------------------------------------------------------------
     hs_code = Column(
         String(15),
         nullable=True,
@@ -398,9 +471,6 @@ class Part(Base):
         ),
     )
 
-    # ------------------------------------------------------------------
-    # 소재·기능
-    # ------------------------------------------------------------------
     material_type = Column(
         String(100),
         nullable=True,
@@ -413,9 +483,6 @@ class Part(Base):
         comment="부품 기능 설명",
     )
 
-    # ------------------------------------------------------------------
-    # 단가 — RVC 부가가치기준 FTA 판정 계산 입력값
-    # ------------------------------------------------------------------
     unit_price = Column(
         Numeric(15, 4),
         nullable=True,
@@ -434,7 +501,7 @@ class Part(Base):
     specs = Column(
         JSONB,
         nullable=True,
-        comment="부품 규격(JSONB). 예: {\"용량\": \"100Ah\", \"전압\": \"3.7V\"}",
+        comment="부품 규격(JSONB).",
     )
 
     created_at = Column(
@@ -443,9 +510,7 @@ class Part(Base):
         nullable=False,
     )
 
-    # ------------------------------------------------------------------
-    # 자기참조 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
-    # ------------------------------------------------------------------
+    # 자기참조 Relationships
     children: Mapped[List["Part"]] = relationship(
         "Part",
         back_populates="parent",
@@ -458,13 +523,10 @@ class Part(Base):
         "Part",
         back_populates="children",
         foreign_keys=[parent_part_id],
-        remote_side="Part.part_id",  # 문자열로 지정 — 전방 참조 안전
+        remote_side="Part.part_id",
         lazy="select",
     )
 
-    # ------------------------------------------------------------------
-    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
-    # ------------------------------------------------------------------
     bom_items: Mapped[List["BomItem"]] = relationship(
         "BomItem",
         back_populates="part",
@@ -500,22 +562,11 @@ class Part(Base):
 class BomItem(Base):
     """
     BOM 버전 내 부품 구성 항목.
-
     부품별 소요량·원산지·직접재료비 기록.
-
-    [FTA 관련]
-    - origin_country: FTA 원산지 기준 판정 입력값 (ISO 3166-1 alpha-2).
-    - direct_material_cost: RVC 계산 시 역내 부가가치 산정 기준.
-
-    [도메인 격리]
-    타 도메인 FK 없음. 모든 relationship 정상 선언.
     """
 
     __tablename__ = "bom_items"
 
-    # ------------------------------------------------------------------
-    # PK
-    # ------------------------------------------------------------------
     bom_item_id = Column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -523,9 +574,6 @@ class BomItem(Base):
         comment="BOM 항목 고유 식별자",
     )
 
-    # ------------------------------------------------------------------
-    # 도메인 내부 FK
-    # ------------------------------------------------------------------
     bom_version_id = Column(
         UUID(as_uuid=True),
         ForeignKey("bom_versions.bom_version_id", ondelete="CASCADE"),
@@ -540,9 +588,6 @@ class BomItem(Base):
         comment="해당 부품 FK",
     )
 
-    # ------------------------------------------------------------------
-    # 소요량
-    # ------------------------------------------------------------------
     required_quantity = Column(
         Numeric(15, 4),
         nullable=True,
@@ -561,35 +606,18 @@ class BomItem(Base):
         comment="전체 BOM 대비 이 부품의 구성 비율(%)",
     )
 
-    # ------------------------------------------------------------------
-    # 비용 — RVC 계산 입력값
-    # ------------------------------------------------------------------
     direct_material_cost = Column(
         Numeric(15, 4),
         nullable=True,
-        comment=(
-            "직접재료비. "
-            "RVC 계산 시 역내 부가가치 산정 기준. "
-            "NULL이면 RVC 계산 불가."
-        ),
+        comment="직접재료비. RVC 계산 시 역내 부가가치 산정 기준.",
     )
 
-    # ------------------------------------------------------------------
-    # 원산지 — FTA 판정 입력값
-    # ISO 3166-1 alpha-2
-    # ------------------------------------------------------------------
     origin_country = Column(
         String(2),
         nullable=True,
-        comment=(
-            "원산지 국가 코드 (ISO 3166-1 alpha-2). "
-            "FTA 원산지 기준 판정 입력값."
-        ),
+        comment="원산지 국가 코드 (ISO 3166-1 alpha-2). FTA 원산지 기준 판정 입력값.",
     )
 
-    # ------------------------------------------------------------------
-    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
-    # ------------------------------------------------------------------
     bom_version: Mapped["BomVersion"] = relationship(
         "BomVersion",
         back_populates="bom_items",
@@ -615,9 +643,6 @@ class PartCodeMapping(Base):
     """
     원청 코드 ↔ 협력사 코드 매핑 브릿지 테이블.
 
-    협력사가 내부적으로 다른 부품 코드를 사용해도 동일 부품으로 추적 가능.
-    supply_chain_map의 po_number와 연계해 실물 거래 추적.
-
     [도메인 격리]
     supplier_id → suppliers.supplier_id
       ForeignKey 문자열 참조만 선언. relationship 없음.
@@ -625,9 +650,6 @@ class PartCodeMapping(Base):
 
     __tablename__ = "part_code_mapping"
 
-    # ------------------------------------------------------------------
-    # PK
-    # ------------------------------------------------------------------
     mapping_id = Column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -635,9 +657,6 @@ class PartCodeMapping(Base):
         comment="매핑 고유 식별자",
     )
 
-    # ------------------------------------------------------------------
-    # 도메인 내부 FK
-    # ------------------------------------------------------------------
     part_id = Column(
         UUID(as_uuid=True),
         ForeignKey("parts.part_id", ondelete="CASCADE"),
@@ -645,9 +664,6 @@ class PartCodeMapping(Base):
         comment="원청 기준 부품 FK",
     )
 
-    # ------------------------------------------------------------------
-    # 타 도메인 FK (Supplier Domain) — relationship 미선언
-    # ------------------------------------------------------------------
     supplier_id = Column(
         UUID(as_uuid=True),
         ForeignKey("suppliers.supplier_id"),
@@ -658,9 +674,6 @@ class PartCodeMapping(Base):
         ),
     )
 
-    # ------------------------------------------------------------------
-    # 코드 매핑
-    # ------------------------------------------------------------------
     supplier_part_code = Column(
         String(50),
         nullable=True,
@@ -673,9 +686,6 @@ class PartCodeMapping(Base):
         comment="원청 기준 부품 코드. 예: 'CAM-NCM811'",
     )
 
-    # ------------------------------------------------------------------
-    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
-    # ------------------------------------------------------------------
     part: Mapped["Part"] = relationship(
         "Part",
         back_populates="part_code_mappings",
@@ -684,8 +694,7 @@ class PartCodeMapping(Base):
     def __repr__(self) -> str:
         return (
             f"<PartCodeMapping part_id={self.part_id!r} "
-            f"supplier_part_code={self.supplier_part_code!r} "
-            f"original_part_code={self.original_part_code!r}>"
+            f"supplier_part_code={self.supplier_part_code!r}>"
         )
 
 
@@ -697,26 +706,16 @@ class ManufacturingProcess(Base):
     """
     부품별 제조 공정도.
 
-    is_outsourced=True이면 outsourced_to_supplier_id 필수.
-    CSDDD·LKSG 실사 시 공정 투명성 증빙에 사용.
-
     [도메인 격리]
     outsourced_to_supplier_id → suppliers.supplier_id
-      is_outsourced=True일 때 필수이나,
       ForeignKey 문자열 참조만 선언. relationship 없음.
-      아웃소싱 협력사 정보가 필요한 경우 Service 계층 JOIN 쿼리로 처리.
 
     [유효성 검사]
-    is_outsourced=True이고 outsourced_to_supplier_id=NULL인 경우
-    Service 레이어에서 HTTP 422 반환.
-    이 모델은 컬럼 정의만 담당.
+    is_outsourced=True + outsourced_to_supplier_id=NULL → Service 레이어에서 HTTP 422.
     """
 
     __tablename__ = "manufacturing_process"
 
-    # ------------------------------------------------------------------
-    # PK
-    # ------------------------------------------------------------------
     process_id = Column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -724,9 +723,6 @@ class ManufacturingProcess(Base):
         comment="공정 고유 식별자",
     )
 
-    # ------------------------------------------------------------------
-    # 도메인 내부 FK
-    # ------------------------------------------------------------------
     part_id = Column(
         UUID(as_uuid=True),
         ForeignKey("parts.part_id", ondelete="CASCADE"),
@@ -734,9 +730,6 @@ class ManufacturingProcess(Base):
         comment="해당 부품 FK",
     )
 
-    # ------------------------------------------------------------------
-    # 공정 정보
-    # ------------------------------------------------------------------
     sequence_no = Column(
         Integer,
         nullable=True,
@@ -755,11 +748,6 @@ class ManufacturingProcess(Base):
         comment="공정 상세 설명",
     )
 
-    # ------------------------------------------------------------------
-    # 아웃소싱 여부
-    # is_outsourced=True → outsourced_to_supplier_id 필수
-    # (Service 레이어에서 검증)
-    # ------------------------------------------------------------------
     is_outsourced = Column(
         Boolean,
         nullable=False,
@@ -768,33 +756,22 @@ class ManufacturingProcess(Base):
         comment="아웃소싱 공정 여부. True이면 outsourced_to_supplier_id 필수.",
     )
 
-    # ------------------------------------------------------------------
-    # 타 도메인 FK (Supplier Domain) — relationship 미선언
-    # ------------------------------------------------------------------
     outsourced_to_supplier_id = Column(
         UUID(as_uuid=True),
         ForeignKey("suppliers.supplier_id"),
         nullable=True,
         comment=(
             "아웃소싱 대상 협력사 FK → suppliers.supplier_id. "
-            "is_outsourced=True일 때 필수. "
             "도메인 격리 원칙: 문자열 FK만 선언, relationship 없음."
         ),
     )
 
-    # ------------------------------------------------------------------
-    # 공정도 이미지
-    # DPP 발행 시 첨부 및 규제 당국 제출용
-    # ------------------------------------------------------------------
     process_image_url = Column(
         String(500),
         nullable=True,
-        comment="제조 공정도 이미지 URL. DPP 발행 시 첨부 및 규제 당국 제출용.",
+        comment="제조 공정도 이미지 URL.",
     )
 
-    # ------------------------------------------------------------------
-    # 도메인 내부 Relationships — Mapped[] 적용 (SQLAlchemy 2.0)
-    # ------------------------------------------------------------------
     part: Mapped["Part"] = relationship(
         "Part",
         back_populates="manufacturing_processes",
@@ -804,7 +781,6 @@ class ManufacturingProcess(Base):
         return (
             f"<ManufacturingProcess part_id={self.part_id!r} "
             f"seq={self.sequence_no!r} "
-            f"name={self.process_name!r} "
             f"outsourced={self.is_outsourced!r}>"
         )
 
@@ -813,27 +789,35 @@ class ManufacturingProcess(Base):
 # [2] Pydantic 입출력 스키마(DTO) 영역
 # ============================================================
 
-class ProductCreateRequest(BaseModel):
-    """제품 등록 요청 바디. product_code UNIQUE — 중복 시 409."""
-    product_code: str
-    product_name: Optional[str] = None
-    manufacturer_id: Optional[uuid.UUID] = None
-    type: Optional[str] = None
-    specs: Optional[Dict[str, Any]] = None
+class ProductImportTrigger(BaseModel):
+    """
+    [결정 #1] 제품 동기화 트리거 요청 바디.
+
+    이전 이름: ProductCreateRequest
+    변경 이유: 이 시스템은 제품을 직접 생성하지 않는다.
+               외부 원천(ERP/MES)에서 동기화하는 트리거이며,
+               시연 환경에서는 시드 데이터가 원천.
+
+    source_system: 동기화할 원천 시스템 지정.
+                   미입력 시 'SEED' 사용(시연 기본값).
+    """
+    source_system: str = "SEED"
 
 
 class ProductBrief(BaseModel):
     """
     목록·단건 응답용 직렬화 스키마.
-    ORM 객체를 그대로 반환하면 relationship lazy load에서 직렬화 에러가
-    날 수 있으므로, 명시적 스키마로 변환해 반환한다(직렬화 안전).
-    from_attributes=True 로 ORM 인스턴스에서 바로 만든다.
+
+    [결정 #1] source_system, synced_at 추가.
+    프론트엔드에서 "언제 동기화된 데이터인지" 표시용.
     """
     product_id: uuid.UUID
     product_code: str
     product_name: Optional[str] = None
     type: Optional[str] = None
     manufacturer_id: Optional[uuid.UUID] = None
+    source_system: Optional[str] = None   # 결정 #1 추가
+    synced_at: Optional[str] = None       # 결정 #1 추가 (ISO 8601 문자열로 직렬화)
 
     model_config = {"from_attributes": True}
 
@@ -841,12 +825,16 @@ class ProductBrief(BaseModel):
 class BomTreeResponse(BaseModel):
     """
     BOM 트리 응답 스키마.
+
     active BOM 버전이 없으면 service에서 404 반환.
+    only_confirmed=True(기본값)이면 link_status='confirmed' 노드만 포함.
+    only_confirmed=False이면 pending 포함 전체 트리.
     """
     product_id: uuid.UUID
     product_code: str
     bom_version: str
     bom_status: str
+    only_confirmed: bool   # 결정 #2 반영: 응답에 필터 조건 명시
     tree: Dict[str, Any]
 
     model_config = {"from_attributes": False}
@@ -874,3 +862,11 @@ BOM_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
     }),
     BomVersionStatus.DEPRECATED.value: frozenset(),  # 터미널 상태
 }
+
+# [결정 #1] 유효한 source_system 허용값
+VALID_SOURCE_SYSTEMS: frozenset[str] = frozenset({
+    "SEED",   # 시연 환경 시드 데이터
+    "ERP",    # 원청 ERP 시스템
+    "MES",    # 원청 MES 시스템
+    "PLM",    # 원청 PLM 시스템
+})

@@ -1,16 +1,18 @@
 # Product Domain — 설계 명세서
 
 > **담당**: 팀원 C (Product Domain)
-> **최종 수정**: 2026-05-27 (W2 화·수·목 작업 반영)
-> **참조**: `PROJECT_CORE.md` 4-2절 / `schema.sql` 영역 7
+> **최종 수정**: 2026-05-28 (W2 결정 #1, #2 반영)
+> **참조**: `PROJECT_CORE.md` 4-2절 / `schema.sql` 영역 7 / `DECISION_LOG.md` 결정 #1, #2
 
 ---
 
 ## 1. 도메인 책임 범위
 
-Product Domain은 배터리 제품의 등록·BOM 버전 관리·5계층 부품 트리를 담당한다.
+Product Domain은 배터리 제품의 **외부 원천 동기화·BOM 버전 관리·5계층 부품 트리**를 담당한다.
 
-모든 공급망 관계(`supply_chain_map`)와 DPP 발행(`dpp_records`)은 이 도메인에서 관리하는 `product_id` / `bom_version_id`를 기준으로 연결된다. 즉, **Product Domain은 시스템 전체 데이터 흐름의 출발점**이다.
+모든 공급망 관계(`supply_chain_map`)와 DPP 발행(`dpp_records`)은 이 도메인에서 관리하는 `product_id` / `bom_version_id`를 기준으로 연결된다. **Product Domain은 시스템 전체 데이터 흐름의 출발점**이다.
+
+> **[결정 #1]** 이 시스템은 제품을 직접 생성하지 않는다. 원청사의 ERP/MES/PLM이 원천이며, 이 시스템은 동기화된 복사본을 보유한다(read-mostly). `POST /products`는 등록 폼이 아니라 동기화 트리거다.
 
 ### 담당 테이블 (schema.sql 영역 7)
 
@@ -62,8 +64,8 @@ tier_level=1  Pack         (배터리 팩 전체. 루트 노드. parent_part_id 
 
 - `parent_part_id = NULL`인 노드는 반드시 `tier_level = 1`(Pack)이어야 한다.
 - 말단 노드(`tier_level = 5`, 광물)는 자식 `parts` row가 존재해서는 안 된다.
-- **`hs_code`는 6자리 이상 필수.** 미달 시 `POST /parts` API에서 `422` 반환. FTA 세번변경기준(CTC) 판정의 전제 조건이다.
-- `unit_price`는 RVC(Regional Value Content) 부가가치기준 FTA 판정 계산에 사용된다. 광물 계층부터 누적 원가 산정.
+- **`hs_code`는 6자리 이상 필수.** FTA 세번변경기준(CTC) 판정의 전제 조건.
+- `unit_price`는 RVC(Regional Value Content) 부가가치기준 FTA 판정 계산에 사용된다.
 
 ---
 
@@ -73,113 +75,102 @@ tier_level=1  Pack         (배터리 팩 전체. 루트 노드. parent_part_id 
 
 ```sql
 product_id      UUID PK
-product_code    VARCHAR(50) UNIQUE NOT NULL   -- 예: 'BAT-NCM811-100Ah'
+product_code    VARCHAR(50) UNIQUE NOT NULL
 product_name    VARCHAR(255)
 manufacturer_id UUID FK → suppliers(supplier_id)
-type            VARCHAR(50)                  -- 각형 / 파우치형 / 원통형
-specs           JSONB                        -- {"무게":"650kg","용량":"100Ah","전압":"3.7V"}
-created_at      TIMESTAMPTZ
+type            VARCHAR(50)
+specs           JSONB
+created_at      TIMESTAMPTZ    -- 이 시스템에 처음 동기화된 시각 (원천 생성 시각 아님)
 updated_at      TIMESTAMPTZ
+-- [결정 #1] 아래 3개 컬럼 추가 예정 (B schema migration 대기)
+source_system   VARCHAR(50)    -- 'SEED' / 'ERP' / 'MES' / 'PLM'
+external_id     VARCHAR(100)   -- 원천 시스템 PK
+synced_at       TIMESTAMPTZ    -- 마지막 동기화 시각
 ```
 
 **비즈니스 규칙**
-- `product_code` 중복 시 `409 Conflict` 반환.
-- `manufacturer_id`는 `supplier_type = 'manufacturer'`인 협력사만 허용. (애플리케이션 레벨 검증)
+- `product_code` 중복 시 UPSERT(동기화 정보 갱신). 직접 INSERT 경로에서는 `409 Conflict`.
+- `source_system` 허용값 외 입력 시 `400 Bad Request`.
 
 ### 3-2. `bom_versions`
 
 ```sql
 bom_version_id UUID PK
 product_id     UUID FK → products(product_id) ON DELETE CASCADE
-version_number VARCHAR(20) NOT NULL           -- 예: 'v1.0', 'v2.1'
+version_number VARCHAR(20) NOT NULL
 effective_from DATE
 effective_to   DATE
 status         VARCHAR(20) DEFAULT 'draft'   -- draft / active / deprecated
 approved_by    UUID FK → users(user_id)
 approved_at    TIMESTAMPTZ
 created_at     TIMESTAMPTZ
+-- [결정 #1] 아래 3개 컬럼 추가 예정 (B schema migration 대기)
+source_system  VARCHAR(50)
+external_id    VARCHAR(100)
+synced_at      TIMESTAMPTZ
 ```
 
 **비즈니스 규칙**
 - 한 `product_id`에 `status = 'active'`인 버전은 **동시에 1개만** 존재 가능.
 - `active` 전이 시 기존 `active` 버전은 자동으로 `deprecated`로 전이.
-- 상태 전이는 반드시 `state_machine.py`의 `transition_bom_status()` 함수를 통해서만. 직접 UPDATE 금지.
+- 상태 전이는 반드시 `state_machine.py` 경유. 직접 UPDATE 금지.
 
 ### 3-3. `parts`
 
 ```sql
 part_id        UUID PK
-part_code      VARCHAR(50) UNIQUE NOT NULL   -- 원청 기준 코드. 예: 'PACK-NCM811-100Ah'
+part_code      VARCHAR(50) UNIQUE NOT NULL
 part_name      VARCHAR(255)
 tier_level     INT                           -- 1=Pack / 2=Module / 3=Cell / 4=전구체 / 5=광물
 parent_part_id UUID FK → parts(part_id)     -- 자기참조. Pack 루트는 NULL.
 hs_code        VARCHAR(15)                  -- 6자리 이상 필수
 material_type  VARCHAR(100)
 function_purpose TEXT
-unit_price     NUMERIC(15,4)               -- RVC 계산용 단가
+unit_price     NUMERIC(15,4)
 purchase_unit  VARCHAR(20)
 specs          JSONB
 created_at     TIMESTAMPTZ
 ```
 
 **비즈니스 규칙**
-- `hs_code` 6자리 미만 입력 시 `422 Unprocessable Entity` 반환. FTA 판정 전제 조건.
-- `parent_part_id = NULL`은 `tier_level = 1`(Pack)만 허용.
-- 5계층 트리 조회는 재귀 CTE 사용. ORM 직접 조회 금지.
-
-**인덱스** (schema.sql 정의)
-```sql
-CREATE INDEX idx_parts_parent  ON parts(parent_part_id);  -- 재귀 CTE 성능
-CREATE INDEX idx_parts_hs_code ON parts(hs_code);         -- FTA CTC 판정 조회
-```
+- `hs_code` 6자리 미만 → `422`. W3 parts ingest 함수 생성 시점에 검증 추가 예정.
+- 5계층 트리 조회는 재귀 CTE 사용. ORM 직접 재귀 순회 금지.
 
 ### 3-4. `bom_items`
 
 ```sql
 bom_item_id            UUID PK
-bom_version_id         UUID FK → bom_versions(bom_version_id) ON DELETE CASCADE
-part_id                UUID FK → parts(part_id)
+bom_version_id         UUID FK → bom_versions ON DELETE CASCADE
+part_id                UUID FK → parts
 required_quantity      NUMERIC(15,4)
 required_quantity_unit VARCHAR(20)
 percentage             NUMERIC(5,2)
-direct_material_cost   NUMERIC(15,4)   -- RVC 역내 부가가치 산정 기준
-origin_country         VARCHAR(2)      -- ISO 3166-1 alpha-2. FTA 원산지 판정 입력값.
+direct_material_cost   NUMERIC(15,4)
+origin_country         VARCHAR(2)           -- ISO 3166-1 alpha-2
 ```
-
-**비즈니스 규칙**
-- `origin_country`는 `hs_code`가 존재하는 부품에만 표시. `hs_code` 미기재 부품은 `origin_country = NULL`로 반환.
-- `direct_material_cost`는 Compliance Domain의 RVC 계산 시 직접 참조된다.
 
 ### 3-5. `part_code_mapping`
 
 ```sql
 mapping_id          UUID PK
-part_id             UUID FK → parts(part_id) ON DELETE CASCADE
-supplier_id         UUID FK → suppliers(supplier_id)
-supplier_part_code  VARCHAR(50)   -- 협력사 내부 코드. 예: 'POS-CAM-NCM-811-A'
-original_part_code  VARCHAR(50)   -- 원청 기준 코드. 예: 'CAM-NCM811'
+part_id             UUID FK → parts ON DELETE CASCADE
+supplier_id         UUID FK → suppliers
+supplier_part_code  VARCHAR(50)
+original_part_code  VARCHAR(50)
 ```
-
-**비즈니스 규칙**
-- 협력사가 자체 부품 코드를 사용하더라도 `part_id`로 동일 부품 추적 가능.
-- Submission Domain이 협력사 제출 데이터를 수신할 때 이 테이블로 코드 역변환.
 
 ### 3-6. `manufacturing_process`
 
 ```sql
 process_id                UUID PK
-part_id                   UUID FK → parts(part_id) ON DELETE CASCADE
-sequence_no               INT                -- 공정 순서
+part_id                   UUID FK → parts ON DELETE CASCADE
+sequence_no               INT
 process_name              VARCHAR(255)
 process_description       TEXT
 is_outsourced             BOOLEAN DEFAULT FALSE
-outsourced_to_supplier_id UUID FK → suppliers(supplier_id)   -- is_outsourced=TRUE 시 필수
-process_image_url         VARCHAR(500)       -- DPP 발행 시 첨부
+outsourced_to_supplier_id UUID FK → suppliers   -- is_outsourced=TRUE 시 필수
+process_image_url         VARCHAR(500)
 ```
-
-**비즈니스 규칙**
-- `is_outsourced = TRUE`이면 `outsourced_to_supplier_id`가 반드시 존재해야 한다.
-- CSDDD·LKSG 실사 시 `sequence_no` 순서로 공정 투명성 증빙 자료 제공.
 
 ---
 
@@ -187,159 +178,78 @@ process_image_url         VARCHAR(500)       -- DPP 발행 시 첨부
 
 ```
 draft ──────────────→ active ──────────────→ deprecated
- │                      │                        │
- │   transition_bom_     │  transition_bom_       │
- │   status("active")    │  status("deprecated")  │
- │                       │                        │
- └── ValueError          └── 기존 active 버전     └── 되돌릴 수 없음
-     (잘못된 전이 시)         자동 deprecated 전이       (빈 전이 목록)
+                         │
+                         └── 기존 active 버전 자동 deprecated 전이
+                             (PROJECT_CORE.md 3-1 불변 규칙)
 ```
 
 ### 허용 전이 매트릭스
 
 | 현재 상태 | 허용 전이 | 금지 전이 |
 |---|---|---|
-| `draft` | `active` | `deprecated` |
+| `draft` | `active`, `deprecated` | — |
 | `active` | `deprecated` | `draft` |
-| `deprecated` | (없음) | 모든 전이 |
+| `deprecated` | (없음, 터미널) | 모든 전이 |
 
 ### 구현 위치
 
 ```
 backend/domains/product/state_machine.py
-  └── transition_bom_status(bom_version_id, new_status, approved_by, db)
+  ├── activate_bom_version(db, bom_version_id)   → @trace_node
+  └── deprecate_bom_version(db, bom_version_id)  → @trace_node
 ```
 
-- 잘못된 전이 시도 시 `ValueError` 발생.
-- 성공 시 `audit_trail`에 자동 기록. (`@trace_node` 데코레이터 필수)
-- `draft → active` 전이 시 동일 `product_id`의 기존 `active` 버전을 `deprecated`로 전이하는 로직을 함께 처리.
+- 허용되지 않는 전이 → `422 Unprocessable Entity`.
+- `draft → active` 전이 시 동일 `product_id`의 기존 `active` 버전을 먼저 `deprecated`로 전이.
+- 커밋은 `service.py`에서 담당. `state_machine.py`는 `flush()`까지만.
 
 ---
 
 ## 5. 5계층 부품 트리 조회 — 재귀 CTE
 
-`GET /products/{id}/bom-tree` 응답의 핵심 쿼리.
-ORM 우회, `SQLAlchemy text()` 사용.
+`GET /products/{id}/bom` 응답의 핵심 쿼리. ORM 우회, `SQLAlchemy text()` 사용.
+`depth < 5` 조건으로 순환 참조 방어.
 
 ```sql
--- domains/product/service.py — PARTS_TREE_QUERY
-WITH RECURSIVE part_tree AS (
-    -- 앵커: 최상위 Pack (parent_part_id IS NULL, active BOM)
-    SELECT
-        p.part_id,
-        p.part_name,
-        p.part_code,
-        p.tier_level,
-        p.parent_part_id,
-        p.hs_code,
-        p.unit_price,
-        bi.origin_country,
-        bi.direct_material_cost,
-        0 AS depth
+WITH RECURSIVE bom_tree AS (
+    SELECT p.part_id, p.part_code, ..., 0 AS depth
     FROM parts p
-    JOIN bom_items bi  ON bi.part_id = p.part_id
-    JOIN bom_versions bv ON bv.bom_version_id = bi.bom_version_id
-    WHERE bv.product_id = :product_id
-      AND bv.status = 'active'
-      AND p.parent_part_id IS NULL     -- Pack 루트부터 시작
+    JOIN bom_items bi ON bi.part_id = p.part_id
+                     AND bi.bom_version_id = :bom_version_id
+    WHERE p.parent_part_id IS NULL          -- 루트(Pack)부터
 
     UNION ALL
 
-    -- 재귀: 자식 부품 탐색
-    SELECT
-        p.part_id,
-        p.part_name,
-        p.part_code,
-        p.tier_level,
-        p.parent_part_id,
-        p.hs_code,
-        p.unit_price,
-        bi.origin_country,
-        bi.direct_material_cost,
-        pt.depth + 1
+    SELECT p.part_id, p.part_code, ..., bt.depth + 1
     FROM parts p
-    JOIN bom_items bi  ON bi.part_id = p.part_id
-    JOIN bom_versions bv ON bv.bom_version_id = bi.bom_version_id
-    JOIN part_tree pt  ON p.parent_part_id = pt.part_id
-    WHERE bv.product_id = :product_id
+    JOIN bom_items bi ON bi.part_id = p.part_id
+                     AND bi.bom_version_id = :bom_version_id
+    JOIN bom_tree bt  ON p.parent_part_id = bt.part_id
+    WHERE bt.depth < 5                      -- 5계층 상한
 )
-SELECT * FROM part_tree ORDER BY depth, tier_level;
+SELECT * FROM bom_tree ORDER BY depth, tier_level, part_code;
 ```
 
-### 응답 JSON 구조 (중첩 트리)
+### `only_confirmed` 파라미터 (결정 #2)
 
-```json
-{
-  "product_id": "...",
-  "product_code": "BAT-NCM811-100Ah",
-  "bom_version": "v1.0",
-  "parts_tree": [
-    {
-      "part_id": "...",
-      "part_code": "PACK-NCM811-100Ah",
-      "part_name": "NCM811 배터리 팩",
-      "tier_level": 1,
-      "hs_code": "850760",
-      "unit_price": 850000.0,
-      "origin_country": "KR",
-      "depth": 0,
-      "children": [
-        {
-          "part_id": "...",
-          "part_code": "MOD-NCM811-16S",
-          "part_name": "NCM811 모듈",
-          "tier_level": 2,
-          "hs_code": "850760",
-          "unit_price": 45000.0,
-          "origin_country": "KR",
-          "depth": 1,
-          "children": [
-            {
-              "tier_level": 3,
-              "part_name": "NCM811 셀",
-              "hs_code": "850760",
-              "origin_country": "KR",
-              "children": [
-                {
-                  "tier_level": 4,
-                  "part_name": "NCM811 전구체",
-                  "hs_code": "282739",
-                  "origin_country": "CN",
-                  "children": [
-                    {
-                      "tier_level": 5,
-                      "part_name": "수산화리튬",
-                      "hs_code": "282520",
-                      "origin_country": null,
-                      "children": []
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
+`GET /products/{id}/bom?only_confirmed=true` (기본값)
+- `true` → `supply_chain_map.link_status = 'confirmed'` 노드만 포함 (운영 화면용)
+- `false` → `pending` 포함 전체 트리 (공급망 맵 전체 뷰용)
 
-**`origin_country` 표시 규칙**: `hs_code`가 없는 부품은 `origin_country = null`로 반환. FTA 판정 대상에서 제외됨을 의미한다.
+> ⚠️ `link_status` 필터는 B의 schema migration 완료 후 `repository.py` `TODO` 주석 해제로 활성화.
 
 ---
 
 ## 6. API 엔드포인트 목록
 
-| Method | Path | 설명 | 주요 검증 |
-|---|---|---|---|
-| `POST` | `/products` | 제품 등록 | `product_code` 중복 → `409` |
-| `GET` | `/products/{id}` | 제품 상세 조회 | — |
-| `GET` | `/products/{id}/bom-tree` | 5계층 부품 트리 조회 | active BOM 없으면 `404` |
-| `POST` | `/products/{id}/bom-versions` | BOM 버전 생성 | `version_number` 중복 → `409` |
-| `PATCH` | `/products/{id}/bom-versions/{vid}/status` | BOM 상태 전이 | 허용 전이 아니면 `422` |
-| `POST` | `/parts` | 부품 등록 | `hs_code` 6자리 미만 → `422` |
-| `GET` | `/parts/{id}/manufacturing-process` | 제조 공정도 조회 | — |
+| Method | Path | 설명 | 응답 | 주요 예외 |
+|---|---|---|---|---|
+| `POST` | `/products` | 외부 원천 동기화 트리거 (결정 #1) | `202` | `source_system` 허용값 외 → `400` |
+| `GET` | `/products` | 제품 목록 (synced_at 내림차순) | `200` | — |
+| `GET` | `/products/{id}` | 제품 단건 조회 | `200` | 없는 ID → `404` |
+| `GET` | `/products/{id}/bom` | 5계층 BOM 트리 (`only_confirmed` 파라미터) | `200` | 제품 없음 → `404` / active BOM 없음 → `404` |
+| `POST` | `/products/bom-versions/{id}/activate` | BOM 버전 활성화 | `200` | 없는 ID → `404` / 허용 전이 외 → `422` |
+| `POST` | `/products/bom-versions/{id}/deprecate` | BOM 버전 deprecated 전이 | `200` | 없는 ID → `404` / 허용 전이 외 → `422` |
 
 ---
 
@@ -348,36 +258,28 @@ SELECT * FROM part_tree ORDER BY depth, tier_level;
 Product Domain은 이벤트를 **발행만** 한다. 다른 도메인을 직접 import하지 않는다.
 
 ```
-[Product Domain 발행 이벤트]
-  ProductCreated          → SupplyChain Domain 수신 (공급망 맵 초기화 트리거)
-  BomVersionActivated     → SupplyChain Domain 수신 (BOM 기준 공급망 재매핑)
-  BomVersionDeprecated    → Audit Domain 수신 (이력 기록)
-  PartCreated             → (현재 수신자 없음. 확장 시 추가)
+[발행 이벤트 — 결정 #1]
+  BOMImported      → SupplyChain Domain (BOM 기반 공급망 구성 트리거)
+  LotImported      → DPP Domain (Readiness 트리거) — W3에서 lot_id 채움
+  ProductImported  → SupplyChain Domain (공급망 맵 초기화 트리거)
+                     Compliance Domain (규제 검증 시작 트리거)
 
-[Product Domain 수신 이벤트]
+[수신 이벤트]
   없음. Product Domain은 이벤트 수신자가 아니다.
-  원청사 Admin이 직접 API를 호출하여 제품·BOM·부품을 등록한다.
 ```
-
-### 타 도메인이 Product Domain 데이터를 참조하는 방식
-
-| 도메인 | 참조 방법 | 참조 대상 |
-|---|---|---|
-| SupplyChain | `bom_version_id` FK 직접 참조 (같은 DB) | `supply_chain_map.bom_version_id` |
-| Compliance | `product_id` 기준 BOM 트리 CTE 조회 | RVC 계산용 `unit_price`, `origin_country` |
-| DPP | `product_id` FK 직접 참조 | `dpp_records.product_id` |
-| Submission | `part_id` FK 직접 참조 | `part_code_mapping`으로 협력사 코드 역변환 |
 
 ---
 
 ## 8. 완료 기준 (Done Criteria)
 
-- [ ] `GET /products/{id}/bom-tree` 호출 시 Pack → Module → Cell → 전구체 → 광물 **5계층 중첩 JSON** 반환
-- [ ] `hs_code` 미기재 부품의 `origin_country`는 응답에서 `null` 표시
-- [ ] `POST /parts` 에서 `hs_code` 6자리 미만 입력 시 `422` 반환
-- [ ] `PATCH bom-versions/{vid}/status` 에서 잘못된 전이 시도 시 `422` 반환
-- [ ] `draft → active` 전이 시 기존 `active` 버전이 `deprecated`로 자동 전이
-- [ ] 모든 상태 전이에 `@trace_node` 데코레이터 적용 → `audit_trail` 자동 기록
+- [x] `GET /products/{id}/bom` 5계층 중첩 JSON 반환
+- [x] active BOM 없음 → `404` / 제품 없음 → `404` 원인별 분기
+- [x] `draft → active` 전이 시 기존 `active` 버전 자동 `deprecated`
+- [x] 허용되지 않는 BOM 전이 → `422`
+- [x] 모든 상태 전이에 `@trace_node` 적용
+- [x] `fetch_from_source()` `@trace_tool` 적용
+- [x] `only_confirmed` 파라미터 수신 (필터 활성화는 B migration 대기)
+- [ ] `hs_code` 6자리 미만 `422` — W3 parts ingest 함수 생성 시 추가 예정
 
 ---
 
@@ -387,273 +289,176 @@ Product Domain은 이벤트를 **발행만** 한다. 다른 도메인을 직접 
 backend/domains/product/
   ├── README.md               ← 이 문서
   ├── __init__.py
-  ├── models.py               ← SQLAlchemy ORM (schema.sql 영역 7 대응)
-  ├── repository.py           ← DB 입출력 (create/get/list/bom_tree). crud.py 대체. ✅ W2 완료
-  ├── service.py              ← 비즈니스 로직 + 이벤트 발행 + 404 분기. ✅ W2 완료
-  ├── router.py               ← FastAPI APIRouter (엔드포인트 4개). ✅ W2 완료
-  └── state_machine.py        ← BOM 버전 상태 전이 함수
+  ├── models.py               ✅ W2 완료 (결정 #1 컬럼 추가)
+  ├── repository.py           ✅ W2 완료 (fetch_from_source 신설, only_confirmed 추가)
+  ├── state_machine.py        ✅ W2 완료 (신규 — BOM 상태 전이 전담)
+  ├── service.py              ✅ W2 완료 (import_products 교체, 이벤트 3종 변경)
+  └── router.py               ✅ W2 완료 (202 트리거, only_confirmed 파라미터)
 ```
 
-> `crud.py`는 `repository.py`로 완전히 대체됐으므로 PR 머지 전 삭제 필요.
+> `crud.py`는 `repository.py`로 완전 대체됐으므로 PR 머지 전 삭제 필요.
 
 ---
 
-## 10. W2 자가검증 4종 (화·수)
+## 10. 자가검증 — curl 시나리오 (W2 화·수)
 
-### ① 계약 위반 스캔 결과
+### POST /products — 동기화 트리거
 
-| 규칙 | repository.py | service.py | router.py |
-|---|---|---|---|
-| `backend.` import | ✅ 위반 0 | ✅ 위반 0 | ✅ 위반 0 |
-| 인프라 시그니처 (`publish` 2-인자) | ✅ 해당 없음 | ✅ `publish("ProductCreated", payload)` | ✅ 해당 없음 |
-| 상태값 언더스코어 | ✅ `'active'`, `'draft'`, `'deprecated'` | ✅ 해당 없음 | ✅ 해당 없음 |
-| ORM/쿼리 컬럼명 schema 일치 | ✅ 위반 0 | ✅ 위반 0 | ✅ 해당 없음 |
-
-**전체 위반 0**
-
----
-
-### ② schema 컬럼 대조표
-
-**`products` 테이블**
-
-| 내 코드 컬럼 | schema.sql 컬럼 | 일치 |
-|---|---|---|
-| `product_id` | `product_id UUID PK` | ✅ |
-| `product_code` | `product_code VARCHAR(50) UNIQUE NOT NULL` | ✅ |
-| `product_name` | `product_name VARCHAR(255)` | ✅ |
-| `manufacturer_id` | `manufacturer_id UUID REFERENCES suppliers` | ✅ |
-| `type` | `type VARCHAR(50)` | ✅ |
-| `specs` | `specs JSONB` | ✅ |
-| `created_at` | `created_at TIMESTAMPTZ` | ✅ |
-| `updated_at` | `updated_at TIMESTAMPTZ` | ✅ |
-
-**`bom_versions` 테이블**
-
-| 내 코드 컬럼 | schema.sql 컬럼 | 일치 |
-|---|---|---|
-| `bom_version_id` | `bom_version_id UUID PK` | ✅ |
-| `product_id` | `product_id UUID` | ✅ |
-| `version_number` | `version_number VARCHAR(20)` | ✅ |
-| `status` | `status VARCHAR(20) DEFAULT 'draft'` | ✅ |
-
-**`parts` / `bom_items` 테이블 (BOM 트리 CTE 사용 컬럼)**
-
-| 내 코드 컬럼 | schema.sql 컬럼 | 일치 |
-|---|---|---|
-| `part_id` | `part_id UUID PK` | ✅ |
-| `part_code` | `part_code VARCHAR(50)` | ✅ |
-| `tier_level` | `tier_level INT` | ✅ |
-| `parent_part_id` | `parent_part_id UUID REFERENCES parts` | ✅ |
-| `hs_code` | `hs_code VARCHAR(15)` | ✅ |
-| `unit_price` | `unit_price NUMERIC(15,4)` | ✅ |
-| `required_quantity` | `required_quantity NUMERIC(15,4)` | ✅ |
-| `origin_country` | `origin_country VARCHAR(2)` | ✅ |
-| `direct_material_cost` | `direct_material_cost NUMERIC(15,4)` | ✅ |
-
-**불일치 0건 확인**
-
----
-
-### ③ curl 시나리오
-
-#### POST /api/v1/products — 제품 등록
 ```bash
 curl -X POST http://localhost:8000/api/v1/products \
   -H "Content-Type: application/json" \
-  -d '{
-    "product_code": "BAT-NCM811-200Ah",
-    "product_name": "NCM811 High Capacity Battery 200Ah",
-    "type": "각형",
-    "specs": {"용량": "200Ah", "전압": "3.7V"}
-  }'
+  -d '{"source_system": "SEED"}'
 ```
 
-예상 응답 (201):
+성공 (202):
 ```json
 {
-  "product_id": "<<새로 생성된 UUID>>",
-  "product_code": "BAT-NCM811-200Ah",
-  "product_name": "NCM811 High Capacity Battery 200Ah",
-  "manufacturer_id": null,
-  "type": "각형",
-  "specs": {"용량": "200Ah", "전압": "3.7V"},
-  "created_at": "2026-05-26T09:00:00+00:00"
+  "synced_count": 3,
+  "source_system": "SEED",
+  "products": [
+    {
+      "product_id": "d1eebc99-...",
+      "product_code": "BAT-NCM811-100Ah",
+      "product_name": "NCM811 High Capacity Battery",
+      "source_system": "SEED",
+      "synced_at": "2026-05-28T09:00:00+00:00"
+    }
+  ]
 }
 ```
 
-중복 등록 시 예상 응답 (409):
-```json
-{ "detail": "이미 존재하는 product_code입니다: BAT-NCM811-200Ah" }
-```
-
-> `POST /products` 호출 → `ProductCreated` 이벤트 발행 → `products` 테이블에 row 1건 INSERT
+흐름: `POST /products` → `BOMImported` + `LotImported` + `ProductImported` 순서 발행 → `products` 테이블 UPSERT
 
 ---
 
-#### GET /api/v1/products — 제품 목록
+### GET /products — 목록
+
 ```bash
 curl "http://localhost:8000/api/v1/products?limit=20&offset=0"
 ```
 
-예상 응답 (200):
+성공 (200):
 ```json
 [
   {
-    "product_id": "d1eebc99-6666-4ef8-bb6d-6bb9bd380a77",
+    "product_id": "d1eebc99-...",
     "product_code": "BAT-NCM811-100Ah",
     "product_name": "NCM811 High Capacity Battery",
-    "manufacturer_id": null,
-    "type": null,
-    "created_at": "2026-05-26T09:00:00+00:00"
+    "source_system": "SEED",
+    "synced_at": "2026-05-28T09:00:00+00:00"
   }
 ]
 ```
 
-> `GET /products` 호출 → 이벤트 없음 → `products` 테이블 SELECT (읽기 전용)
+흐름: `GET /products` → 이벤트 없음 → `products` SELECT (synced_at 내림차순)
 
 ---
 
-#### GET /api/v1/products/{id} — 제품 단건
+### GET /products/{id} — 단건
+
 ```bash
 curl http://localhost:8000/api/v1/products/d1eebc99-6666-4ef8-bb6d-6bb9bd380a77
 ```
 
-예상 응답 (200):
+성공 (200):
 ```json
 {
-  "product_id": "d1eebc99-6666-4ef8-bb6d-6bb9bd380a77",
+  "product_id": "d1eebc99-...",
   "product_code": "BAT-NCM811-100Ah",
-  "product_name": "NCM811 High Capacity Battery",
-  "manufacturer_id": null,
-  "type": null,
-  "specs": null,
-  "created_at": "2026-05-26T09:00:00+00:00",
-  "updated_at": "2026-05-26T09:00:00+00:00"
+  "source_system": "SEED",
+  "synced_at": "2026-05-28T09:00:00+00:00",
+  "created_at": "2026-05-28T09:00:00+00:00",
+  "updated_at": "2026-05-28T09:00:00+00:00"
 }
 ```
 
-존재하지 않는 ID (404):
-```json
-{ "detail": "제품을 찾을 수 없습니다." }
-```
+없는 ID (404): `{"detail": "제품을 찾을 수 없습니다."}`
 
-> `GET /products/{id}` 호출 → 이벤트 없음 → `products` 테이블 SELECT (읽기 전용)
+흐름: `GET /products/{id}` → 이벤트 없음 → `products` SELECT
 
 ---
 
-#### GET /api/v1/products/{id}/bom — BOM 트리 (404 분기)
+### GET /products/{id}/bom — BOM 트리
+
 ```bash
-curl http://localhost:8000/api/v1/products/d1eebc99-6666-4ef8-bb6d-6bb9bd380a77/bom
+# only_confirmed=true (기본값)
+curl "http://localhost:8000/api/v1/products/d1eebc99-.../bom?only_confirmed=true"
 ```
 
-예상 응답 (200):
+성공 (200):
 ```json
 {
-  "product_id": "d1eebc99-6666-4ef8-bb6d-6bb9bd380a77",
+  "product_id": "d1eebc99-...",
   "product_code": "BAT-NCM811-100Ah",
-  "product_name": "NCM811 High Capacity Battery",
-  "bom_version": "1.0",
+  "bom_version": "v1.0",
   "bom_status": "active",
+  "only_confirmed": true,
   "tree": {
-    "part_code": "CELL-NCM811",
-    "part_name": "Battery Cell",
+    "part_code": "PACK-NCM811-100Ah",
     "tier_level": 1,
     "hs_code": "850760",
+    "origin_country": "KR",
+    "depth": 0,
     "children": [
       {
-        "part_code": "MIN-LITHIUM",
-        "part_name": "Raw Lithium",
+        "part_code": "MOD-NCM811-16S",
         "tier_level": 2,
-        "hs_code": "283691",
-        "children": []
+        "children": ["..."]
       }
     ]
   }
 }
 ```
 
-product_id 자체가 없는 경우 (404):
-```json
-{ "detail": "제품을 찾을 수 없습니다." }
-```
+제품 없음 (404): `{"detail": "제품을 찾을 수 없습니다."}`
+active BOM 없음 (404): `{"detail": "해당 제품에 active BOM 버전이 존재하지 않습니다."}`
+BOM items 비어 있음 (200): `{"tree": null, "warning": "BOM 항목이 없습니다..."}`
 
-제품은 있으나 active BOM 없는 경우 (404):
-```json
-{ "detail": "해당 제품에 active BOM 버전이 존재하지 않습니다." }
-```
-
-> `GET /products/{id}/bom` 호출 → 이벤트 없음 → `products` + `bom_versions` + `parts` + `bom_items` 재귀 CTE SELECT
+흐름: `GET /products/{id}/bom` → 이벤트 없음 → `products` + `bom_versions` + `parts` + `bom_items` 재귀 CTE SELECT
 
 ---
 
-### ④ 동작 흐름 한 줄
+### POST /bom-versions/{id}/activate — BOM 활성화
 
-| API | 이벤트 | 테이블 변화 |
-|---|---|---|
-| `POST /products` | `ProductCreated` 발행 | `products` 테이블에 row 1건 INSERT |
-| `GET /products` | 없음 | `products` 테이블 SELECT (읽기 전용) |
-| `GET /products/{id}` | 없음 | `products` 테이블 SELECT (읽기 전용) |
-| `GET /products/{id}/bom` | 없음 | `products` + `bom_versions` + `parts` + `bom_items` SELECT (읽기 전용) |
-
----
-
-## 11. W2 자가검증 4종 (목)
-
-### ① 계약 위반 스캔 결과
-
-**seed SQL 파일**
-
-| 항목 | 결과 |
-|---|---|
-| `embedding_status` 허용값 | ✅ `'pending'` — schema.sql 허용값 `pending` / `indexed` 일치 |
-| ORM/쿼리 컬럼명 schema 일치 | ✅ 위반 0 |
-
-**전체 위반 0**
-
----
-
-### ② schema 컬럼 대조표
-
-**`regulations` 테이블 (시드 파일 사용 컬럼)**
-
-| 내 코드 컬럼 | schema.sql 컬럼 | 일치 |
-|---|---|---|
-| `regulation_id` | `regulation_id UUID PK` | ✅ |
-| `name` | `name VARCHAR(255)` | ✅ |
-| `regulation_code` | `regulation_code VARCHAR(50)` | ✅ |
-| `region` | `region VARCHAR(10)` | ✅ |
-| `description` | `description TEXT` | ✅ |
-| `version` | `version VARCHAR(50)` | ✅ |
-| `effective_from` | `effective_from DATE` | ✅ |
-| `document_s3_url` | `document_s3_url TEXT` | ✅ |
-| `embedding_status` | `embedding_status VARCHAR(20) DEFAULT 'pending'` | ✅ |
-| `embedding` | `embedding vector(1536)` | ✅ |
-
-**불일치 0건 확인**
-
----
-
-### ③ 동작 시나리오
-
-이 작업은 API 엔드포인트가 아니라 **DB 초기화 시 실행되는 SQL 시드 파일**입니다. curl 시나리오 대신 적재 확인 쿼리로 대체합니다.
-
-**적재 실행**
 ```bash
-# docker compose 환경에서 자동 실행 (docker/ 경로)
-# 또는 수동 실행
+curl -X POST http://localhost:8000/api/v1/products/bom-versions/aabbcc-.../activate
+```
+
+성공 (200):
+```json
+{
+  "bom_version_id": "aabbcc-...",
+  "product_id": "d1eebc99-...",
+  "version_number": "v2.0",
+  "status": "active"
+}
+```
+
+없는 ID (404): `{"detail": "BOM 버전을 찾을 수 없습니다: aabbcc-..."}`
+잘못된 전이 (422): `{"detail": "허용되지 않는 BOM 버전 상태 전이: 'deprecated' → 'active'..."}`
+
+흐름: `POST /bom-versions/{id}/activate` → 이벤트 없음 → 기존 active `deprecated` 전이 후 대상 `active` 전이
+
+---
+
+## 11. 자가검증 — 규제 시드 (W2 목)
+
+### 적재 실행
+
+```bash
 psql -U $POSTGRES_USER -d $POSTGRES_DB -f docker/03_seed_regulations.sql
 psql -U $POSTGRES_USER -d $POSTGRES_DB -f docker/04_seed_regulations_index.sql
 ```
 
-**적재 확인 쿼리**
+### 적재 확인 쿼리
+
 ```sql
 SELECT regulation_code, region, effective_from, embedding_status
 FROM regulations
 ORDER BY region, regulation_code;
 ```
 
-예상 결과:
+예상 결과 (11 rows):
 ```
  regulation_code   | region | effective_from | embedding_status
 -------------------+--------+----------------+------------------
@@ -671,22 +476,22 @@ ORDER BY region, regulation_code;
 (11 rows)
 ```
 
-> 시드 적재 → 이벤트 없음 → `regulations` 테이블에 11개 row INSERT
+흐름: 시드 적재 → 이벤트 없음 → `regulations` 테이블 11개 row INSERT
 
 ---
 
-### ④ 누락 점검 결과
+## 12. 블로커 (B 완료 대기)
 
-| 체크 항목 | 결과 |
-|---|---|
-| 시드 중복 적재 방지 | ✅ `regulation_code` UNIQUE 제약 + `docker/` 최초 1회 실행 |
-| pgvector 인덱스 중복 생성 방지 | ✅ `IF NOT EXISTS` 옵션 적용 |
-| `uuid_generate_v4()` 함수 사용 가능 여부 | ✅ schema.sql에 `CREATE EXTENSION IF NOT EXISTS "uuid-ossp"` 포함 확인 |
-| 파일 실행 순서 보장 | ✅ `03_` → `04_` 숫자 순 정렬로 적재 후 인덱스 생성 순서 보장 |
+코드는 준비됐으나 아래 항목은 B(인프라 담당) 처리 완료 후 자동 해소된다.
 
-**누락 0**
+| 항목 | 파일 | 상태 |
+|---|---|---|
+| `products` 컬럼 3종 추가 | `models.py`, `repository.py` | ⏳ B schema migration 대기 |
+| `bom_versions` 컬럼 3종 추가 | `models.py` | ⏳ B schema migration 대기 |
+| `supply_chain_map.link_status` 추가 | `repository.py` TODO 주석 | ⏳ B schema migration 대기 |
+| `events/types.py` 이름 변경 3종 | `service.py` import | ⏳ B 처리 대기 |
 
 ---
 
-*이 문서는 `schema.sql` 영역 7과 `PROJECT_CORE.md` 3-1절·4-2절을 단일 진실 공급원으로 삼는다.*
+*이 문서는 `schema.sql` 영역 7과 `PROJECT_CORE.md` 3-1절·4-2절·`DECISION_LOG.md` 결정 #1·#2를 단일 진실 공급원으로 삼는다.*
 *컬럼명·타입 불일치 발견 시 `schema.sql`을 기준으로 이 문서를 수정한다.*
