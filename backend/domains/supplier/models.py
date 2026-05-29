@@ -1,28 +1,47 @@
-from datetime import datetime
+"""
+domains/supplier/models.py  (담당: 팀원 B)
+
+Supplier 도메인 SQLAlchemy ORM + Pydantic DTO.
+컬럼명·타입·기본값은 schema.sql 영역 2~6과 1:1 일치(SSOT). ORM이 schema와
+다르면 마이그레이션이 아니라 ORM을 고치는 게 정답(0-2절 규칙 5).
+
+[이번 정합 수정 요지]
+- 상태값 기본값을 접두어 표기로: status='supplier_pending'(구 'pending'),
+  consent_status='consent_pending', training_records.status='not_started' 등.
+- 타입을 schema와 일치: suppliers.status는 VARCHAR(30)(구 String(20)).
+- 시각은 timezone-aware UTC: server_default=func.now() 사용(구 datetime.utcnow 제거).
+- SupplierFactory 누락 컬럼 전부 보강: destination, applicable_regulations,
+  hidden_regulations, operating_period_from/to, monthly_capacity,
+  destination_detail, supply_ratio_percent, supply_quantity.
+- CTI 4종 누락 컬럼 보강(manufacturing_process/capacity, recycled_materials 등).
+- 누락 부속 테이블 ORM 추가: supplier_contacts, supplier_onboarding,
+  supplier_certifications, origin_certificates, training_materials,
+  training_records, supplier_audit_records, supplier_human_rights_issues,
+  supplier_industrial_accidents, trader_disclosure_obligation.
+"""
 import uuid
-from typing import Optional, Dict, Any
+from datetime import date, datetime
+from typing import Optional
+
 from geoalchemy2 import Geometry
-from pydantic import BaseModel, Field
-from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, Text, NUMERIC
+from pydantic import BaseModel
+from sqlalchemy import (
+    Boolean, Date, DateTime, ForeignKey, Integer, NUMERIC, String, Text, func,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 from backend.infrastructure.database import Base
-from backend.infrastructure.trace import trace_node
+
 
 # ============================================================
-# [1] SQLAlchemy ORM 모델 영역
+# 영역 2. 협력사 마스터
 # ============================================================
-
-# ============================================================
-# 협력사 마스터 및 CTI 상세
-# ============================================================
-
 class Supplier(Base):
     __tablename__ = "suppliers"
 
     supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id"))
     company_name: Mapped[str] = mapped_column(String(255), nullable=False)
     company_name_en: Mapped[Optional[str]] = mapped_column(String(255))
     company_name_ko: Mapped[Optional[str]] = mapped_column(String(255))
@@ -34,119 +53,374 @@ class Supplier(Base):
     duns_number: Mapped[Optional[str]] = mapped_column(String(20))
     tax_number: Mapped[Optional[str]] = mapped_column(String(50))
     website: Mapped[Optional[str]] = mapped_column(String(255))
-    supplier_type: Mapped[str] = mapped_column(String(30), nullable=False) 
+    supplier_type: Mapped[str] = mapped_column(String(30), nullable=False)
     tier: Mapped[Optional[int]] = mapped_column(Integer)
-    parent_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"))
+    parent_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id")
+    )
     established_year: Mapped[Optional[int]] = mapped_column(Integer)
     employee_count: Mapped[Optional[int]] = mapped_column(Integer)
     completeness_score: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(20), default="pending")
+
+    # 상태값은 schema.sql 접두어 표기 그대로. 타입은 VARCHAR(30).
+    status: Mapped[str] = mapped_column(String(30), default="supplier_pending")
     risk_level: Mapped[str] = mapped_column(String(20), default="low")
     feoc_status: Mapped[str] = mapped_column(String(20), default="unknown")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
-    # CTI Relationships
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # CTI / 관계
     manufacturer_detail = relationship("SupplierManufacturerDetail", back_populates="supplier", uselist=False)
     recycler_detail = relationship("SupplierRecyclerDetail", back_populates="supplier", uselist=False)
     trader_detail = relationship("SupplierTraderDetail", back_populates="supplier", uselist=False)
     miner_detail = relationship("SupplierMinerDetail", back_populates="supplier", uselist=False)
     factories = relationship("SupplierFactory", back_populates="supplier")
+    contacts = relationship("SupplierContact", back_populates="supplier")
+    onboarding = relationship("SupplierOnboarding", back_populates="supplier", uselist=False)
+    certifications = relationship("SupplierCertification", back_populates="supplier")
+    risk_profile = relationship("SupplierRiskProfile", back_populates="supplier", uselist=False)
     parent_supplier = relationship("Supplier", remote_side=[supplier_id], back_populates="child_suppliers")
     child_suppliers = relationship("Supplier", back_populates="parent_supplier")
 
+
 class SupplierFactory(Base):
+    """공장 단위 원산지 추적의 불변 핵심 기준점. schema.sql 컬럼 전수 정합."""
     __tablename__ = "supplier_factories"
 
     factory_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"), nullable=False)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE"), nullable=False
+    )
     factory_name: Mapped[Optional[str]] = mapped_column(String(255))
     factory_name_en: Mapped[Optional[str]] = mapped_column(String(255))
     address: Mapped[Optional[str]] = mapped_column(Text)
-    country: Mapped[Optional[str]] = mapped_column(String(2))
+    country: Mapped[Optional[str]] = mapped_column(String(2))   # ISO 3166-1 alpha-2
     region: Mapped[Optional[str]] = mapped_column(String(100))
     location = mapped_column(Geometry(geometry_type="POINT", srid=4326), nullable=True)
     factory_role: Mapped[Optional[str]] = mapped_column(String(30))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    operating_period_from: Mapped[Optional[date]] = mapped_column(Date)
+    operating_period_to: Mapped[Optional[date]] = mapped_column(Date)
+    monthly_capacity: Mapped[Optional[str]] = mapped_column(String(100))
+    destination: Mapped[Optional[str]] = mapped_column(String(10))   # EU / US / KR / BOTH
+    destination_detail: Mapped[Optional[str]] = mapped_column(Text)
+    applicable_regulations: Mapped[Optional[dict]] = mapped_column(JSONB)  # 공장별 차등 규제 배열
+    hidden_regulations: Mapped[Optional[dict]] = mapped_column(JSONB)
     supply_ratio_percent: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
     supply_quantity: Mapped[Optional[str]] = mapped_column(String(100))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
     supplier = relationship("Supplier", back_populates="factories")
 
 
-# ============================================================
-# CTI 상세 구조 (Detail Tables)
-# ============================================================
+class SupplierContact(Base):
+    __tablename__ = "supplier_contacts"
 
+    contact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
+    )
+    factory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="SET NULL")
+    )
+    name: Mapped[Optional[str]] = mapped_column(String(100))
+    name_en: Mapped[Optional[str]] = mapped_column(String(100))
+    role: Mapped[Optional[str]] = mapped_column(String(50))
+    department: Mapped[Optional[str]] = mapped_column(String(100))
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+    phone: Mapped[Optional[str]] = mapped_column(String(50))
+    mobile: Mapped[Optional[str]] = mapped_column(String(50))
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    language: Mapped[Optional[str]] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    supplier = relationship("Supplier", back_populates="contacts")
+
+
+class SupplierOnboarding(Base):
+    """동의 단계 + 2주 Onboarding SLA 독촉 추적."""
+    __tablename__ = "supplier_onboarding"
+
+    onboarding_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
+    )
+    consent_status: Mapped[str] = mapped_column(String(20), default="consent_pending")
+    consent_signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    agreement_status: Mapped[str] = mapped_column(String(20), default="pending")
+    agreement_signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_invited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_reminded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    sla_due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    reminder_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    supplier = relationship("Supplier", back_populates="onboarding")
+
+
+class SupplierCertification(Base):
+    """ISO 14001, Bettercoal 등 일반 품질/환경/안전 인증서 마스터."""
+    __tablename__ = "supplier_certifications"
+
+    cert_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
+    )
+    certification_type: Mapped[Optional[str]] = mapped_column(String(100))
+    certification_no: Mapped[Optional[str]] = mapped_column(String(100))
+    issued_at: Mapped[Optional[date]] = mapped_column(Date)
+    expires_at: Mapped[Optional[date]] = mapped_column(Date)
+    issuing_body: Mapped[Optional[str]] = mapped_column(String(255))
+    document_url: Mapped[Optional[str]] = mapped_column(String(500))
+
+    supplier = relationship("Supplier", back_populates="certifications")
+
+
+# ============================================================
+# 영역 3. Provider Type별 CTI 상세
+# ============================================================
 class SupplierManufacturerDetail(Base):
     __tablename__ = "supplier_manufacturer_details"
     detail_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"), nullable=False)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE"), nullable=False
+    )
+    manufacturing_process: Mapped[Optional[str]] = mapped_column(Text)
     energy_source: Mapped[Optional[str]] = mapped_column(String(100))
-    carbon_intensity: Mapped[Optional[float]] = mapped_column(NUMERIC(10, 4))
+    capacity: Mapped[Optional[str]] = mapped_column(String(100))
+    carbon_intensity: Mapped[Optional[float]] = mapped_column(NUMERIC(10, 4))  # kgCO2eq/kg (EU 배터리법 Art.7)
     supplier = relationship("Supplier", back_populates="manufacturer_detail")
+
 
 class SupplierRecyclerDetail(Base):
     __tablename__ = "supplier_recycler_details"
     detail_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"), nullable=False)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE"), nullable=False
+    )
+    recycled_materials: Mapped[Optional[dict]] = mapped_column(JSONB)
+    recycling_certification: Mapped[Optional[str]] = mapped_column(String(255))
+    input_source: Mapped[Optional[str]] = mapped_column(String(50))
     recycled_content_ratio: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
     supplier = relationship("Supplier", back_populates="recycler_detail")
+
 
 class SupplierTraderDetail(Base):
     __tablename__ = "supplier_trader_details"
     detail_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"), nullable=False)
-    disclosure_completeness: Mapped[float] = mapped_column(NUMERIC(5, 2), default=0.0)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE"), nullable=False
+    )
+    trading_license: Mapped[Optional[str]] = mapped_column(String(100))
+    broker_certification: Mapped[Optional[str]] = mapped_column(String(255))
+    disclosure_completeness: Mapped[float] = mapped_column(NUMERIC(5, 2), default=0)
     supplier = relationship("Supplier", back_populates="trader_detail")
+
 
 class SupplierMinerDetail(Base):
     __tablename__ = "supplier_miner_details"
     detail_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"), nullable=False)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE"), nullable=False
+    )
     mine_name: Mapped[Optional[str]] = mapped_column(String(255))
+    mining_method: Mapped[Optional[str]] = mapped_column(String(50))
+    extraction_volume: Mapped[Optional[float]] = mapped_column(NUMERIC(15, 2))
     mine_coordinates = mapped_column(Geometry(geometry_type="POINT", srid=4326), nullable=True)
+    active_period_from: Mapped[Optional[date]] = mapped_column(Date)
+    active_period_to: Mapped[Optional[date]] = mapped_column(Date)
     supplier = relationship("Supplier", back_populates="miner_detail")
 
-# ============================================================
-# 협력사 리스크 프로필
-# ============================================================
 
+class TraderDisclosureObligation(Base):
+    """트레이더의 상위 협력사별 공개율 의무 상태(FEOC 우회 추적용)."""
+    __tablename__ = "trader_disclosure_obligation"
+    obligation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    trader_supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
+    )
+    upstream_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id")
+    )
+    disclosure_completeness: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
+    last_audited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+# ============================================================
+# 영역 4. 리스크 프로필
+# ============================================================
 class SupplierRiskProfile(Base):
     __tablename__ = "supplier_risk_profiles"
 
-    profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # schema.sql: UNIQUE(supplier_id) — supplier당 1개 row
     supplier_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"),
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE"),
         nullable=False, unique=True,
     )
-
-    # 0~100, 높을수록 위험
+    # 가점식 0~100 (↑위험). 대역: 0~29 low / 30~49 medium / 50~69 high / 70~100 critical
     overall_risk_score: Mapped[int] = mapped_column(Integer, default=0)
-    # 0~29 critical / 30~49 high / 50~69 medium / 70~100 low
     risk_level: Mapped[str] = mapped_column(String(20), default="low")
-
     feoc_status: Mapped[str] = mapped_column(String(20), default="unknown")
     feoc_direct_ownership: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
     feoc_indirect_ownership: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
-    feoc_last_assessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    feoc_cert_expiry: Mapped[Optional[datetime]] = mapped_column(DateTime)
-
+    feoc_last_assessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    feoc_cert_expiry: Mapped[Optional[date]] = mapped_column(Date)
     is_high_risk_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     high_risk_reasons: Mapped[Optional[dict]] = mapped_column(JSONB)
-    last_risk_review_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_risk_review_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    supplier = relationship("Supplier", back_populates="risk_profile")
+
+
+class SupplierAuditRecord(Base):
+    """공급망 실사(Due Diligence) 수행 실적 (CSDDD 대응). v_action_items 'DD' 소스."""
+    __tablename__ = "supplier_audit_records"
+
+    audit_record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
+    )
+    audit_date: Mapped[date] = mapped_column(Date, nullable=False)
+    audit_type: Mapped[Optional[str]] = mapped_column(String(30))   # on_site/remote/document_review/third_party
+    auditor: Mapped[Optional[str]] = mapped_column(String(255))
+    # audit_status = 실사 '진행 단계'(워크플로우), result = 실사 '결과'(판정). 별개 축.
+    audit_status: Mapped[str] = mapped_column(String(20), default="requested")
+    inspector_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    audit_scope: Mapped[Optional[str]] = mapped_column(Text)
+    result: Mapped[Optional[str]] = mapped_column(String(30))       # pass/conditional_pass/fail/pending
+    findings: Mapped[Optional[dict]] = mapped_column(JSONB)
+    corrective_actions: Mapped[Optional[dict]] = mapped_column(JSONB)
+    next_audit_due: Mapped[Optional[date]] = mapped_column(Date)
+    report_url: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SupplierHumanRightsIssue(Base):
+    __tablename__ = "supplier_human_rights_issues"
+
+    issue_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
+    )
+    factory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="SET NULL")
+    )
+    issue_type: Mapped[Optional[str]] = mapped_column(String(50))
+    severity: Mapped[Optional[str]] = mapped_column(String(20))     # critical/major/minor
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    detected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    status: Mapped[Optional[str]] = mapped_column(String(30))       # open/in_remediation/resolved/monitoring
+    source: Mapped[Optional[str]] = mapped_column(String(255))
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SupplierIndustrialAccident(Base):
+    __tablename__ = "supplier_industrial_accidents"
+
+    accident_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
+    )
+    factory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="SET NULL")
+    )
+    accident_date: Mapped[date] = mapped_column(Date, nullable=False)
+    accident_type: Mapped[Optional[str]] = mapped_column(String(30))  # fatality/serious_injury/...
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    casualties: Mapped[int] = mapped_column(Integer, default=0)
+    ltifr: Mapped[Optional[float]] = mapped_column(NUMERIC(6, 2))
+    status: Mapped[Optional[str]] = mapped_column(String(20))         # reported/investigating/closed
+    corrective_action: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
 
 # ============================================================
-# [2] Pydantic 입출력 스키마(DTO) 영역
+# 영역 5. 원산지 증명서 수집 전용 (발급 아님 · 수집/만료 검증)
 # ============================================================
+class OriginCertificate(Base):
+    __tablename__ = "origin_certificates"
 
+    cert_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
+    )
+    factory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="SET NULL")
+    )
+    cert_type: Mapped[str] = mapped_column(String(30), nullable=False)  # FTA/GSP/UFLPA_REBUTTAL/...
+    cert_number: Mapped[Optional[str]] = mapped_column(String(100))
+    issuing_authority: Mapped[Optional[str]] = mapped_column(String(255))
+    issued_at: Mapped[Optional[date]] = mapped_column(Date)
+    expires_at: Mapped[date] = mapped_column(Date, nullable=False)      # 12개월 만료 자동 검증
+    origin_country: Mapped[Optional[str]] = mapped_column(String(2))
+    covered_minerals: Mapped[Optional[dict]] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(20), default="valid")    # valid/expiring_soon/expired/under_review
+    document_url: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ============================================================
+# 영역 6. 교육 관리
+# ============================================================
+class TrainingMaterial(Base):
+    __tablename__ = "training_materials"
+
+    material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    title_en: Mapped[Optional[str]] = mapped_column(String(255))
+    category: Mapped[Optional[str]] = mapped_column(String(50))         # human_rights/safety/...
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    format: Mapped[Optional[str]] = mapped_column(String(20))           # pdf/video/online/onsite
+    duration_minutes: Mapped[Optional[int]] = mapped_column(Integer)
+    required_for: Mapped[Optional[dict]] = mapped_column(JSONB)         # 예: ["CSDDD"]
+    version: Mapped[Optional[str]] = mapped_column(String(20))
+    url: Mapped[Optional[str]] = mapped_column(String(500))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class TrainingRecord(Base):
+    __tablename__ = "training_records"
+
+    record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
+    )
+    factory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="SET NULL")
+    )
+    material_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("training_materials.material_id")
+    )
+    trainee_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_eligible: Mapped[int] = mapped_column(Integer, default=0)
+    completion_rate: Mapped[float] = mapped_column(NUMERIC(5, 2), default=0)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="not_started")  # completed/in_progress/overdue/not_started
+    instructor: Mapped[Optional[str]] = mapped_column(String(255))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ============================================================
+# Pydantic 입출력 스키마(DTO)
+# ============================================================
 class SupplierCreateRequest(BaseModel):
     tenant_id: uuid.UUID
     company_name: str
@@ -155,12 +429,7 @@ class SupplierCreateRequest(BaseModel):
 
 
 class SupplierBrief(BaseModel):
-    """
-    목록·단건 응답용 직렬화 스키마.
-    ORM 객체를 그대로 반환하면 CTI relationship lazy load에서 직렬화 에러가
-    날 수 있으므로, 명시적 스키마로 변환해 반환한다(직렬화 안전).
-    from_attributes=True 로 ORM 인스턴스에서 바로 만든다.
-    """
+    """목록·단건 응답용 직렬화 스키마(ORM relationship lazy load 직렬화 에러 방지)."""
     supplier_id: uuid.UUID
     company_name: str
     supplier_type: str
@@ -175,24 +444,10 @@ class RiskProfileResponse(BaseModel):
     supplier_id: uuid.UUID
     overall_risk_score: int
     risk_level: str
-    feoc_status: Optional[str] = "unknown"  # Optional 안전 가드 추가
+    feoc_status: Optional[str] = "unknown"
 
     model_config = {"from_attributes": True}
 
 
 class RiskScoreUpdateRequest(BaseModel):
     score: int
-
-
-# ============================================================
-# [3] 검증용 파이프라인 깡통 함수
-# ============================================================
-
-@trace_node(node_name="create_supplier_onboarding", node_type="agent")
-async def create_supplier_onboarding(state: Dict[str, Any], db: Any) -> Dict[str, Any]:
-    return {
-        **state,
-        "supplier_status": "invited",
-        "current_stage": "supplier_onboarding_initiated",
-        "timestamp": datetime.utcnow().isoformat()
-    }

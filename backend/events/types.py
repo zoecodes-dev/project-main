@@ -86,11 +86,11 @@ class RiskProfileUpdatedEvent:
     overall_risk_score 변경 시 발행. 발행: B / 수신: A(StateGraph 참조).
     payload 핵심 필드: supplier_id, overall_risk_score (+ 수신측 편의로 risk_level 동봉).
     """
-    supplier_id: UUID = None
-    overall_risk_score: int = None
-    risk_level: str = None
+    supplier_id: Optional[UUID] = None
+    overall_risk_score: Optional[int] = None
+    risk_level: Optional[str] = None
     event_name: str = "RiskProfileUpdated"
-    occurred_at: datetime = None
+    occurred_at: datetime = field(default_factory=_now_utc)
 
 
 @dataclass
@@ -270,6 +270,7 @@ class HITLAssignedEvent:
     batch_id: Optional[UUID] = None
     reviewer_id: Optional[UUID] = None
     event_name: str = "HITLAssigned"
+    occurred_at: datetime = field(default_factory=_now_utc)
 
 
 @dataclass
