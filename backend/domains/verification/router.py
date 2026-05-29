@@ -23,8 +23,8 @@ async def trigger_dummy_feoc_rule(req: FEOCDummyRequest, db: AsyncSession = Depe
     """
     [API] POST /verification/feoc-test
     더미 지분율 데이터를 주입하여 FEOC 25% 초과 규제 룰을 테스트합니다.
-    - 25% 초과 시: ValidationFailed 발행 및 Queue 적재
-    - 25% 이하 시: ValidationCompleted 발행
+    - 25% 초과 시: VerificationFailed 발행 및 Queue 적재
+    - 25% 이하 시: VerificationCompleted 발행
     """
     try:
         is_passed = await verify_feoc_rule(
@@ -39,16 +39,20 @@ async def trigger_dummy_feoc_rule(req: FEOCDummyRequest, db: AsyncSession = Depe
         # 데이터베이스에 영구적으로 확정(저장)하기 위해 커밋을 호출합니다.
         await db.commit()
     except Exception as e:
-        # [더미 테스트 방어 로직]
-        # DB에 존재하지 않는 더미 UUID를 사용하여 @trace_tool이 감사 기록(audit_trail)을 
-        # 저장하려다 발생한 외래키(FK) 위반 에러를 무시하고 테스트 결과로 우회 진행합니다.
-        # DB 무결성 예외뿐만 아니라 인프라 내부에서 발생할 수 있는 모든 예외를 
-        # 광범위하게 잡아내어, 테스트 목적에 맞게 무조건 200 OK 결과로 우회시킵니다.
         await db.rollback()
-        print(f"[Dummy Test Bypass] Exception ignored: {e}")
-        is_passed = (req.direct_ownership + req.indirect_ownership) < 25.0
+        # [개선] 비즈니스 로직 중복을 피하고, 에러 상황을 명확히 알립니다.
+        # 더미 UUID 사용으로 인한 DB 오류 시, 규칙 검증 로직 자체가 실패했음을 알리는
+        # 명확한 메시지를 반환하여 테스트 실패 원인을 쉽게 파악하도록 합니다.
+        return {
+            "status": "bypassed_due_to_error",
+            "message": f"서비스 로직 실행 중 DB 오류가 발생하여 테스트가 중단되었습니다. (오류: {e})",
+            "note": "더미 UUID를 사용한 경우 예상된 동작일 수 있습니다. FEOC 규칙 자체는 검증되지 않았습니다."
+        }
     
     if is_passed:
         return {"status": "passed", "message": "FEOC 검증 통과 (우려국 지분 25% 미만)"}
     else:
-        return {"status": "violation", "message": "FEOC 규제 위반 (25% 이상) - Validation Queue에 후속 작업 적재 완료"}
+        # [수정] 중복 enqueue 호출 제거.
+        # verify_feoc_rule 서비스 함수가 내부적으로 위반 시 Queue 적재 및 이벤트 발행을
+        # 모두 처리하므로, 라우터에서는 결과만 반환합니다.
+        return {"status": "violation", "message": "FEOC 규제 위반 (25% 이상) - 후속 작업이 비동기 처리됩니다."}

@@ -16,7 +16,7 @@ async def transition_submission(
     to_status: SubmissionStatus,     # 전이하고자 하는 목표 변경 상태 코드 (SubmissionStatus Enum)
     actor_id: uuid.UUID,             # 본 상태 전이 트랜잭션을 발생시킨 실행 주체자 ID (User ID)
     reason: Optional[str] = None,    # 상태 전이 사유 (특히 REVIEW 단계에서 REJECTED 처리 시 반려 근거 기록)
-    batch_id: Optional[str] = None   # Provenance 감사 추적 체인 연동을 위한 인프라 전용 식별 파라미터
+    batch_id: Optional[uuid.UUID] = None   # Provenance 감사 추적 체인 연동을 위한 인프라 전용 식별 파라미터
 ) -> tuple[DataRequestLog, SubmissionStatusChangedEvent]:
     """
     Pipeline Coordinator: Submission 상태 전이를 제어하는 비즈니스 로직
@@ -42,8 +42,8 @@ async def transition_submission(
     
     history = SubmissionStatusHistory(
         request_id=request_id, 
-        from_status=current_status, 
-        to_status=to_status, 
+        from_status=current_status.value if hasattr(current_status, 'value') else current_status, 
+        to_status=to_status.value if hasattr(to_status, 'value') else to_status, 
         actor_id=actor_id, 
         reason=reason
     )
@@ -57,8 +57,8 @@ async def transition_submission(
 
     event = SubmissionStatusChangedEvent(
         request_id=request_id,
-        old_status=current_status.value if current_status else None,
-        new_status=to_status.value,
+        from_status=current_status.value if current_status else None,
+        to_status=to_status.value,
         event_name="SubmissionStatusChanged"
     )
     

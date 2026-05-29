@@ -4,7 +4,7 @@ from typing import Optional, List
 from decimal import Decimal
 import uuid
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Integer, String, DateTime, Text, ForeignKey, Enum, func, Numeric
+from sqlalchemy import Integer, String, DateTime, Text, ForeignKey, Enum, func, Numeric, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,13 +26,13 @@ class ResponseStatus(str, PyEnum):
 class SubmissionStatus(str, PyEnum):
     PENDING = "pending"
     REQUESTED = "requested"
-    IN_PROGRESS = "in_progress"  # schema.sql 명세 기준 언더스코어(_) 사용
-    PARSED = "parsed"            # [Decision #3 반영] AI 파싱 완료 후 협력사 눈으로 확인 대기
+    IN_PROGRESS = "in_progress"
     SUBMITTED = "submitted"
     REVIEW = "review"
     APPROVED = "approved"
-    REJECTED = "rejected"
+    REWORK = "rework"
     ARCHIVED = "archived"
+    REJECTED = "rejected"
     VIOLATION = "violation"
 
 
@@ -127,12 +127,12 @@ class Notification(Base):
 SUBMISSION_TRANSITIONS = {
     SubmissionStatus.PENDING:     [SubmissionStatus.REQUESTED],
     SubmissionStatus.REQUESTED:   [SubmissionStatus.IN_PROGRESS],
-    SubmissionStatus.IN_PROGRESS: [SubmissionStatus.PARSED, SubmissionStatus.SUBMITTED], # 파일 업로드 시 PARSED, 직접 폼 입력 시 SUBMITTED
-    SubmissionStatus.PARSED:      [SubmissionStatus.SUBMITTED, SubmissionStatus.IN_PROGRESS], # 확정하면 제출, 틀려서 재수정하면 IN_PROGRESS
+    SubmissionStatus.IN_PROGRESS: [SubmissionStatus.SUBMITTED],
     SubmissionStatus.SUBMITTED:   [SubmissionStatus.REVIEW],
-    SubmissionStatus.REVIEW:      [SubmissionStatus.APPROVED, SubmissionStatus.REJECTED],
-    SubmissionStatus.REJECTED:    [SubmissionStatus.IN_PROGRESS],
+    SubmissionStatus.REVIEW:      [SubmissionStatus.APPROVED, SubmissionStatus.REWORK, SubmissionStatus.REJECTED],
+    SubmissionStatus.REWORK:      [SubmissionStatus.IN_PROGRESS],
     SubmissionStatus.APPROVED:    [SubmissionStatus.ARCHIVED, SubmissionStatus.VIOLATION],
+    SubmissionStatus.REJECTED:    [],
     SubmissionStatus.ARCHIVED:    [],
     SubmissionStatus.VIOLATION:   [],
 }
@@ -149,7 +149,7 @@ class DataRequestCreateRequest(BaseModel):
     requester_user_id: uuid.UUID
     target_supplier_id: uuid.UUID
     requested_data_type: str
-    due_date: datetime
+    due_date: Optional[datetime] = None
     actor_id: uuid.UUID
 
 class DataRequestResponse(BaseModel):
@@ -169,14 +169,29 @@ class DataRequestResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class DataRequestStatusUpdateRequest(BaseModel):
-    """
-    [DTO] PATCH /data-requests/{id}/status 요청 Payload 스키마.
-    상태 변경에 필요한 목표 상태(to_status)와 감사 기록용 주체(actor_id)를 받습니다.
-    SUBMITTED 상태 등 특정 상태로 전이될 때 필요한 부가 정보(batch_id, file_urls 등)도 함께 수신합니다.
-    """
-    to_status: SubmissionStatus
+class SubmitDataRequest(BaseModel):
+    actor_id: uuid.UUID
+    batch_id: uuid.UUID
+    file_urls: Optional[List[str]] = None
+    confirmed_fields: Optional[dict] = None
+
+class ActionDataRequest(BaseModel):
     actor_id: uuid.UUID
     reason: Optional[str] = None
-    batch_id: Optional[str] = None
-    file_urls: Optional[List[str]] = None
+
+class CompletenessResponse(BaseModel):
+    completion_rate: Optional[Decimal] = None
+    missing_fields: Optional[dict] = None
+    
+    model_config = ConfigDict(from_attributes=True)
+
+class TimelineHistoryResponse(BaseModel):
+    history_id: uuid.UUID
+    request_id: Optional[uuid.UUID] = None
+    from_status: Optional[str] = None
+    to_status: str
+    actor_id: Optional[uuid.UUID] = None
+    reason: Optional[str] = None
+    changed_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)

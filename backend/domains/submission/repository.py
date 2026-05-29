@@ -8,15 +8,16 @@ Submission 도메인 Data Access 계층 (Repository)
 """
 import uuid
 from typing import Optional
-from sqlalchemy import select
+from sqlalchemy import select, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.domains.submission.models import DataRequestLog
+from backend.domains.submission.models import DataRequestLog, DataCompletenessStatus, SubmissionStatusHistory
 
 async def create_data_request(db: AsyncSession, log_record: DataRequestLog) -> DataRequestLog:
     """
     [INSERT] 새로운 공급망 데이터 요청(DataRequestLog) 마스터 기록을 DB에 삽입합니다.
     * 주의: 초기 PENDING 상태 삽입 목적으로만 사용합니다.
+    * 주의: 초기 REQUESTED 상태 삽입 목적으로만 사용합니다.
       이후의 상태 전이(UPDATE)는 반드시 state_machine.py의 transition_submission()을 거쳐야 
       submission_status_history에 감사 이력이 남습니다.
     """
@@ -51,6 +52,24 @@ async def list_data_requests(
     if status:
         stmt = stmt.where(DataRequestLog.submission_status == status)
     stmt = stmt.order_by(DataRequestLog.requested_at.desc()).offset(skip).limit(limit)
+    
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+async def get_completeness_by_supplier(db: AsyncSession, supplier_id: uuid.UUID) -> Optional[DataCompletenessStatus]:
+    """[SELECT] 특정 협력사의 데이터 완성도 현황을 단건 조회합니다."""
+    stmt = select(DataCompletenessStatus).where(
+        DataCompletenessStatus.entity_type == 'supplier',
+        DataCompletenessStatus.entity_id == supplier_id
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+async def get_timeline_by_supplier(db: AsyncSession, supplier_id: uuid.UUID) -> list[SubmissionStatusHistory]:
+    """[SELECT] 특정 협력사의 모든 데이터 제출 요청 상태 변경 이력을 시간순으로 정렬하여 반환합니다."""
+    stmt = select(SubmissionStatusHistory).join(DataRequestLog).where(
+        DataRequestLog.target_supplier_id == supplier_id
+    ).order_by(asc(SubmissionStatusHistory.changed_at))
     
     result = await db.execute(stmt)
     return list(result.scalars().all())
