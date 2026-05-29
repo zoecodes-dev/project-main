@@ -6,25 +6,34 @@ if TYPE_CHECKING:
 
 def route(state: "BatchState") -> str:
     """
-    BatchState 기준으로 다음 노드 이름 반환.
-    LLM 호출 없는 조건 분기만. 실제 LangGraph 연결은 W2.
-
-    라우팅 규칙:
-      - status == rejected          → end
-      - confidence_score < 0.85     → hitl_interrupt
-      - status == hitl_wait         → hitl_interrupt
-      - 그 외                        → compliance
+    BatchState 기준으로 다음 노드 이름을 반환한다.
+    LLM 호출 없이 schema.sql의 current_stage / batch_status 어휘를 따르는
+    결정론적 Pipeline Coordinator 라우터다.
     """
+    if state.get("applicable_regulations") is None:
+        from backend.agents.compliance import REGULATION_BY_DESTINATION
+
+        destination = state.get("destination")
+        state["applicable_regulations"] = REGULATION_BY_DESTINATION.get(destination, [])
+
     confidence = state.get("confidence_score")
-    status     = state.get("status")
-
-    if status == "rejected":
-        return "end"
-
     if confidence is not None and confidence < 0.85:
+        if state.get("error_reason") == "low_confidence":
+            return "supplier_reverify"
         return "hitl_interrupt"
 
-    if status == "hitl_wait":
-        return "hitl_interrupt"
+    current_stage = state.get("current_stage")
+    if current_stage == "stage_queued":
+        return "data_gateway"
+    if current_stage == "stage_extraction":
+        return "verification"
+    if current_stage == "stage_verification":
+        return "geo_audit"
+    if current_stage == "stage_geo":
+        return "compliance"
+    if current_stage == "stage_compliance":
+        return "risk_scoring"
+    if current_stage == "stage_risk":
+        return "readiness"
 
-    return "compliance"
+    return "completed"
