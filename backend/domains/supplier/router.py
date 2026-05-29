@@ -19,6 +19,7 @@ from backend.domains.supplier import service
 from backend.domains.supplier.models import (
     SupplierCreateRequest,
     SupplierBrief,
+    SupplierDetailResponse,
     RiskProfileResponse,
     RiskScoreUpdateRequest
 )
@@ -54,6 +55,21 @@ async def get_supplier_endpoint(
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return supplier  # response_model(SupplierBrief)이 ORM→스키마 변환
+
+
+@router.get("/{supplier_id}/detail", response_model=SupplierDetailResponse)
+async def get_supplier_detail_endpoint(
+    supplier_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    협력사 단건 + CTI 상세(provider type별) 조회.
+    supplier_type에 해당하는 detail 1종만 채워져 반환된다.
+    """
+    supplier = await service.get_supplier_detail(db, supplier_id)
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return supplier
 
 
 @router.get("", response_model=List[SupplierBrief])
@@ -93,5 +109,14 @@ async def update_risk_score_endpoint(
     overall_risk_score 갱신 → risk_level 자동 재계산 → RiskProfileUpdated 발행.
     (커밋·발행은 risk_service가 처리. router에서 db.commit() 하지 않는다.)
     """
+    # 입력 검증: 점수는 0~100 범위 (범위 밖이면 422)
+    if not (0 <= request.score <= 100):
+        raise HTTPException(
+            status_code=422, detail="score must be between 0 and 100"
+        )
+    # 존재하지 않는 협력사면 404 (없는 supplier_id로 프로필 생성 방지)
+    if not await service.get_supplier(db, supplier_id):
+        raise HTTPException(status_code=404, detail="Supplier not found")
+
     profile = await service.upsert_risk_score(supplier_id, request.score, db)
     return profile

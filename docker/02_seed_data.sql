@@ -43,20 +43,20 @@ INSERT INTO users (user_id, tenant_id, email, password_hash, name, role) VALUES
 -- 2. 협력사 마스터 (영역 2) — 3종 시나리오 주체
 -- ============================================================
 -- [Happy] 한양셀 제조(주) — 1차 제조사, EU向, 검증 완료
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, supplier_type, tier, completeness_score, status, risk_level, feoc_status) VALUES
-('c1111111-0000-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '한양셀 제조(주)', 'Hanyang Cell Mfg', '한양셀 제조(주)', 'Kim CEO', 'manufacturer', 1, 92, 'supplier_verified', 'low', 'eligible');
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, supplier_type, completeness_score, status, risk_level, feoc_status) VALUES
+('c1111111-0000-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '한양셀 제조(주)', 'Hanyang Cell Mfg', '한양셀 제조(주)', 'Kim CEO', 'manufacturer', 92, 'supplier_verified', 'low', 'eligible');
 
 -- [Sad] Global Mining Corp — 2차 광산, US向, FEOC 위반·신장 인접·고위험
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, ceo_name, supplier_type, tier, completeness_score, status, risk_level, feoc_status) VALUES
-('c2222222-0000-4000-8000-000000000002', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Global Mining Corp', 'Global Mining Corp', 'Zhang CEO', 'miner', 2, 70, 'supplier_violation', 'critical', 'ineligible');
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, ceo_name, supplier_type, completeness_score, status, risk_level, feoc_status) VALUES
+('c2222222-0000-4000-8000-000000000002', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Global Mining Corp', 'Global Mining Corp', 'Zhang CEO', 'miner', 70, 'supplier_violation', 'critical', 'ineligible');
 
 -- [Gray] 대성정밀(주) — 1차 부품, 저신뢰 파싱·검토 대기
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, supplier_type, tier, completeness_score, status, risk_level, feoc_status) VALUES
-('c3333333-0000-4000-8000-000000000003', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '대성정밀(주)', 'Daesung Precision', '대성정밀(주)', 'Lee CEO', 'manufacturer', 1, 55, 'supplier_review', 'medium', 'under_review');
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, supplier_type, completeness_score, status, risk_level, feoc_status) VALUES
+('c3333333-0000-4000-8000-000000000003', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '대성정밀(주)', 'Daesung Precision', '대성정밀(주)', 'Lee CEO', 'manufacturer', 55, 'supplier_review', 'medium', 'under_review');
 
 -- 보조: 전구체 트레이더 (공급망 깊이용)
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, supplier_type, tier, completeness_score, status, risk_level, feoc_status) VALUES
-('c4444444-0000-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Precursor Trading Ltd', 'Precursor Trading Ltd', 'trader', 2, 60, 'supplier_in_progress', 'medium', 'under_review');
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, supplier_type, completeness_score, status, risk_level, feoc_status) VALUES
+('c4444444-0000-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Precursor Trading Ltd', 'Precursor Trading Ltd', 'trader', 60, 'supplier_in_progress', 'medium', 'under_review');
 
 -- view_permissions: ESG 담당자가 1차 협력사(한양셀) 하위까지 열람 (권한 토글 시연용)
 -- (협력사가 모두 정의된 뒤에 둔다 — viewable_supplier_id는 FK는 아니나 정합성 위해 순서 유지)
@@ -165,13 +165,15 @@ INSERT INTO products (product_id, product_code, product_name, manufacturer_id, t
 INSERT INTO bom_versions (bom_version_id, product_id, version_number, status, source_system, external_id) VALUES
 ('e1111111-0000-4000-8000-000000000001', 'd1111111-0000-4000-8000-000000000001', '1.0', 'active', 'ERP_PLM', 'ERP-BOM-0001');
 
--- 5계층 부품 트리 (Pack→Module→Cell→전구체→광물)
+-- 7계층 부품 트리 
 INSERT INTO parts (part_id, part_code, part_name, tier_level, parent_part_id, hs_code, material_type, unit_price, source_system, external_id) VALUES
-('b1111111-0000-4000-8000-000000000001', 'PACK-NCM811', 'Battery Pack',   1, NULL,                                     '850760', 'assembly',  1000.0000, 'ERP_PLM', 'ERP-PART-PACK'),
-('b1111111-0000-4000-8000-000000000002', 'MOD-NCM811',  'Module',         2, 'b1111111-0000-4000-8000-000000000001', '850760', 'assembly',   400.0000, 'ERP_PLM', 'ERP-PART-MOD'),
-('b1111111-0000-4000-8000-000000000003', 'CELL-NCM811', 'Battery Cell',   3, 'b1111111-0000-4000-8000-000000000002', '850760', 'cell',       150.0000, 'ERP_PLM', 'ERP-PART-CELL'),
-('b1111111-0000-4000-8000-000000000004', 'PRE-NCM',     'NCM Precursor',  4, 'b1111111-0000-4000-8000-000000000003', '382490', 'precursor',   40.0000, 'ERP_PLM', 'ERP-PART-PRE'),
-('b1111111-0000-4000-8000-000000000005', 'MIN-LITHIUM', 'Raw Lithium',    5, 'b1111111-0000-4000-8000-000000000004', '283691', 'mineral',     20.0000, 'ERP_PLM', 'ERP-PART-LI');
+('b1111111-0000-4000-8000-000000000001', 'PACK-NCM811', 'Battery Pack',            1, NULL,                                     '850760', 'assembly',        1000.0000, 'ERP_PLM', 'ERP-PART-PACK'),
+('b1111111-0000-4000-8000-000000000002', 'MOD-NCM811',  'Module',                  2, 'b1111111-0000-4000-8000-000000000001', '850760', 'assembly',         400.0000, 'ERP_PLM', 'ERP-PART-MOD'),
+('b1111111-0000-4000-8000-000000000003', 'CELL-NCM811', 'Battery Cell',            3, 'b1111111-0000-4000-8000-000000000002', '850760', 'cell',             150.0000, 'ERP_PLM', 'ERP-PART-CELL'),
+('b1111111-0000-4000-8000-000000000006', 'CAM-NCM811',  'Cathode Active Material', 4, 'b1111111-0000-4000-8000-000000000003', '284190', 'active_material',    90.0000, 'ERP_PLM', 'ERP-PART-CAM'),
+('b1111111-0000-4000-8000-000000000004', 'PRE-NCM',     'NCM Precursor',           5, 'b1111111-0000-4000-8000-000000000006', '382490', 'precursor',          40.0000, 'ERP_PLM', 'ERP-PART-PRE'),
+('b1111111-0000-4000-8000-000000000007', 'REF-LINI',    'Refined Li/Ni Salt',      6, 'b1111111-0000-4000-8000-000000000004', '283691', 'refined_metal',      30.0000, 'ERP_PLM', 'ERP-PART-REF'),
+('b1111111-0000-4000-8000-000000000005', 'MIN-LITHIUM', 'Raw Lithium Ore',         7, 'b1111111-0000-4000-8000-000000000007', '253090', 'mineral',            20.0000, 'ERP_PLM', 'ERP-PART-LI');
 
 INSERT INTO bom_items (bom_version_id, part_id, required_quantity, required_quantity_unit, percentage, direct_material_cost, origin_country, source_system, external_id) VALUES
 ('e1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000003', 100, 'ea', 60.00, 150.0000, 'KR', 'ERP_PLM', 'ERP-BI-CELL'),
@@ -191,15 +193,17 @@ INSERT INTO manufacturing_process (part_id, sequence_no, process_name, is_outsou
 -- ============================================================
 -- 8. 공급망 맵 (영역 8) — 원청→한양→Global Mining, 한양→대성/트레이더
 -- ============================================================
-INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, link_status, source_system, verification_status) VALUES
+INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status) VALUES
 -- 원청 → 한양셀 (셀 납품, 확정)
-('5c111111-0000-4000-8000-000000000001', 'e1111111-0000-4000-8000-000000000001', NULL,                                     'c1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000003', 'supplychain_confirmed', 'ERP',             'verified'),
+('5c111111-0000-4000-8000-000000000001', 'e1111111-0000-4000-8000-000000000001', NULL,                                     'c1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000003', 1, 'supplychain_confirmed', 'ERP',             'verified'),
+-- 원청 → 한양셀 (Pack 겸 — dual render: 한양셀이 셀+팩 2품목)
+('5c111111-0000-4000-8000-000000000005', 'e1111111-0000-4000-8000-000000000001', NULL,                                     'c1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000001', 1, 'supplychain_confirmed', 'ERP',             'verified'),
 -- 한양셀 → Global Mining (리튬 납품, 확정)
-('5c222222-0000-4000-8000-000000000002', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c2222222-0000-4000-8000-000000000002', 'b1111111-0000-4000-8000-000000000005', 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified'),
+('5c222222-0000-4000-8000-000000000002', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c2222222-0000-4000-8000-000000000002', 'b1111111-0000-4000-8000-000000000005', 2, 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified'),
 -- 한양셀 → 대성정밀 (모듈, 선언만 — Gray)
-('5c333333-0000-4000-8000-000000000003', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c3333333-0000-4000-8000-000000000003', 'b1111111-0000-4000-8000-000000000002', 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified'),
+('5c333333-0000-4000-8000-000000000003', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c3333333-0000-4000-8000-000000000003', 'b1111111-0000-4000-8000-000000000002', 2, 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified'),
 -- 한양셀 → 트레이더 (전구체, 선언만)
-('5c444444-0000-4000-8000-000000000004', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c4444444-0000-4000-8000-000000000004', 'b1111111-0000-4000-8000-000000000004', 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified');
+('5c444444-0000-4000-8000-000000000004', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c4444444-0000-4000-8000-000000000004', 'b1111111-0000-4000-8000-000000000004', 2, 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified');
 
 -- 분할 납품 비율
 INSERT INTO supply_ratio (map_id, factory_id, ratio_percentage, volume, unit) VALUES
