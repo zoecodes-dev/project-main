@@ -451,3 +451,54 @@ class RiskProfileResponse(BaseModel):
 
 class RiskScoreUpdateRequest(BaseModel):
     score: int
+
+
+# ----- CTI 상세 응답 DTO (목요일: provider type별 상세 노출) -----
+class ManufacturerDetailDTO(BaseModel):
+    manufacturing_process: Optional[str] = None
+    energy_source: Optional[str] = None
+    capacity: Optional[str] = None
+    carbon_intensity: Optional[float] = None
+    model_config = {"from_attributes": True}
+
+
+class RecyclerDetailDTO(BaseModel):
+    recycled_materials: Optional[dict] = None
+    recycling_certification: Optional[str] = None
+    input_source: Optional[str] = None
+    recycled_content_ratio: Optional[float] = None
+    model_config = {"from_attributes": True}
+
+
+class TraderDetailDTO(BaseModel):
+    trading_license: Optional[str] = None
+    broker_certification: Optional[str] = None
+    disclosure_completeness: Optional[float] = None
+    model_config = {"from_attributes": True}
+
+
+class MinerDetailDTO(BaseModel):
+    mine_name: Optional[str] = None
+    mining_method: Optional[str] = None
+    extraction_volume: Optional[float] = None
+    active_period_from: Optional[date] = None
+    model_config = {"from_attributes": True}
+
+
+class SupplierDetailResponse(BaseModel):
+    """
+    단건 상세 — 기본 필드 + provider type에 해당하는 CTI 1종만 채워 반환.
+    supplier_type에 맞지 않는 detail은 None(예: manufacturer면 miner_detail=None).
+    """
+    supplier_id: uuid.UUID
+    company_name: str
+    supplier_type: str
+    tier: Optional[int] = None
+    status: str
+    risk_level: str
+    feoc_status: str
+    manufacturer_detail: Optional[ManufacturerDetailDTO] = None
+    recycler_detail: Optional[RecyclerDetailDTO] = None
+    trader_detail: Optional[TraderDetailDTO] = None
+    miner_detail: Optional[MinerDetailDTO] = None
+    model_config = {"from_attributes": True}

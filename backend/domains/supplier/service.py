@@ -91,6 +91,35 @@ async def get_supplier(db: AsyncSession, supplier_id: UUID) -> Optional[Supplier
     return await repository.get_supplier_by_id(db, supplier_id)
 
 
+# supplier_type → 채워야 할 CTI relationship 속성명 매핑
+_CTI_ATTR_BY_TYPE = {
+    "manufacturer": "manufacturer_detail",
+    "recycler": "recycler_detail",
+    "trader": "trader_detail",
+    "miner": "miner_detail",
+}
+
+
+async def get_supplier_detail(db: AsyncSession, supplier_id: UUID) -> Optional[Supplier]:
+    """
+    단건 상세 조회 (CTI 상세 포함). repository가 selectinload로 4종 CTI를 미리 로드한다.
+    [목요일 연결 점검] provider type과 실제 적재된 CTI가 불일치하면 경고 로그를 남긴다
+    (예: supplier_type='manufacturer'인데 manufacturer_detail이 없음 = 자료 미수집).
+    엣지 케이스를 삼키지 않고 드러내기 위한 점검이며, 응답 자체는 정상 반환한다.
+    """
+    supplier = await repository.get_supplier_by_id(db, supplier_id)
+    if supplier is None:
+        return None
+
+    expected_attr = _CTI_ATTR_BY_TYPE.get(supplier.supplier_type)
+    if expected_attr is not None and getattr(supplier, expected_attr, None) is None:
+        print(
+            f"[CTI 점검] supplier {supplier_id} type={supplier.supplier_type} "
+            f"이지만 {expected_attr} 미적재 (자료 미수집 가능)"
+        )
+    return supplier
+
+
 async def list_suppliers(
     db: AsyncSession,
     status: Optional[str] = None,
