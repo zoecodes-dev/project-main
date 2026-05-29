@@ -79,7 +79,6 @@ CREATE TABLE suppliers (
     website             VARCHAR(255),
     supplier_type       VARCHAR(30) NOT NULL
         CONSTRAINT chk_supplier_type CHECK (supplier_type IN ('manufacturer', 'recycler', 'trader', 'miner')),
-    tier                INT,
     parent_supplier_id  UUID REFERENCES suppliers(supplier_id),
     established_year    INT,
     employee_count      INT,
@@ -417,7 +416,7 @@ CREATE TABLE parts (
     part_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     part_code        VARCHAR(50) UNIQUE NOT NULL,
     part_name        VARCHAR(255),
-    tier_level       INT, -- 1(Pack) ~ 5(Mineral)
+    tier_level       INT, -- 1(Pack) 2(Module) 3(Cell) 4(활물질/CAM) 5(전구체) 6(제련·정제) 7(광산). 분리막/전해질은 material_type
     parent_part_id   UUID REFERENCES parts(part_id),
     
     -- [위상 조정] 세번변경 FTA 계산용이 아닌, 단순 통관 및 특정 HS코드 규제 필터링용으로 용도 변경
@@ -490,6 +489,7 @@ CREATE TABLE supply_chain_map (
     parent_supplier_id UUID REFERENCES suppliers(supplier_id),
     child_supplier_id  UUID REFERENCES suppliers(supplier_id), -- 미발견 시 NULL 허용
     part_id            UUID REFERENCES parts(part_id),
+    hop_level          INT,  -- 차수 SSOT: 원청(parent NULL)=1 기준 hop. (구 suppliers.tier 대체)
     po_number          VARCHAR(50),
     invoice_number     VARCHAR(50),
     supply_period_from DATE,
@@ -852,7 +852,8 @@ SELECT
     s.company_name,
     s.company_name_en,
     s.supplier_type,
-    s.tier,
+    scm.hop_level,
+    p.tier_level        AS bom_depth,
     s.status            AS supplier_status,
     s.risk_level,
     s.feoc_status,
@@ -878,6 +879,8 @@ SELECT
 FROM supply_chain_map scm
 JOIN suppliers s
     ON s.supplier_id = scm.child_supplier_id
+LEFT JOIN parts p
+    ON p.part_id = scm.part_id
 LEFT JOIN supplier_factories sf
     ON sf.supplier_id = s.supplier_id AND sf.is_active = TRUE
 LEFT JOIN data_request_log drl
@@ -953,7 +956,7 @@ FROM hitl_reviews;
 
 -- 1) 협력사 및 지리 쿼리 인덱스
 CREATE INDEX idx_suppliers_type          ON suppliers(supplier_type);
-CREATE INDEX idx_suppliers_tier          ON suppliers(tier);
+CREATE INDEX idx_scm_hop_level           ON supply_chain_map(hop_level);
 CREATE INDEX idx_suppliers_parent        ON suppliers(parent_supplier_id);
 CREATE INDEX idx_suppliers_status        ON suppliers(status);
 CREATE INDEX idx_suppliers_risk_level    ON suppliers(risk_level);
