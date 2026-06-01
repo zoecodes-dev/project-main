@@ -370,7 +370,7 @@ class ProductRepository:
                    AND bi.bom_version_id = :bom_version_id
                 LEFT JOIN supply_chain_map scm
                     ON scm.part_id        = p.part_id
-+                  AND scm.bom_version_id = :bom_version_id   
+                  AND scm.bom_version_id = :bom_version_id   
                 JOIN bom_tree bt
                     ON p.parent_part_id  = bt.part_id
                 WHERE bt.depth < 5

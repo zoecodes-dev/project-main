@@ -163,7 +163,6 @@ class Product(Base):
     # schema.sql 일괄수정 대상 — 컬럼 추가 후 migration 필요
     # ------------------------------------------------------------------
     source_system = Column(
-        String(50),
         String(100),
         nullable=True,
         comment=(
@@ -174,7 +173,6 @@ class Product(Base):
     )
 
     external_id = Column(
-        String(100),
         String(255),
         nullable=True,
         comment=(
@@ -345,7 +343,6 @@ class BomVersion(Base):
     # [결정 #1] 외부 원천 추적 컬럼 3종 (products와 동일 패턴)
     # ------------------------------------------------------------------
     source_system = Column(
-        String(50),
         String(100),
         nullable=True,
         comment=(
@@ -356,7 +353,6 @@ class BomVersion(Base):
     )
 
     external_id = Column(
-        String(100),
         String(255),
         nullable=True,
         comment=(
@@ -899,7 +895,7 @@ class BomTreeResponse(BaseModel):
     bom_version: str
     bom_status: str
     only_confirmed: bool   # 결정 #2 반영: 응답에 필터 조건 명시
-    tree: Dict[str, Any]
+    tree: Optional[Dict[str, Any]] = None
 
     model_config = {"from_attributes": False}
 
