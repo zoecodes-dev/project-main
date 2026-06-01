@@ -16,5 +16,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 나머지 소스 전체 복사 (build context = backend/)
 COPY . .
 
-# 개발 모드: backend 루트의 main.py를 바라봄. --reload로 코드 수정 시 자동 재시작
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# 배포 모드: --reload 제거, worker 2개로 동시 요청 처리
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
