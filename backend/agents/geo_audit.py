@@ -81,5 +81,5 @@ async def geo_audit_node(state: BatchState) -> BatchState:
     return {
         **state,
         "geo_result": {"high_risk_factories": []},
-        "current_stage": "geo_analysis",
+        "current_stage": "stage_geo",
     }

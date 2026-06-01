@@ -203,3 +203,11 @@ class SupplyChainRepository:
             "radius": radius_meters,
         })
         return [dict(row._mapping) for row in result]
+
+    @trace_tool("coordinate_authenticity")
+    async def check_coordinate_authenticity(self, db: AsyncSession) -> List[Dict]:
+        """
+        W3 화요일: ST_Within 으로 좌표가 country 경계 안에 있는지 대조
+        오늘은 빈 리스트 반환 (호출이 안 깨지게)
+        """
+        return []
