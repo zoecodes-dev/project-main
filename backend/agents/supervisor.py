@@ -11,7 +11,10 @@ def route(state: "BatchState") -> str:
     결정론적 Pipeline Coordinator 라우터다.
     """
     if state.get("applicable_regulations") is None:
-        from backend.agents.compliance import REGULATION_BY_DESTINATION
+        try:
+            from backend.agents.compliance import REGULATION_BY_DESTINATION
+        except ImportError:
+            REGULATION_BY_DESTINATION = {}
 
         destination = state.get("destination")
         state["applicable_regulations"] = REGULATION_BY_DESTINATION.get(destination, [])
