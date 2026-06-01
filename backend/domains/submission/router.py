@@ -48,7 +48,7 @@ async def list_data_requests_endpoint(
 async def create_data_request_endpoint(req: DataRequestCreateRequest, db: AsyncSession = Depends(get_db)):
     """
     [API] POST /data-requests
-    새로운 공급망 데이터 제출 요청을 생성하고, 초기 상태 전이(PENDING -> REQUESTED)를 수행합니다.
+    새로운 공급망 데이터 제출 요청을 생성하고, 초기 상태(submission_requested)로 설정합니다.
     - 비즈니스 로직(service.py)에 처리를 위임하여 컨트롤러 역할을 수행합니다.
     - 도메인 계층에서 발생한 ValueError(무결성 위반 등)를 HTTP 422 상태 코드로 매핑하여
       도메인 계층이 웹 프레임워크(FastAPI)에 의존하지 않고 안전하게 에러를 처리하도록 설계되었습니다.
@@ -135,7 +135,7 @@ async def rework_data_request_endpoint(request_id: uuid.UUID, req: ActionDataReq
     """
     [API] POST /data-requests/{request_id}/rework
     협력사에게 제출 데이터 보완을 요청합니다 (포털 재수정 오픈).
-    - 상태 전이: REVIEW -> REWORK
+    - 상태 전이: submission_review -> submission_rework
     """
     if not req.reason:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="보완 요청 시 사유(reason)는 필수입니다.")

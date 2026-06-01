@@ -45,7 +45,7 @@ async def create_and_request_submission(
     [로직 흐름]
     1. DB 삽입: 허용값인 REQUESTED 상태로 마스터(DataRequestLog) 레코드를 안전하게 초기 생성합니다.
        (IntegrityError 발생 시 422 에러로 변환해 프레임워크 예외 처리를 돕습니다.)
-    2. 히스토리 기록: PENDING 상태가 제거되었으므로, 생성 즉시 첫 번째 History를 수동으로 남깁니다.
+    2. 히스토리 기록: 생성 즉시 첫 번째 History를 수동으로 남깁니다.
     3. 이벤트 발행: 모든 트랜잭션이 성공한 후 'SubmissionRequested' 이벤트를 발행합니다.
        (규칙 준수: db 인자 없이 2-인자로 publish를 호출하여 외부 도메인/Notification과 결합도를 낮춥니다.)
     """

@@ -55,4 +55,4 @@ async def trigger_dummy_feoc_rule(req: FEOCDummyRequest, db: AsyncSession = Depe
         # [수정] 중복 enqueue 호출 제거.
         # verify_feoc_rule 서비스 함수가 내부적으로 위반 시 Queue 적재 및 이벤트 발행을
         # 모두 처리하므로, 라우터에서는 결과만 반환합니다.
-        return {"status": "violation", "message": "FEOC 규제 위반 (25% 이상) - 후속 작업이 비동기 처리됩니다."}
+        return {"status": "compliance_violation", "message": "FEOC 규제 위반 (25% 이상) - 후속 작업이 비동기 처리됩니다."}

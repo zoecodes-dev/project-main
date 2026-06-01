@@ -15,8 +15,8 @@ from backend.events.types import (
 async def verify_feoc_rule(db: AsyncSession, batch_id: uuid.UUID, supplier_id: uuid.UUID, direct_ownership: float, indirect_ownership: float = 0.0) -> bool:
     """
     [Verification Engine] FEOC 지분율 규제 심사
-    - Decision #4 반영: 직접 지분 25% 이상은 즉시 위반(violation)
-    - 간접/합산 지분 25% 이상은 위반 + gray_zone (HITL 사람 확인 필요)
+    - Decision #4 반영: 직접 지분 25% 이상은 즉시 위반(compliance_violation) 처리
+    - 간접/합산 지분 25% 이상은 위반 + needs_human_review (HITL 사람 확인 필요)
     """
     await publish("VerificationStarted", dataclasses.asdict(VerificationStartedEvent(batch_id=batch_id, rules_applied=["FEOC"], event_name="VerificationStarted")))
 
@@ -47,7 +47,7 @@ async def verify_feoc_rule(db: AsyncSession, batch_id: uuid.UUID, supplier_id: u
             direct_ownership=direct_ownership, 
             indirect_ownership=indirect_ownership, 
             reason=reason,
-            gray_zone=needs_human_review,
+            needs_human_review=needs_human_review,
             job_id=f"feoc_violation_{batch_id}_{supplier_id}"
         )
         await publish("VerificationFailed", dataclasses.asdict(VerificationFailedEvent(batch_id=batch_id, violated_rules=["FEOC"], event_name="VerificationFailed")))

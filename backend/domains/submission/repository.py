@@ -16,7 +16,6 @@ from backend.domains.submission.models import DataRequestLog, DataCompletenessSt
 async def create_data_request(db: AsyncSession, log_record: DataRequestLog) -> DataRequestLog:
     """
     [INSERT] 새로운 공급망 데이터 요청(DataRequestLog) 마스터 기록을 DB에 삽입합니다.
-    * 주의: 초기 PENDING 상태 삽입 목적으로만 사용합니다.
     * 주의: 초기 REQUESTED 상태 삽입 목적으로만 사용합니다.
       이후의 상태 전이(UPDATE)는 반드시 state_machine.py의 transition_submission()을 거쳐야 
       submission_status_history에 감사 이력이 남습니다.
