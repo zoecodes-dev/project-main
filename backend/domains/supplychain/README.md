@@ -24,6 +24,11 @@
 - **국가 정합성**: 신고된 국가(`country`)와 좌표(`location`)의 실제 일치 여부 검증.
 - **EUDR 산림 훼손**: 고위험 지역 좌표 대조 및 위성 데이터 분석 에이전트 연동.
 
+#### 🛡️ 모의 Sad Path 검출 로그 (W3 화요일)
+- **시나리오**: 베트남(VN)으로 신고된 위장 조립 공장이 실제로는 중국 광둥성 인근 좌표를 제출한 상황 모의.
+- **결과**: `check_coordinate_authenticity` 쿼리 실행 결과, `ST_Within` 판정에서 `country_match: False` 검출 완료.
+- **후속 작용**: 시스템이 즉시 `GeoRiskDetected(risk_type="country_mismatch")` 이벤트를 발행하여 감사 로그 기록 및 리스크 +30점 유발 검증 성공.
+
 ## 6. 발행 이벤트 (events/types.py 정의 준수)
 | 이벤트명 | 발생 시점 | 수신 도메인 |
 | :--- | :--- | :--- |
