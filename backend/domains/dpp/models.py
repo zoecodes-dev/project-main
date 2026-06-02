@@ -22,7 +22,7 @@ class DppRecord(Base):
     product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("products.product_id"), nullable=True)
     
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=True)  # 허용값: 'issued', 'revoked' (schema.sql 기준)
+    status: Mapped[str] = mapped_column(String(20), nullable=True)  # 허용값: 'dpp_issued', 'dpp_revoked' (schema.sql 기준)
     
     carbon_footprint: Mapped[float] = mapped_column(Numeric(10, 4), nullable=True)
     recycled_content: Mapped[dict] = mapped_column(JSONB, nullable=True)

@@ -34,7 +34,7 @@ async def issue_dpp_endpoint(
 ):
     """
     [API] POST /dpp/{dpp_id}/issue
-    DPP를 'issued' 상태로 발행해요.
+    DPP를 'dpp_issued' 상태로 발행해요.
     (발행 후에는 이중 가드가 작동해서 절대 수정할 수 없게 돼요.)
     """
     try:
@@ -52,7 +52,7 @@ async def revoke_dpp_endpoint(
 ):
     """
     [API] POST /dpp/{dpp_id}/revoke
-    DPP를 'revoked' (폐기) 상태로 전이시켜요.
+    DPP를 'dpp_revoked' (폐기) 상태로 전이시켜요.
     """
     try:
         return await revoke_dpp(db, dpp_id)
