@@ -207,7 +207,37 @@ class SupplyChainRepository:
     @trace_tool("coordinate_authenticity")
     async def check_coordinate_authenticity(self, db: AsyncSession) -> List[Dict]:
         """
-        W3 화요일: ST_Within 으로 좌표가 country 경계 안에 있는지 대조
-        오늘은 빈 리스트 반환 (호출이 안 깨지게)
+        공장 좌표(location)가 신고된 국가(country)의 폴리곤 경계 안에 위치하는지 대조.
+        실제 운영 환경에서는 국가별 다각형(MultiPolygon) 테이블과 JOIN하지만,
+        현재 시연을 위해 CTE로 주요 국가의 바운딩 박스(ST_MakeEnvelope)를 임시 구성하여 검증합니다.
         """
-        return []
+        query = text("""
+            WITH mock_country_boundaries AS (
+                -- 시연용 주요 국가 바운딩 박스 (BBOX - MinX, MinY, MaxX, MaxY)
+                -- 중국(CN), 베트남(VN), 한국(KR), 미국(US)
+                SELECT 'CN' AS country_code, ST_MakeEnvelope(73.0, 18.0, 135.0, 53.0, 4326) AS geom UNION ALL
+                SELECT 'VN' AS country_code, ST_MakeEnvelope(102.0, 8.0, 109.0, 23.0, 4326) AS geom UNION ALL
+                SELECT 'KR' AS country_code, ST_MakeEnvelope(124.0, 33.0, 132.0, 39.0, 4326) AS geom UNION ALL
+                SELECT 'US' AS country_code, ST_MakeEnvelope(-125.0, 24.0, -66.0, 49.0, 4326) AS geom
+            )
+            SELECT
+                sf.factory_id,
+                s.supplier_id,
+                s.company_name,
+                ST_AsGeoJSON(sf.location) AS coordinates,
+                sf.country,
+                CASE
+                    -- 경계 데이터가 정의된 국가라면 내부에 있는지 ST_Within으로 판정
+                    WHEN mb.geom IS NOT NULL THEN ST_Within(sf.location, mb.geom)
+                    -- 경계 데이터가 없는 국가는 시나리오 진행을 위해 임시로 True 처리
+                    ELSE TRUE
+                END AS country_match
+            FROM supplier_factories sf
+            JOIN suppliers s ON sf.supplier_id = s.supplier_id
+            LEFT JOIN mock_country_boundaries mb ON sf.country = mb.country_code
+            WHERE sf.is_active = TRUE 
+              AND sf.location IS NOT NULL;
+        """)
+        # session은 의존성 주입된 self.session 사용. 인자 db는 상위 서비스 호출 호환을 위해 유지합니다.
+        result = await self.session.execute(query)
+        return [dict(row._mapping) for row in result]
