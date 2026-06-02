@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agents.state import BatchState
 from backend.infrastructure.trace import trace_node, trace_tool
+from backend.domains.supplychain.repository import SupplyChainRepository
+from backend.domains.supplychain.service import SupplyChainService
 
 # 신장 위구르 자치구 경계 (SRID 4326)
 XINJIANG_REGION_WKT = (
@@ -72,14 +74,23 @@ async def verify_coordinates_authenticity(
 
 
 @trace_node("geo_audit", "agent")
-async def geo_audit_node(state: BatchState) -> BatchState:
+async def geo_audit_node(state: BatchState, db: AsyncSession) -> BatchState:
     """
     배치의 모든 공장 좌표를 검사하고 결과를 state에 기록.
     고위험 발견 시 GeoRiskDetected 발행은 service 계층에 위임.
-    W1: 단계 전이만. 실제 좌표 루프는 W3.
     """
+    batch_id = state.get("batch_id")
+    
+    repo = SupplyChainRepository(db)
+    service = SupplyChainService(repo)
+    
+    # 실제 좌표 루프 및 고위험 지역 검사 수행 (리스크 큐 적재 포함)
+    detected_risks = await service.execute_geo_audit(db, batch_id=batch_id)
+    
     return {
         **state,
-        "geo_result": {"high_risk_factories": []},
+        "geo_result": {
+            "high_risk_factories": detected_risks
+        },
         "current_stage": "stage_geo",
     }

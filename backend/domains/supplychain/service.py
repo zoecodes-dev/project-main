@@ -68,7 +68,7 @@ class SupplyChainService:
 
     # ---------- Geo Audit ----------
     @trace_node("geo_audit_execute", "agent")
-    async def execute_geo_audit(self, db: AsyncSession) -> List[Dict[str, Any]]:
+    async def execute_geo_audit(self, db: AsyncSession, batch_id: str | None = None) -> List[Dict[str, Any]]:
         """
         공장 위치 기반 Geo Audit 수행. 고위험 지역(신장 등) 판정 시
         GeoRiskDetected 이벤트를 발행한다.
@@ -81,7 +81,7 @@ class SupplyChainService:
         for result in audit_results:
             if result.get("is_in_risk_zone"):
                 event = GeoRiskDetectedEvent(
-                    batch_id=None,
+                    batch_id=batch_id,
                     factory_id=result["factory_id"],
                     risk_type="xinjiang",
                     supplier_id=result["supplier_id"],
@@ -94,7 +94,7 @@ class SupplyChainService:
         for result in mismatch_results:
             if not result.get("country_match"):
                 event = GeoRiskDetectedEvent(
-                    batch_id=None,
+                    batch_id=batch_id,
                     factory_id=result["factory_id"],
                     risk_type="country_mismatch",
                     supplier_id=result["supplier_id"],

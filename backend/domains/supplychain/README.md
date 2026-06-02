@@ -43,9 +43,7 @@
 - 모든 상태 변경 및 주요 쿼리 실행 시 `@trace_node`, `@trace_tool` 적용 필수.
 - PostGIS 공간 함수 사용 시 반드시 `SRID 4326`(WGS84) 기준 준수.
 
-## 9. 트러블슈팅 및 리팩토링 내역 (W3 Day1)
-
-W3 Day1 작업으로 기존 파이프라인 결함을 수정하고 상태 전이를 정상화했습니다.
-
-* **[버그 1] 라우팅 단절 해결**: `agents/geo_audit.py`의 반환 상태값 오타(`geo_analysis`)로 인해 LangGraph의 Supervisor 라우팅이 단절되던 문제를, 정식 허용 상태인 `stage_geo`로 수정하여 그래프가 정상적으로 다음 노드로 전이되도록 조치했습니다.
-* **[버그 2] AttributeError 방어**: `service.py`에서 호출 중이던 좌표-국가 불일치 검사 함수 `check_coordinate_authenticity`가 `repository.py`에 누락되어 파이프라인이 멈추는 현상을 수정했습니다. 리포지토리에 `@trace_tool("coordinate_authenticity")`가 적용된 뼈대 함수를 신설하고 빈 리스트를 반환하여 호출 단절을 막았으며, 실제 PostGIS 검증 로직은 후속 작업으로 채울 예정입니다.
+## 9. W3 구현 진행 현황 (Geo Audit 노드 그래프 결합)
+- [x] Day 1: 버그 2개 수정 (`geo_analysis` → `stage_geo` / `check_coordinate_authenticity` 깡통 호출 우회 해결)
+- [x] Day 2: 좌표-국가 불일치 검사 PostGIS 동작 확인 완료
+- [x] Day 3: `geo_audit` 노드 LangGraph 파이프라인 결합 및 `GeoRiskDetected` 원자적 발행(`publish`+`enqueue`) 통합 적용 완료
