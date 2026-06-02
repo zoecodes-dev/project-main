@@ -7,6 +7,7 @@ startup 시 PostGIS/pgvector 확장을 검증하고, 각 도메인 라우터를 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import PlaintextResponse
 
 from backend.infrastructure.database import verify_extensions
 from backend.domains.supplychain.router import router as supplychain_router
@@ -47,3 +48,12 @@ app.include_router(dpp_router)
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "message": "KIRA Backend is running"}
+
+WELCOME_MSG = """
+ /\_/\   Welcome Home !
+( o.o )  FastAPI is running...
+"""
+
+@app.get("/", response_class=PlaintextResponse)
+def read_root():
+    return WELCOME_MSG
