@@ -1,10 +1,29 @@
+from dataclasses import asdict
+from uuid import UUID
+
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, StateGraph
+from langgraph.types import interrupt
+
 from backend.agents.state import BatchState
 from backend.agents.supervisor import route
-from langgraph.graph import END, StateGraph
+from backend.domains.audit import repository
+from backend.domains.audit.state_machine import (
+    pause_batch_for_review,
+    resume_batch_processing,
+)
+from backend.events.types import HITLRequestedEvent
+from backend.infrastructure.database import AsyncSessionLocal
+from backend.infrastructure.event_bus import publish
+from backend.infrastructure.trace import trace_node
 
 
 def supervisor_node(state: BatchState) -> BatchState:
     return {**state}
+
+
+def route_batch(state: BatchState) -> str:
+    return route(state)
 
 
 def placeholder_node(next_stage: str):
@@ -14,27 +33,105 @@ def placeholder_node(next_stage: str):
     return advance_stage
 
 
-def stop_placeholder_node(state: BatchState) -> BatchState:
-    return {**state}
+def _batch_id(state: BatchState) -> UUID:
+    value = state.get("batch_id")
+    if value is None:
+        raise ValueError("batch_id is required")
+    return UUID(value)
 
 
-graph = StateGraph(BatchState)
-graph.add_node("supervisor", supervisor_node)
-graph.add_node("data_gateway", placeholder_node("stage_extraction"))
-graph.add_node("verification", placeholder_node("stage_verification"))
-graph.add_node("geo_audit", placeholder_node("stage_geo"))
-graph.add_node("compliance", placeholder_node("stage_compliance"))
-graph.add_node("risk_scoring", placeholder_node("stage_risk"))
-graph.add_node("readiness", placeholder_node("stage_readiness"))
-graph.add_node("issuance", placeholder_node("stage_issuance"))
-graph.add_node("supplier_reverify", stop_placeholder_node)
-graph.add_node("hitl_interrupt", stop_placeholder_node)
-graph.add_node("completed", stop_placeholder_node)
+async def _pause_batch(batch_id: UUID) -> None:
+    async with AsyncSessionLocal() as db:
+        await pause_batch_for_review(db, batch_id)
+        await db.commit()
 
-graph.set_entry_point("supervisor")
-graph.add_conditional_edges(
+
+async def _resume_batch(batch_id: UUID) -> None:
+    async with AsyncSessionLocal() as db:
+        await resume_batch_processing(db, batch_id)
+        await db.commit()
+
+
+@trace_node(node_name="hitl_interrupt", node_type="human")
+async def hitl_interrupt_node(state: BatchState) -> BatchState:
+    batch_id = _batch_id(state)
+    trigger_stage = state["current_stage"]
+    reason = (
+        "risk_escalated"
+        if state.get("error_reason") == "risk_escalated"
+        else "gray_zone"
+    )
+    paused_state: BatchState = {**state, "batch_status": "batch_hitl_wait"}
+
+    async with AsyncSessionLocal() as db:
+        await pause_batch_for_review(db, batch_id)
+        review_id, created = await repository.create_pending_hitl_review(
+            db,
+            batch_id=batch_id,
+            reason=reason,
+            trigger_stage=trigger_stage,
+        )
+        await db.commit()
+
+    if created:
+        event = HITLRequestedEvent(batch_id=batch_id, reason=reason)
+        await publish(event.event_name, asdict(event))
+
+    response = interrupt(
+        {
+            "type": "hitl_review",
+            "review_id": str(review_id),
+            "batch_id": str(batch_id),
+            "reason": reason,
+            "trigger_stage": trigger_stage,
+            "batch_status": "batch_hitl_wait",
+        }
+    )
+    if not isinstance(response, dict) or response.get("event_name") != "HITLApproved":
+        raise ValueError("HITLApproved response is required to resume the batch")
+
+    await _resume_batch(batch_id)
+    return {**paused_state, "batch_status": "batch_processing"}
+
+
+@trace_node(node_name="supplier_reverify", node_type="human")
+async def supplier_reverify_node(state: BatchState) -> BatchState:
+    batch_id = _batch_id(state)
+    trigger_stage = state["current_stage"]
+    paused_state: BatchState = {**state, "batch_status": "batch_hitl_wait"}
+
+    await _pause_batch(batch_id)
+    interrupt(
+        {
+            "type": "supplier_reverify",
+            "batch_id": str(batch_id),
+            "reason": "low_confidence",
+            "trigger_stage": trigger_stage,
+            "batch_status": "batch_hitl_wait",
+        }
+    )
+
+    await _resume_batch(batch_id)
+    return {**paused_state, "batch_status": "batch_processing"}
+
+
+builder = StateGraph(BatchState)
+builder.add_node("supervisor", supervisor_node)
+builder.add_node("data_gateway", placeholder_node("stage_extraction"))
+builder.add_node("verification", placeholder_node("stage_verification"))
+builder.add_node("geo_audit", placeholder_node("stage_geo"))
+builder.add_node("compliance", placeholder_node("stage_compliance"))
+builder.add_node("risk_scoring", placeholder_node("stage_risk"))
+builder.add_node("readiness", placeholder_node("stage_readiness"))
+builder.add_node("issuance", placeholder_node("stage_issuance"))
+builder.add_node("supplier_reverify", supplier_reverify_node)
+builder.add_node("hitl_interrupt", hitl_interrupt_node)
+builder.add_node("completed", supervisor_node)
+
+builder.set_entry_point("supervisor")
+builder.add_conditional_edges(
     "supervisor",
-    route,
+    route_batch,
     {
         "data_gateway": "data_gateway",
         "verification": "verification",
@@ -58,8 +155,11 @@ for node_name in (
     "readiness",
     "issuance",
 ):
-    graph.add_edge(node_name, "supervisor")
+    builder.add_edge(node_name, "supervisor")
 
-graph.add_edge("supplier_reverify", END)
-graph.add_edge("hitl_interrupt", END)
-graph.add_edge("completed", END)
+builder.add_edge("supplier_reverify", END)
+builder.add_edge("hitl_interrupt", END)
+builder.add_edge("completed", END)
+
+# Development checkpoint storage. Production should replace this with a durable saver.
+graph = builder.compile(checkpointer=InMemorySaver())
