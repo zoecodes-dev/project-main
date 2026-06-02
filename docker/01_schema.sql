@@ -241,6 +241,9 @@ CREATE TABLE supplier_risk_profiles (
     supplier_id             UUID REFERENCES suppliers(supplier_id) ON DELETE CASCADE,
     overall_risk_score      INT DEFAULT 0, -- 가점식 0 ~ 100점 점수계 (↑위험)
     risk_level              VARCHAR(20) DEFAULT 'low' CONSTRAINT chk_profile_risk CHECK (risk_level IN ('low', 'medium', 'high', 'critical')),
+    -- [B 속성 상태] 협력사 자가평가 리스크 레벨 (Reliability Score 계산 시 시스템 risk_level과 비교)
+    self_reported_risk_level VARCHAR(20) DEFAULT 'unknown' CONSTRAINT chk_self_risk CHECK (self_reported_risk_level IN ('low', 'medium', 'high', 'critical', 'unknown')),
+
     feoc_status             VARCHAR(20) DEFAULT 'unknown' CONSTRAINT chk_profile_feoc CHECK (feoc_status IN ('eligible', 'ineligible', 'under_review', 'unknown')),
     feoc_direct_ownership   NUMERIC(5,2),
     feoc_indirect_ownership NUMERIC(5,2),
