@@ -57,3 +57,51 @@ async def list_full_chain(db: AsyncSession, batch_id: UUID) -> list[AuditTrail]:
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def create_pending_hitl_review(
+    db: AsyncSession,
+    batch_id: UUID,
+    reason: str,
+    trigger_stage: str,
+) -> tuple[UUID, bool]:
+    """
+    Create one pending HITL review for an interrupted stage.
+
+    LangGraph restarts an interrupted node from its beginning on resume, so the
+    lookup keeps that replay from inserting a duplicate review row.
+    """
+    stmt = text(
+        """
+        WITH existing AS (
+            SELECT review_id
+            FROM hitl_reviews
+            WHERE batch_id = :batch_id
+              AND reason = :reason
+              AND trigger_stage = :trigger_stage
+              AND status IN ('hitl_pending', 'hitl_in_review')
+            ORDER BY created_at DESC
+            LIMIT 1
+        ),
+        inserted AS (
+            INSERT INTO hitl_reviews (batch_id, reason, trigger_stage, status)
+            SELECT :batch_id, :reason, :trigger_stage, 'hitl_pending'
+            WHERE NOT EXISTS (SELECT 1 FROM existing)
+            RETURNING review_id
+        )
+        SELECT review_id, TRUE AS created FROM inserted
+        UNION ALL
+        SELECT review_id, FALSE AS created FROM existing
+        LIMIT 1
+        """
+    )
+    result = await db.execute(
+        stmt,
+        {
+            "batch_id": str(batch_id),
+            "reason": reason,
+            "trigger_stage": trigger_stage,
+        },
+    )
+    row = result.one()
+    return row.review_id, row.created
