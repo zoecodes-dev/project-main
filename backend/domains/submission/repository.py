@@ -10,8 +10,15 @@ import uuid
 from typing import Optional
 from sqlalchemy import select, asc
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
-from backend.domains.submission.models import DataRequestLog, DataCompletenessStatus, SubmissionStatusHistory
+from backend.domains.submission.models import (
+    DataRequestLog,
+    DataCompletenessStatus,
+    SubmissionStatusHistory,
+    DocumentExtractionResult,
+    ProcessedJob,
+)
 
 async def create_data_request(db: AsyncSession, log_record: DataRequestLog) -> DataRequestLog:
     """
@@ -72,3 +79,125 @@ async def get_timeline_by_supplier(db: AsyncSession, supplier_id: uuid.UUID) -> 
     
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+async def create_extraction_result(
+    db: AsyncSession,
+    *,
+    request_id: uuid.UUID | str,
+    document_id: uuid.UUID | str,
+    parsed_fields: dict,
+    confidence_map: dict,
+    unparsed_fields: list,
+) -> DocumentExtractionResult:
+    """
+    [INSERT] AI(data_gateway)가 문서에서 추출한 정형 데이터를
+    document_extraction_results에 적재합니다.
+ 
+    * request_id / document_id는 str·UUID 둘 다 받아 여기서 UUID로 정규화한다.
+      (호출부 출처마다 타입이 다름: document_id=str, request_id=UUID.
+       변환 책임을 이 경계 한 곳에 모아 호출부가 타입을 신경쓰지 않게 한다.)
+    * supplier_confirmed는 기본 FALSE(모델 server_default) — 협력사가 추후
+      "확인" 버튼을 누르기 전까지는 미확정 상태로 둡니다.
+    * extraction_id / created_at은 모델 server_default(uuid_generate_v4 / now())에
+      맡깁니다. commit은 호출부 책임(기존 repository 규약 동일).
+    """
+    record = DocumentExtractionResult(
+        request_id=uuid.UUID(str(request_id)),
+        document_id=uuid.UUID(str(document_id)),
+        parsed_fields=parsed_fields,
+        confidence_map=confidence_map,
+        unparsed_fields=unparsed_fields,
+    )
+    db.add(record)
+    await db.flush()
+    return record
+
+# 협력사 문서추출결과 추출 결과 수집 함수
+async def list_extraction_results_by_suppliers(
+    db: AsyncSession,
+    supplier_ids: list[uuid.UUID],
+) -> list[DocumentExtractionResult]:
+    """
+    [SELECT] 주어진 협력사들의 모든 문서 추출결과를 모은다.
+    data_request_log(target_supplier_id) → document_extraction_results(request_id) 조인.
+ 
+    node는 이 결과로 신뢰도/확인여부를 집계해 저신뢰 분기를 판단한다.
+    """
+    if not supplier_ids:
+        return []
+ 
+    stmt = (
+        select(DocumentExtractionResult)
+        .join(
+            DataRequestLog,
+            DataRequestLog.request_id == DocumentExtractionResult.request_id,
+        )
+        .where(DataRequestLog.target_supplier_id.in_(supplier_ids))
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+# ============================================================================
+# [동작] idempotency_key를 PK로 INSERT 시도 →
+#   - 성공: 이 작업 첫 실행. claim 반환(처리 진행).
+#   - PK 충돌(IntegrityError): 이미 누군가 처리/처리 중. 재실행 막음.
+# ============================================================================
+async def claim_job(
+    db: AsyncSession,
+    *,
+    idempotency_key: str,
+    queue_name: str,
+    job_id: str | None = None,
+) -> bool:
+    """
+    [멱등성 claim] idempotency_key를 PK INSERT로 선점한다.
+    - True  : 첫 실행 → 작업을 진행하라.
+    - False : 이미 존재(중복/재시도) → 작업을 건너뛰라.
+ 
+    PK 충돌을 멱등성 신호로 쓰므로, 호출부는 별도 SELECT 없이 이 반환값만 보면 된다.
+    commit은 호출부(워커)가 트랜잭션 경계로 잡는다 — 여기선 flush까지.
+    충돌 시 savepoint를 되돌려 같은 세션을 계속 쓸 수 있게 한다.
+    """
+    sp = await db.begin_nested()   # savepoint: 충돌 나도 바깥 트랜잭션 안 깨지게
+    try:
+        db.add(ProcessedJob(
+            idempotency_key=idempotency_key,
+            queue_name=queue_name,
+            job_id=job_id,
+            status="processing",
+        ))
+        await db.flush()
+        return True
+    except IntegrityError:
+        await sp.rollback()
+        return False
+ 
+ 
+async def mark_job_done(
+    db: AsyncSession,
+    *,
+    idempotency_key: str,
+    result: dict | None = None,
+) -> None:
+    """[완료 표시] claim 후 작업이 성공하면 status='done' + 결과 캐시."""
+    job = await db.get(ProcessedJob, idempotency_key)
+    if job is not None:
+        job.status = "done"
+        if result is not None:
+            job.result = result
+    await db.flush()
+ 
+ 
+async def mark_job_failed(
+    db: AsyncSession,
+    *,
+    idempotency_key: str,
+    error_text: str,
+) -> None:
+    """[실패 표시] 작업 실패 시 status='failed' + 사유. retry_count 증가."""
+    job = await db.get(ProcessedJob, idempotency_key)
+    if job is not None:
+        job.status = "failed"
+        job.error_text = error_text
+        job.retry_count = (job.retry_count or 0) + 1
+    await db.flush()

@@ -97,11 +97,11 @@ INSERT INTO supplier_manufacturer_details (supplier_id, manufacturing_process, e
 ('c1111111-0000-4000-8000-000000000001', 'NCM811 Cell Assembly', 'renewable', '10GWh/yr', 2.3400);
 -- 대성정밀: 일부 필드 누락(저신뢰 파싱 시나리오의 원인) — energy_source NULL
 INSERT INTO supplier_manufacturer_details (supplier_id, manufacturing_process, energy_source, capacity, carbon_intensity) VALUES
-('c3333333-0000-4000-8000-000000000003', 'Module Casing', NULL, '2GWh/yr', NULL);
+('c3333333-0000-4000-8000-000000000003', 'NCM811 양극재/음극재(활물질) 가공', NULL, '2GWh/yr', NULL);
 
--- Global Mining: 광산 상세 + 신장 좌표
+-- Global Mining: 신장 광산 상세 (NCM 원광 Ni·Co·Mn·Li 공급) + 신장 좌표
 INSERT INTO supplier_miner_details (supplier_id, mine_name, mining_method, extraction_volume, mine_coordinates, active_period_from) VALUES
-('c2222222-0000-4000-8000-000000000002', 'Xinjiang Lithium Mine A', 'open_pit', 50000.00, ST_SetSRID(ST_MakePoint(86.000, 41.000), 4326), '2020-01-01');
+('c2222222-0000-4000-8000-000000000002', 'Xinjiang NCM Mineral Mine A', 'open_pit', 50000.00, ST_SetSRID(ST_MakePoint(86.000, 41.000), 4326), '2020-01-01');
 
 -- 트레이더: 공개율 낮음 (DPP 발행 차단 트리거 가능)
 INSERT INTO supplier_trader_details (supplier_id, trading_license, broker_certification, disclosure_completeness) VALUES
@@ -165,45 +165,63 @@ INSERT INTO products (product_id, product_code, product_name, manufacturer_id, t
 INSERT INTO bom_versions (bom_version_id, product_id, version_number, status, source_system, external_id) VALUES
 ('e1111111-0000-4000-8000-000000000001', 'd1111111-0000-4000-8000-000000000001', '1.0', 'active', 'ERP_PLM', 'ERP-BOM-0001');
 
--- 7계층 부품 트리 
+-- NCM811 다중원소 부품 트리 (프론트 lib/data.ts 기준)
+--   PACK→MODULE→CELL → [양극재 CAM + 음극재 ANO] → CAM:[전구체 PRE + 수산화리튬 LiOH] → PRE:[Ni·Co·Mn 원광]
 INSERT INTO parts (part_id, part_code, part_name, tier_level, parent_part_id, hs_code, material_type, unit_price, source_system, external_id) VALUES
-('b1111111-0000-4000-8000-000000000001', 'PACK-NCM811', 'Battery Pack',            1, NULL,                                     '850760', 'assembly',        1000.0000, 'ERP_PLM', 'ERP-PART-PACK'),
-('b1111111-0000-4000-8000-000000000002', 'MOD-NCM811',  'Module',                  2, 'b1111111-0000-4000-8000-000000000001', '850760', 'assembly',         400.0000, 'ERP_PLM', 'ERP-PART-MOD'),
-('b1111111-0000-4000-8000-000000000003', 'CELL-NCM811', 'Battery Cell',            3, 'b1111111-0000-4000-8000-000000000002', '850760', 'cell',             150.0000, 'ERP_PLM', 'ERP-PART-CELL'),
-('b1111111-0000-4000-8000-000000000006', 'CAM-NCM811',  'Cathode Active Material', 4, 'b1111111-0000-4000-8000-000000000003', '284190', 'active_material',    90.0000, 'ERP_PLM', 'ERP-PART-CAM'),
-('b1111111-0000-4000-8000-000000000004', 'PRE-NCM',     'NCM Precursor',           5, 'b1111111-0000-4000-8000-000000000006', '382490', 'precursor',          40.0000, 'ERP_PLM', 'ERP-PART-PRE'),
-('b1111111-0000-4000-8000-000000000007', 'REF-LINI',    'Refined Li/Ni Salt',      6, 'b1111111-0000-4000-8000-000000000004', '283691', 'refined_metal',      30.0000, 'ERP_PLM', 'ERP-PART-REF'),
-('b1111111-0000-4000-8000-000000000005', 'MIN-LITHIUM', 'Raw Lithium Ore',         7, 'b1111111-0000-4000-8000-000000000007', '253090', 'mineral',            20.0000, 'ERP_PLM', 'ERP-PART-LI');
+('b1111111-0000-4000-8000-000000000001', 'PACK-NCM811',  'Battery Pack',            1, NULL,                                     '850760', 'assembly',        1000.0000, 'ERP_PLM', 'ERP-PART-PACK'),
+('b1111111-0000-4000-8000-000000000002', 'MOD-NCM811',   'Module',                  2, 'b1111111-0000-4000-8000-000000000001', '850760', 'assembly',         400.0000, 'ERP_PLM', 'ERP-PART-MOD'),
+('b1111111-0000-4000-8000-000000000003', 'CELL-NCM811',  'Battery Cell',            3, 'b1111111-0000-4000-8000-000000000002', '850760', 'cell',             150.0000, 'ERP_PLM', 'ERP-PART-CELL'),
+('b1111111-0000-4000-8000-000000000006', 'CAM-NCM811',   'Cathode Active Material', 4, 'b1111111-0000-4000-8000-000000000003', '284190', 'active_material',    90.0000, 'ERP_PLM', 'ERP-PART-CAM'),
+('b1111111-0000-4000-8000-000000000007', 'ANO-GRAPHITE', 'Anode Active Material',   4, 'b1111111-0000-4000-8000-000000000003', '380110', 'active_material',    30.0000, 'ERP_PLM', 'ERP-PART-ANO'),
+('b1111111-0000-4000-8000-000000000004', 'PRE-NCM',      'NCM Precursor',           5, 'b1111111-0000-4000-8000-000000000006', '382490', 'precursor',          40.0000, 'ERP_PLM', 'ERP-PART-PRE'),
+('b1111111-0000-4000-8000-000000000005', 'MIN-LI',       'Lithium Hydroxide',       5, 'b1111111-0000-4000-8000-000000000006', '282520', 'refined_metal',      84.0000, 'ERP_PLM', 'ERP-PART-LI'),
+('b1111111-0000-4000-8000-000000000008', 'MIN-NI',       'Nickel Ore',              6, 'b1111111-0000-4000-8000-000000000004', '260400', 'mineral',            18.0000, 'ERP_PLM', 'ERP-PART-NI'),
+('b1111111-0000-4000-8000-000000000009', 'MIN-CO',       'Cobalt Sulfate',          6, 'b1111111-0000-4000-8000-000000000004', '283322', 'refined_metal',      32.0000, 'ERP_PLM', 'ERP-PART-CO'),
+('b1111111-0000-4000-8000-00000000000a', 'MIN-MN',       'Manganese Ore',           6, 'b1111111-0000-4000-8000-000000000004', '260200', 'mineral',             4.0000, 'ERP_PLM', 'ERP-PART-MN');
 
 INSERT INTO bom_items (bom_version_id, part_id, required_quantity, required_quantity_unit, percentage, direct_material_cost, origin_country, source_system, external_id) VALUES
 ('e1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000003', 100, 'ea', 60.00, 150.0000, 'KR', 'ERP_PLM', 'ERP-BI-CELL'),
-('e1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000005', 50,  'kg', 40.00,  20.0000, 'CN', 'ERP_PLM', 'ERP-BI-LI');
+('e1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000006', 40,  'kg', 18.00,  90.0000, 'KR', 'ERP_PLM', 'ERP-BI-CAM'),
+('e1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000007', 35,  'kg', 12.00,  30.0000, 'KR', 'ERP_PLM', 'ERP-BI-ANO'),
+('e1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000008', 20,  'kg',  5.00,  18.0000, 'CN', 'ERP_PLM', 'ERP-BI-NI'),
+('e1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000009', 8,   'kg',  2.00,  32.0000, 'CN', 'ERP_PLM', 'ERP-BI-CO'),
+('e1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-00000000000a', 10,  'kg',  1.00,   4.0000, 'CN', 'ERP_PLM', 'ERP-BI-MN'),
+('e1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000005', 12,  'kg',  2.00,  84.0000, 'CN', 'ERP_PLM', 'ERP-BI-LI');
 
 -- 협력사↔원청 코드 매핑
 INSERT INTO part_code_mapping (part_id, supplier_id, supplier_part_code, original_part_code) VALUES
 ('b1111111-0000-4000-8000-000000000003', 'c1111111-0000-4000-8000-000000000001', 'HY-CELL-001', 'CELL-NCM811'),
-('b1111111-0000-4000-8000-000000000005', 'c2222222-0000-4000-8000-000000000002', 'GMC-LI-001',  'MIN-LITHIUM');
+('b1111111-0000-4000-8000-000000000006', 'c3333333-0000-4000-8000-000000000003', 'DS-CAM-001',  'CAM-NCM811'),
+('b1111111-0000-4000-8000-000000000008', 'c2222222-0000-4000-8000-000000000002', 'GMC-NI-001',  'MIN-NI'),
+('b1111111-0000-4000-8000-000000000005', 'c2222222-0000-4000-8000-000000000002', 'GMC-LI-001',  'MIN-LI');
 
 -- 공정 (CSDDD 추적)
 INSERT INTO manufacturing_process (part_id, sequence_no, process_name, is_outsourced) VALUES
 ('b1111111-0000-4000-8000-000000000003', 1, 'Cell Coating', FALSE),
-('b1111111-0000-4000-8000-000000000003', 2, 'Cell Assembly', FALSE);
+('b1111111-0000-4000-8000-000000000003', 2, 'Cell Assembly', FALSE),
+('b1111111-0000-4000-8000-000000000006', 1, 'Cathode Sintering', FALSE);
 
 
 -- ============================================================
--- 8. 공급망 맵 (영역 8) — 원청→한양→Global Mining, 한양→대성/트레이더
+-- 8. 공급망 맵 (영역 8) — 원청→한양 / 한양→대성(양극재)·트레이더(전구체)·Global Mining(신장 NCM 원광)
 -- ============================================================
 INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status) VALUES
--- 원청 → 한양셀 (셀 납품, 확정)
+-- 원청 → 한양셀 (셀 납품, 확정) [Happy]
 ('5c111111-0000-4000-8000-000000000001', 'e1111111-0000-4000-8000-000000000001', NULL,                                     'c1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000003', 1, 'supplychain_confirmed', 'ERP',             'verified'),
--- 원청 → 한양셀 (Pack 겸 — dual render: 한양셀이 셀+팩 2품목)
+-- 원청 → 한양셀 (Pack 겸 — dual render: 셀+팩 2품목)
 ('5c111111-0000-4000-8000-000000000005', 'e1111111-0000-4000-8000-000000000001', NULL,                                     'c1111111-0000-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000001', 1, 'supplychain_confirmed', 'ERP',             'verified'),
--- 한양셀 → Global Mining (리튬 납품, 확정)
-('5c222222-0000-4000-8000-000000000002', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c2222222-0000-4000-8000-000000000002', 'b1111111-0000-4000-8000-000000000005', 2, 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified'),
--- 한양셀 → 대성정밀 (모듈, 선언만 — Gray)
-('5c333333-0000-4000-8000-000000000003', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c3333333-0000-4000-8000-000000000003', 'b1111111-0000-4000-8000-000000000002', 2, 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified'),
--- 한양셀 → 트레이더 (전구체, 선언만)
-('5c444444-0000-4000-8000-000000000004', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c4444444-0000-4000-8000-000000000004', 'b1111111-0000-4000-8000-000000000004', 2, 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified');
+-- 한양셀 → 대성정밀 (양극재 CAM, 선언만 — Gray 저신뢰)
+('5c333333-0000-4000-8000-000000000003', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c3333333-0000-4000-8000-000000000003', 'b1111111-0000-4000-8000-000000000006', 2, 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified'),
+-- 한양셀 → 트레이더 (전구체 PRE, 선언만)
+('5c444444-0000-4000-8000-000000000004', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c4444444-0000-4000-8000-000000000004', 'b1111111-0000-4000-8000-000000000004', 2, 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified'),
+-- 한양셀 → Global Mining (니켈 원광, 확정 — Sad 신장 위반 핵심 노드)
+('5c222222-0000-4000-8000-000000000002', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c2222222-0000-4000-8000-000000000002', 'b1111111-0000-4000-8000-000000000008', 2, 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified'),
+-- 한양셀 → Global Mining (황산코발트, 선언 — 신장)
+('5c666666-0000-4000-8000-000000000006', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c2222222-0000-4000-8000-000000000002', 'b1111111-0000-4000-8000-000000000009', 2, 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified'),
+-- 한양셀 → Global Mining (망간 원광, 선언 — 신장)
+('5c777777-0000-4000-8000-000000000007', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c2222222-0000-4000-8000-000000000002', 'b1111111-0000-4000-8000-00000000000a', 2, 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified'),
+-- 한양셀 → Global Mining (수산화리튬, 선언 — 신장)
+('5c888888-0000-4000-8000-000000000008', 'e1111111-0000-4000-8000-000000000001', 'c1111111-0000-4000-8000-000000000001', 'c2222222-0000-4000-8000-000000000002', 'b1111111-0000-4000-8000-000000000005', 2, 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified');
 
 -- 분할 납품 비율
 INSERT INTO supply_ratio (map_id, factory_id, ratio_percentage, volume, unit) VALUES
@@ -296,3 +314,36 @@ INSERT INTO hitl_reviews (review_id, batch_id, reason, trigger_stage, assigned_t
 INSERT INTO audit_trail (batch_id, step_number, node_type, node_name, input_hash, output_hash, prev_hash, duration_ms) VALUES
 ('ba111111-0000-4000-8000-000000000001', 1, 'agent', 'data_gateway',  '0000000000000000000000000000000000000000000000000000000000000001', '0000000000000000000000000000000000000000000000000000000000000002', NULL, 120),
 ('ba111111-0000-4000-8000-000000000001', 2, 'agent', 'compliance',    '0000000000000000000000000000000000000000000000000000000000000002', '0000000000000000000000000000000000000000000000000000000000000003', '0000000000000000000000000000000000000000000000000000000000000002', 340);
+
+-- ============================================================================
+-- DELTA SEED — onboarding_data_requirements
+-- 02_seed_data.sql에 추가. validate_schema(provider_type)가 참조하는 필수 필드 정의.
+--
+-- [정합성]
+--   provider_type 값 = suppliers.supplier_type CHECK 허용값과 1:1
+--     (manufacturer / recycler / trader / miner)
+--   required_fields = JSONB 배열. validate_schema가 parsed_fields 키와 대조해 누락 검사.
+--   필드명은 parse_document(Bedrock Vision) 추출 키 및 spec 3-5 예시(carbon_intensity,
+--   energy_source, capacity)와 맞춘다. 실제 추출 필드 확정 시 함께 조정.
+-- ============================================================================
+
+INSERT INTO onboarding_data_requirements (provider_type, required_fields, required_documents) VALUES
+-- 제조사(셀/팩/모듈): 탄소·에너지·용량 핵심
+('manufacturer',
+ '["carbon_intensity", "energy_source", "capacity"]'::jsonb,
+ '["carbon_data", "certification"]'::jsonb),
+
+-- 재활용업체: 재생원료 비율·출처
+('recycler',
+ '["recycled_content_ratio", "material_origin", "carbon_intensity"]'::jsonb,
+ '["origin_cert", "carbon_data"]'::jsonb),
+
+-- 트레이더(중간 유통): 원산지·연결 추적
+('trader',
+ '["material_origin", "country_of_origin"]'::jsonb,
+ '["origin_cert"]'::jsonb),
+
+-- 광산(원료 채굴): 광산 위치·국가·원산지 증빙
+('miner',
+ '["mine_location", "country_of_origin", "material_origin"]'::jsonb,
+ '["origin_cert", "factory_doc"]'::jsonb);

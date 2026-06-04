@@ -2,7 +2,7 @@
 
 import base64
 import json
-from uuid import uuid4
+from uuid import UUID
 
 import asyncio
 import boto3
@@ -12,9 +12,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.agents.state import BatchState
+from backend.infrastructure.database import AsyncSessionLocal
 from backend.infrastructure.trace import trace_node, trace_tool
+from backend.domains.submission import repository as submission_repo
+from backend.domains.supplychain.repository import SupplyChainRepository  # D 제공
+from backend.agents.state import BatchState
 from backend.llm.bedrock_factory import get_llm_for_agent
+from backend.events.types import ValidationResult
 
 CONFIDENCE_THRESHOLD = 0.85
 
@@ -132,79 +136,150 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     confidence_map = extracted.get("confidence_map", {})
     unparsed_fields = extracted.get("unparsed_fields", [])
 
-    # ── 6) document_extraction_results 적재 (parameterized) ──────────────────
-    await db.execute(
-        text(
-            """
-            INSERT INTO document_extraction_results
-                (extraction_id, request_id, document_id,
-                 parsed_fields, confidence_map, unparsed_fields)
-            VALUES
-                (:extraction_id, :request_id, :document_id,
-                 :parsed_fields, :confidence_map, :unparsed_fields)
-            """
-        ),
-        {
-            "extraction_id": str(uuid4()),
-            "request_id": str(request_id),
-            "document_id": str(document_id),
-            "parsed_fields": json.dumps(parsed_fields, ensure_ascii=False),
-            "confidence_map": json.dumps(confidence_map, ensure_ascii=False),
-            "unparsed_fields": json.dumps(unparsed_fields, ensure_ascii=False),
-        },
+    # ── 6) document_extraction_results 적재 (submission repository 위임) ──────
+    #   JSONB 컬럼이라 dict/list를 그대로 넘긴다 (json.dumps로 문자열화하면
+    #   이중 직렬화돼서 "{...}" 문자열이 박힌다 — 넘기지 않는다).
+    #   request_id는 submission_documents에서 읽은 UUID 그대로 (str 변환 불필요).
+    await submission_repo.create_extraction_result(
+        db,
+        request_id=request_id,
+        document_id=document_id,
+        parsed_fields=parsed_fields,
+        confidence_map=confidence_map,
+        unparsed_fields=unparsed_fields,
     )
-    await db.commit()
-
+    await db.commit()   # 노드(도구)가 트랜잭션 경계 소유 — repository는 flush까지만
+    
+    
     return {"parsed_fields": parsed_fields,
             "confidence_map": confidence_map,
             "unparsed_fields": unparsed_fields}
 
 
+# ── validate_schema (spec 3-5 핵심 함수) ──────────────────────────────────
+ 
+# 단위 정규화 맵 (spec 예시: kgCO2/kg → kgCO2eq/kg). 필요 시 확장.
+_UNIT_NORMALIZE = {
+    "kgCO2/kg": "kgCO2eq/kg",
+}
+ 
+ 
+async def validate_schema(parsed: dict, provider_type: str) -> ValidationResult:
+    """
+    onboarding_data_requirements(provider_type)의 required_fields를 조회해
+    필수 필드 누락 여부를 검사하고 단위를 정규화한다. (spec 3-5)
+ 
+    * schema 컬럼명은 provider_type (spec 본문의 supplier_type과 동의어).
+    * required_fields는 JSONB 리스트로 가정(["carbon_intensity", ...]).
+    """
+    async with AsyncSessionLocal() as db:
+        row = await db.execute(
+            text(
+                """
+                SELECT required_fields
+                FROM onboarding_data_requirements
+                WHERE provider_type = :ptype
+                """
+            ),
+            {"ptype": provider_type},
+        )
+        rec = row.first()
+ 
+    # required_fields JSONB: 리스트(["f1","f2"]) 또는 dict({"f1":...}) 둘 다 방어.
+    # (seed 데이터 미확정 — 스키마는 JSONB로만 정의됨. 키 목록만 필요하므로 정규화.)
+    raw = (rec[0] if rec and rec[0] else []) or []
+    required = list(raw.keys()) if isinstance(raw, dict) else list(raw)
+    present = set(parsed.keys())
+    missing = [f for f in required if f not in present]
+ 
+    # 단위 정규화: 값이 "<num> <unit>" 형태면 unit만 표준으로 치환.
+    normalized = {}
+    for k, v in parsed.items():
+        if isinstance(v, str):
+            for old, new in _UNIT_NORMALIZE.items():
+                if v.endswith(old):
+                    v = v[: -len(old)] + new
+        normalized[k] = v
+ 
+    return ValidationResult(ok=(len(missing) == 0), missing_fields=missing, normalized=normalized)
+
 @trace_node("data_gateway", "agent")
 async def data_gateway_node(state: BatchState) -> BatchState:
     """
-    BatchState를 받아 stage_extraction을 수행한다.
-    문서 파싱은 parse_document 도구에 위임하고, 노드는 결과로 분기만 판단한다.
+    batch에 연관된 문서 추출결과(document_extraction_results)를 모아
+    신뢰도/스키마를 검증하고 분기한다. 파싱은 하지 않는다(워커 몫).
+ 
+    분기:
+      - 추출결과 중 신뢰도 < 0.85 또는 스키마 누락 또는 미확인(supplier_confirmed=False)
+        → error_reason="low_confidence" → supervisor가 supplier_reverify로 라우팅
+      - 모두 통과 → error_reason=None → 다음 단계(verification)
     """
-    # state에서 파싱 대상 문서와 db를 꺼낸다.
-    # (graph 결합 시 db 세션을 state로 전달하는 방식은 Day3에서 지혜 graph와 맞춘다.
-    #  여기서는 state에 document_id / db가 들어온다는 전제로 도구를 부른다.)
-    document_id = state.get("document_id")     # type: ignore[attr-defined]
-    db = state.get("db")                       # type: ignore[attr-defined]
-
-    if document_id is None or db is None:
-        # 추측으로 채우지 않는다. 입력이 없으면 저신뢰로 표시해 사람에게 넘긴다.
+    product_id = state.get("product_id")
+    if product_id is None:
         return {
             **state,
             "current_stage": "stage_extraction",
             "error_reason": "low_confidence",
             "confidence_score": 0.0,
-            "extraction_result": {"parsed": False, "note": "no document_id/db in state"},
+            "extraction_result": {"checked": False, "note": "no product_id in state"},
         }
-
-    result = await parse_document(document_id, db)
-    confidence_map = result.get("confidence_map", {})
-
-    # ── 저신뢰 분기 ───────────────────────────────────────────────────────────
-    # confidence_map의 최저값이 임계값 미만이면 사람이 봐야 한다.
-    lowest = min(confidence_map.values()) if confidence_map else 0.0
-
-    if lowest < CONFIDENCE_THRESHOLD:
-        error_reason = "low_confidence"   # supervisor가 supplier_reverify로 라우팅
-    else:
-        error_reason = None               # 정상 → 다음 단계(verification)로
-
-    # 내 칸만 바꾼다. current_stage는 stage_extraction까지만,
-    # batch_status(batch_hitl_wait)는 건드리지 않는다(supervisor/interrupt 몫).
+ 
+    async with AsyncSessionLocal() as db:
+        # (1) product_id → 공급망 트리 → 공급사 목록 (D 제공 조회)
+        sc_repo = SupplyChainRepository(db)
+        rows = await sc_repo.get_n_tier_supply_chain(str(product_id))
+        # 반환은 flat List[Dict]. 공급사는 child_supplier_id 키에 들어온다(중복 제거).
+        supplier_ids = list({
+            r["child_supplier_id"]
+            for r in rows
+            if r.get("child_supplier_id")
+        })
+ 
+        # (2) 그 공급사들의 추출결과를 모은다 (E 제공 조회)
+        results = await submission_repo.list_extraction_results_by_suppliers(
+            db, [UUID(str(s)) for s in supplier_ids]
+        )
+ 
+    # (3) 집계: 최저 신뢰도 + 미확인/누락 검사
+    if not results:
+        # 모을 추출결과가 없음 — 추측 금지, 사람에게 넘긴다.
+        return {
+            **state,
+            "current_stage": "stage_extraction",
+            "error_reason": "low_confidence",
+            "confidence_score": 0.0,
+            "extraction_result": {"checked": True, "count": 0, "note": "no extraction results"},
+        }
+ 
+    lowest = 1.0
+    unconfirmed = 0
+    has_missing = False
+    for r, supplier_type in results:
+        cmap = r.confidence_map or {}
+        if cmap:
+            lowest = min(lowest, min(cmap.values()))
+        if not r.supplier_confirmed:
+            unconfirmed += 1
+        # 스키마 누락 검사 (spec 노드 정의: "validate_schema를 통한 누락 필드 검사").
+        # supplier_type(=provider_type)으로 onboarding_data_requirements를 조회한다.
+        if supplier_type:
+            vr = await validate_schema(r.parsed_fields or {}, supplier_type)
+            if not vr.ok:
+                has_missing = True
+ 
+    low_conf = lowest < CONFIDENCE_THRESHOLD or unconfirmed > 0 or has_missing
+    error_reason = "low_confidence" if low_conf else None
+ 
     return {
         **state,
         "current_stage": "stage_extraction",
         "confidence_score": lowest,
         "error_reason": error_reason,
         "extraction_result": {
-            "parsed": True,
-            "field_count": len(result.get("parsed_fields", {})),
-            "unparsed": result.get("unparsed_fields", []),
+            "checked": True,
+            "count": len(results),
             "lowest_confidence": lowest,
+            "unconfirmed": unconfirmed,
+            "has_missing": has_missing,
         },
     }
