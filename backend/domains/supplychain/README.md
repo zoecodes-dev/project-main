@@ -47,3 +47,4 @@
 - [x] Day 1: 버그 2개 수정 (`geo_analysis` → `stage_geo` / `check_coordinate_authenticity` 깡통 호출 우회 해결)
 - [x] Day 2: 좌표-국가 불일치 검사 PostGIS 동작 확인 완료
 - [x] Day 3: `geo_audit` 노드 LangGraph 파이프라인 결합 및 `GeoRiskDetected` 원자적 발행(`publish`+`enqueue`) 통합 적용 완료
+- [x] Day 4: 튜터형 학습 완료 (PostGIS 공간 쿼리, 재귀 CTE, 이벤트/큐 분산 처리, 멱등성 등 5대 핵심 아키텍처 원리 정립)
