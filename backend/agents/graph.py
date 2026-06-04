@@ -20,6 +20,12 @@ from backend.events.types import HITLRequestedEvent
 from backend.infrastructure.database import AsyncSessionLocal
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
+from backend.agents.automation import (
+    verification_node,
+    risk_scoring_node,
+    readiness_node,
+    issuance_node,
+)
 
 
 def supervisor_node(state: BatchState) -> BatchState:
