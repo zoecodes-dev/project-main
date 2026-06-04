@@ -189,8 +189,8 @@ _SONNET_MODEL = "global.anthropic.claude-sonnet-4-6"
 
 
 def _get_anthropic_key() -> str:
-    from backend.core.config import settings
-    return settings.ANTHROPIC_API_KEY
+    from backend.core.config import config
+    return config.ANTHROPIC_API_KEY
 
 
 async def _call_sonnet_for_verdict(
