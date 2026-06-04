@@ -314,3 +314,36 @@ INSERT INTO hitl_reviews (review_id, batch_id, reason, trigger_stage, assigned_t
 INSERT INTO audit_trail (batch_id, step_number, node_type, node_name, input_hash, output_hash, prev_hash, duration_ms) VALUES
 ('ba111111-0000-4000-8000-000000000001', 1, 'agent', 'data_gateway',  '0000000000000000000000000000000000000000000000000000000000000001', '0000000000000000000000000000000000000000000000000000000000000002', NULL, 120),
 ('ba111111-0000-4000-8000-000000000001', 2, 'agent', 'compliance',    '0000000000000000000000000000000000000000000000000000000000000002', '0000000000000000000000000000000000000000000000000000000000000003', '0000000000000000000000000000000000000000000000000000000000000002', 340);
+
+-- ============================================================================
+-- DELTA SEED — onboarding_data_requirements
+-- 02_seed_data.sql에 추가. validate_schema(provider_type)가 참조하는 필수 필드 정의.
+--
+-- [정합성]
+--   provider_type 값 = suppliers.supplier_type CHECK 허용값과 1:1
+--     (manufacturer / recycler / trader / miner)
+--   required_fields = JSONB 배열. validate_schema가 parsed_fields 키와 대조해 누락 검사.
+--   필드명은 parse_document(Bedrock Vision) 추출 키 및 spec 3-5 예시(carbon_intensity,
+--   energy_source, capacity)와 맞춘다. 실제 추출 필드 확정 시 함께 조정.
+-- ============================================================================
+
+INSERT INTO onboarding_data_requirements (provider_type, required_fields, required_documents) VALUES
+-- 제조사(셀/팩/모듈): 탄소·에너지·용량 핵심
+('manufacturer',
+ '["carbon_intensity", "energy_source", "capacity"]'::jsonb,
+ '["carbon_data", "certification"]'::jsonb),
+
+-- 재활용업체: 재생원료 비율·출처
+('recycler',
+ '["recycled_content_ratio", "material_origin", "carbon_intensity"]'::jsonb,
+ '["origin_cert", "carbon_data"]'::jsonb),
+
+-- 트레이더(중간 유통): 원산지·연결 추적
+('trader',
+ '["material_origin", "country_of_origin"]'::jsonb,
+ '["origin_cert"]'::jsonb),
+
+-- 광산(원료 채굴): 광산 위치·국가·원산지 증빙
+('miner',
+ '["mine_location", "country_of_origin", "material_origin"]'::jsonb,
+ '["origin_cert", "factory_doc"]'::jsonb);
