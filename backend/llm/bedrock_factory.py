@@ -44,11 +44,11 @@ class Model(str, Enum):
 # (실제 배분에 맞게 팀에서 수정)
 # ─────────────────────────────────────────────────────────
 AGENT_MODEL_MAP: dict[str, Model] = {
-    "jihye": Model.HAIKU_45,     # 지혜
-    "eunjin": Model.SONNET_46,    # 은진 (Zoe)
-    "eunji": Model.OPUS_48,       # 은지 — 컴플라이언스 해석, 정확도 핵심
-    "yeongsu": Model.SONNET_46,   # 영수
-    "chayoon": Model.HAIKU_45,   # 차윤 — 자동화 컨트롤
+    "supervisor": Model.HAIKU_45,     # 지혜
+    "data_gateway": Model.SONNET_46,    # 은진 (Zoe)
+    "compliance": Model.SONNET_46,       # 은지 — 컴플라이언스 해석, 정확도 핵심
+    "geo_audit": Model.SONNET_46,   # 영수
+    "automation": Model.HAIKU_45,   # 차윤 — 자동화 컨트롤
     # 경량 작업용 (알림/파싱 등)
     "lightweight": Model.HAIKU_45,
 }
