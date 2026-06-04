@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agents.state import BatchState
 from backend.infrastructure.trace import trace_node, trace_tool
-from backend.infrastructure.embedding_factory import embed_query
+from backend.llm.embedding_factory import embed_query
 
 
 # ---------------------------------------------------------------------------

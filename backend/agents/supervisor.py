@@ -38,5 +38,9 @@ def route(state: "BatchState") -> str:
         return "risk_scoring"
     if current_stage == "stage_risk":
         return "readiness"
+    if current_stage == "stage_readiness":
+        return "issuance"
+    if current_stage == "stage_issuance":
+        return "completed"
 
     return "completed"

@@ -1,37 +1,88 @@
-# W2 D3 — Audit 응답 스키마 models.py 이동 + main 머지
+# W3 D3 Graph 통합 및 audit_trail 검증
 
-## 📌 한 줄 요약
+## 작업 요약
 
-router.py에 있던 Pydantic 응답 스키마 4개를 models.py로 옮겨 팀 컨벤션에 맞추고, main에 머지된 C(Product) 도메인 수정을 내 브랜치로 합쳤다.
+Day3 작업에서는 Day1의 placeholder graph 노드를 팀원들이 만든 실제 노드로 가능한 범위에서 교체하고,
+LangGraph Happy Path와 HITL resume 경로가 audit_trail에 정상 기록되는지 확인했다.
 
-## 🛠️ 변경 사항 (What & How)
+이번 작업의 범위는 graph 연결 지점 검증이다. 각 팀원 노드 내부 로직은 새로 작성하지 않고,
+이미 존재하는 `backend.agents` 노드만 연결했다. 아직 `backend.agents`에 실제 노드가 없는 단계는
+placeholder로 유지했다.
 
-- **기존**: Audit 응답 스키마(`AuditTrailRow`, `ChainBreakOut`, `ChainWarningOut`, `ChainVerificationOut`)가 `router.py` 안에 정의돼 있었음. 다른 도메인은 스키마를 `models.py`에 모으는 컨벤션.
-- **변경**:
-  - 응답 스키마 4개를 `router.py` → `models.py`로 이동. `router.py`는 `from backend.domains.audit.models import AuditTrailRow, ChainVerificationOut`로 가져와 사용.
-  - `models.py`는 ORM(`AuditTrail`)과 Pydantic 스키마를 한 파일에 두되, `# === ORM ===` / `# === API 응답 스키마 ===` 섹션 주석으로 구분.
-  - 쿼리 파라미터용 `NodeType` Enum은 입력 검증 용도라 `router.py`에 유지.
-- **이유**:
-  - 팀 전체가 "응답 스키마는 models.py로 모은다"로 통일 → 도메인 간 구조 일관성. 별도 `schemas.py`를 만들면 도메인 폴더 표준 파일 규칙(임의 파일 금지) 위반이므로, 기존 `models.py`에 합치는 것이 규칙에 부합.
-  - 동작은 바뀌지 않는 리팩토링(위치만 이동). 엔드포인트 2개와 404 가드 동작 모두 그대로 유지.
+## 변경 사항
 
-## 🐛 이슈 및 트러블슈팅
+- `backend/agents/graph.py`
+  - `data_gateway`, `geo_audit`, `compliance`를 실제 노드로 연결.
+  - `verification`, `risk_scoring`, `readiness`, `issuance`는 아직 실제 `backend.agents` 노드가 없어 placeholder 유지.
+  - graph 노드 실행 시 DB 세션을 넘겨 `audit_trail` 기록이 남도록 wrapper 추가.
+  - `document_id`가 없는 smoke test에서는 `data_gateway`가 외부 S3/Bedrock 호출 없이 `stage_extraction`으로 진행하도록 fallback 추가.
 
-- **발생 1 — ORM/Pydantic 이름 충돌 가능성**: ORM의 `UUID`(postgres 타입)와 Pydantic의 `uuid.UUID`(파이썬 타입)가 한 파일에 공존.
-  - 해결: Pydantic 필드는 `uuid.UUID`로 풀네임 사용, postgres `UUID`는 그대로 두어 충돌 회피.
-- **발생 2 — 앱 부팅 실패**: `sqlalchemy.exc.ArgumentError: Type annotation for "Product.bom_versions" can't be correctly interpreted ... ORM annotations should make use of Mapped[]`
-  - 원인: Product(C 도메인) models.py의 `bom_versions` relationship이 SQLAlchemy 2.0 `Mapped[]` 없이 정의됨. 앱이 모든 도메인 ORM을 한꺼번에 로딩하므로 한 도메인 ORM이 깨지면 전체 부팅 실패. (Audit 코드와 무관)
-  - 해결: C 도메인 책임이라 직접 수정하지 않고 C에게 줄 번호와 함께 전달 → C가 수정 후 main 머지 → `git pull origin main`으로 받아 해결.
-- **git 머지 트러블**: 커밋 시 편집기(Vim)가 열려 빠져나오지 못함. 이후 머지 마무리 과정에서 충돌 표시 없이 정리됨.
-  - 메모: `git commit -m "메시지"`처럼 `-m`을 붙이면 편집기가 열리지 않음. 머지 커밋은 `git commit --no-edit`로 마무리.
+- `backend/agents/supervisor.py`
+  - `stage_readiness -> issuance`
+  - `stage_issuance -> completed`
+  - 위 두 route 분기를 추가해 Happy Path가 발행 단계까지 도달하도록 수정.
 
-## 💡 후속 논의 및 의견
+- `backend/agents/compliance.py`
+  - `embed_query` import 경로를 실제 파일 위치에 맞춰 `backend.llm.embedding_factory`로 수정.
+  - 최신 main 기준 기존 경로(`backend.infrastructure.embedding_factory`)는 존재하지 않아 graph import 단계에서 실패했다.
 
-- DECISION_LOG.md가 새 SSOT로 지정됨. 향후 "일괄 수정" 실행 시 schema.sql이 변경될 수 있으므로(hitl_reviews 신설, 각종 status enum 확정 등), 그 시점에 Audit의 `models.py` ORM을 새 schema와 다시 대조 필요. 단, 현재 결정 #1~9에 audit_trail 컬럼을 바꾸는 결정은 없어 지금 ORM은 영향 없음.
-- 다음 작업(W2 D4): 단계별 소요시간(`duration_ms`) 집계 조회 + 프론트 PM 컨텍스트 적용.
+## Graph 실행 흐름
 
-## ✅ 동작 확인
+```mermaid
+stateDiagram-v2
+    [*] --> stage_queued
+    stage_queued --> stage_extraction : data_gateway
+    stage_extraction --> stage_verification : verification
+    stage_verification --> stage_geo : geo_audit
+    stage_geo --> stage_compliance : compliance
+    stage_compliance --> stage_risk : risk_scoring
+    stage_risk --> stage_readiness : readiness
+    stage_readiness --> stage_issuance : issuance
+    stage_issuance --> [*] : completed
+```
 
-- `GET /audit/trail/{batch_id}/verify` — 존재하지 않는 batch_id(`00000000-...`) → **404** (없는 배치가 chain_valid:true로 거짓 통과하는 것 방지)
-- `GET /audit/trail/{batch_id}` — 존재하지 않는 batch_id → **200 []** (조회는 빈 목록이 정상)
-- `docker-compose up --build` 후 앱 정상 부팅, `/docs`에 엔드포인트 2개 표시 확인
+`graph.py`의 edge는 이동 가능한 경로를 정의하고, 실제 다음 노드 선택은
+`backend/agents/supervisor.py`의 `route(state)`가 담당한다.
+
+## HITL resume 확인
+
+`confidence_score < 0.85`일 때 route는 아래처럼 분기한다.
+
+- `error_reason == "low_confidence"`: `supplier_reverify`
+- 그 외 gray zone 또는 risk escalation: `hitl_interrupt`
+
+HITL interrupt 시 `current_stage`는 중단 지점을 유지하고, `batch_status`만
+`batch_hitl_wait`로 전환한다. 승인 후 resume되면 `batch_status`는
+`batch_processing`으로 복귀하고 같은 `current_stage`부터 이어간다.
+
+## EC2 검증 결과
+
+EC2 `jihye260604` 브랜치에서 graph smoke test를 실행해 아래를 확인했다.
+
+```text
+[happy_path]
+final_current_stage = stage_issuance
+final_batch_status = batch_processing
+node_order = data_gateway -> verification -> geo_audit_execute -> geo_audit -> geo_audit -> compliance -> risk_scoring -> readiness -> issuance -> completed
+step_numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+chain_connected = True
+
+[resume_path]
+interrupt_triggered = True
+resumed_current_stage = stage_verification
+node_order = hitl_interrupt
+step_numbers = [1]
+chain_connected = True
+```
+
+`geo_audit_execute`와 중복된 `geo_audit` 기록은 최신 `geo_audit_node` 내부에서 tool 및 node trace가
+함께 남기 때문에 발생한다. 핵심 검증 기준은 `step_number`가 순서대로 증가하고,
+각 row의 `prev_hash`가 직전 row의 `output_hash`와 연결되는지이며, 결과는 `chain_connected = True`로 확인했다.
+
+## 확인 기준
+
+- Happy Path가 `stage_issuance`까지 도달한다.
+- resume 후 `current_stage`가 중단 stage인 `stage_verification`을 유지한다.
+- `audit_trail.step_number`가 1부터 순서대로 쌓인다.
+- `prev_hash`가 직전 `output_hash`와 연결된다.
+- graph 결합 작업은 실제 존재 노드만 연결하고, 없는 노드는 placeholder로 유지한다.
