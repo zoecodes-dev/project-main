@@ -345,3 +345,13 @@ class TrainingOverdueEvent:
     due_date: Optional[datetime] = None
     event_name: str = "TrainingOverdue"
     occurred_at: datetime = field(default_factory=_now_utc)
+    
+# ============================================================
+# ValidationResult + validate_schema (B)
+# ============================================================
+@dataclass
+class ValidationResult:
+    """스키마 검증 결과. 누락 필드와 정규화된 값을 담는다."""
+    ok: bool
+    missing_fields: list[str] = field(default_factory=list)
+    normalized: dict = field(default_factory=dict)

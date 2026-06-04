@@ -24,6 +24,11 @@ from backend.domains.submission.service import (
     get_supplier_submission_timeline
 )
 
+from backend.infrastructure.queue import (
+    enqueue, 
+    DOCUMENT_PARSE_QUEUE
+)
+
 router = APIRouter(prefix="/data-requests", tags=["Submission"])
 
 @router.get("", response_model=List[DataRequestResponse])
@@ -94,6 +99,32 @@ async def _handle_status_update(db: AsyncSession, request_id: uuid.UUID, to_stat
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
+
+#   업로드된 파일은 이미 submission_documents에 행으로 존재한다는 전제
+#   (file_url/file_type 등은 별도 파일 저장 흐름이 채움). 이 엔드포인트는
+#   "이 문서를 파싱 큐에 태운다"는 트리거 역할.
+@router.post("/{request_id}/documents/{document_id}/parse", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_document_parse_endpoint(
+    request_id: uuid.UUID,
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    [API] POST /data-requests/{request_id}/documents/{document_id}/parse
+    협력사가 업로드한 문서를 파싱 큐(document_parse_queue)에 태운다.
+    파싱은 워커가 비동기로 수행하므로 즉시 202 + job_id를 반환한다.
+ 
+    멱등성: job_id를 document_id 기반으로 고정 → 같은 문서 중복 enqueue 방어.
+    """
+    job_id = await enqueue(
+        DOCUMENT_PARSE_QUEUE,
+        "process_document_parse",
+        job_id=f"document_parse:{document_id}",   # 멱등성 키 (queue.py가 _job_id로 매핑)
+        document_id=str(document_id),
+        request_id=str(request_id),
+    )
+    return {"status": "accepted", "job_id": job_id, "document_id": str(document_id)}
+
 
 @router.post("/{request_id}/submit", response_model=DataRequestResponse)
 async def submit_data_request_endpoint(request_id: uuid.UUID, req: SubmitDataRequest, db: AsyncSession = Depends(get_db)):

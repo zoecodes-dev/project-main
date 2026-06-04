@@ -11,6 +11,7 @@ from backend.agents.data_gateway import data_gateway_node
 from backend.agents.geo_audit import geo_audit_node
 from backend.agents.state import BatchState
 from backend.agents.supervisor import route
+from backend.agents.data_gateway import data_gateway_node
 from backend.domains.audit import repository
 from backend.domains.audit.state_machine import (
     pause_batch_for_review,
