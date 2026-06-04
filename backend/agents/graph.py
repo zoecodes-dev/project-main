@@ -16,6 +16,12 @@ from backend.events.types import HITLRequestedEvent
 from backend.infrastructure.database import AsyncSessionLocal
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
+from backend.agents.automation import (
+    verification_node,
+    risk_scoring_node,
+    readiness_node,
+    issuance_node,
+)
 
 
 def supervisor_node(state: BatchState) -> BatchState:
@@ -118,12 +124,12 @@ async def supplier_reverify_node(state: BatchState) -> BatchState:
 builder = StateGraph(BatchState)
 builder.add_node("supervisor", supervisor_node)
 builder.add_node("data_gateway", placeholder_node("stage_extraction"))
-builder.add_node("verification", placeholder_node("stage_verification"))
+builder.add_node("verification", verification_node)
 builder.add_node("geo_audit", placeholder_node("stage_geo"))
 builder.add_node("compliance", placeholder_node("stage_compliance"))
-builder.add_node("risk_scoring", placeholder_node("stage_risk"))
-builder.add_node("readiness", placeholder_node("stage_readiness"))
-builder.add_node("issuance", placeholder_node("stage_issuance"))
+builder.add_node("risk_scoring", risk_scoring_node)
+builder.add_node("readiness", readiness_node)
+builder.add_node("issuance", issuance_node)
 builder.add_node("supplier_reverify", supplier_reverify_node)
 builder.add_node("hitl_interrupt", hitl_interrupt_node)
 builder.add_node("completed", supervisor_node)
