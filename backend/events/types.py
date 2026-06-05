@@ -300,6 +300,7 @@ class HITLRejectedEvent:
 class DPPReadinessUpdatedEvent:
     product_id: Optional[UUID] = None
     readiness_score: Optional[float] = None
+    readiness_breakdown: dict = field(default_factory=dict)
     event_name: str = "DPPReadinessUpdated"
     occurred_at: datetime = field(default_factory=_now_utc)
 

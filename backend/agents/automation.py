@@ -7,9 +7,8 @@ from backend.infrastructure.trace import trace_node
 from backend.domains.verification.service import verify_feoc_rule
 from backend.domains.risk.service import calculate_risk_score
 from backend.domains.dpp.service import calculate_readiness
-from backend.domains.dpp.service import generate_dpp_payload
+from backend.domains.dpp.service import generate_dpp_payload, create_dpp_record
 from backend.domains.dpp.state_machine import issue_dpp
-from backend.domains.dpp.models import DppRecord
 
 
 @trace_node("verification", "agent")
@@ -24,7 +23,10 @@ async def verification_node(state: BatchState) -> Dict[str, Any]:
     # extraction_result에서 검증에 필요한 값들을 추출해요 (없으면 기본값 처리)
     extraction = state.get("extraction_result") or {}
     supplier_id_str = extraction.get("supplier_id")
-    supplier_id = uuid.UUID(supplier_id_str) if supplier_id_str else uuid.uuid4()
+    
+    if not supplier_id_str:
+        raise ValueError("extraction_result에 supplier_id가 누락되었습니다.")
+    supplier_id = uuid.UUID(supplier_id_str)
     direct_ownership = float(extraction.get("direct_ownership", 0.0))
     indirect_ownership = float(extraction.get("indirect_ownership", 0.0))
 
@@ -54,7 +56,10 @@ async def risk_scoring_node(state: BatchState) -> Dict[str, Any]:
     batch_id = uuid.UUID(state["batch_id"])
     extraction = state.get("extraction_result") or {}
     supplier_id_str = extraction.get("supplier_id")
-    supplier_id = uuid.UUID(supplier_id_str) if supplier_id_str else uuid.uuid4()
+    
+    if not supplier_id_str:
+        raise ValueError("extraction_result에 supplier_id가 누락되었습니다.")
+    supplier_id = uuid.UUID(supplier_id_str)
 
     # compliance나 geo 등 이전 단계의 위반 내역을 추출해요
     violations = []
@@ -76,12 +81,20 @@ async def risk_scoring_node(state: BatchState) -> Dict[str, Any]:
             supplier_id=supplier_id,
             violations=violations
         )
-        
-    return {
+
+    is_escalated = risk_result.get("is_escalated", False)
+    
+    updates = {
         "current_stage": "stage_risk",
         # 리스크가 70점 이상이면 에스컬레이션(HITL) 플래그를 올려줘요
-        "hitl_required": state.get("hitl_required", False) or risk_result.get("is_escalated", False)
+        "hitl_required": state.get("hitl_required", False) or is_escalated
     }
+    
+    # 에스컬레이션 되었다면 사유를 명확히 적어주어 HITL 노드가 헷갈리지 않게 해요
+    if is_escalated:
+        updates["error_reason"] = "risk_escalated"
+        
+    return updates
 
 
 @trace_node("readiness", "agent")
@@ -125,21 +138,18 @@ async def issuance_node(state: BatchState) -> Dict[str, Any]:
         emissions = payload.get("annex_xiii_fields", {}).get("section_4_embedded_emissions_scores", {})
         carbon_footprint = float(emissions.get("59_total_embedded_emissions", 0.0))
         
-        # DB의 DEFAULT 'dpp_issued' 제약에 걸리지 않도록 status=None을 명시해 줘요.
-        # 그래야 assert_not_issued 가드를 무사히 통과하고 issue_dpp에서 확정 지을 수 있어요.
-        dpp_record = DppRecord(
+        # 3. 서비스 함수를 호출하여 DppRecord 초안을 생성해요 (얇은 래퍼 패턴)
+        dpp_id = await create_dpp_record(
+            db=db,
             batch_id=batch_id,
             product_id=product_id,
             carbon_footprint=carbon_footprint,
             qr_code_url=f"https://dpp.kira.compliance/verify/{batch_id}",
-            payload=payload,
-            status=None
+            payload=payload
         )
-        db.add(dpp_record)
-        await db.flush()  # dpp_id를 발급받기 위해 flush
         
-        # 3. 발행 처리 및 불변 Lock 확정
-        await issue_dpp(db=db, dpp_id=dpp_record.dpp_id)
+        # 4. 발행 처리 및 불변 Lock 확정
+        await issue_dpp(db=db, dpp_id=dpp_id)
         
     return {
         "current_stage": "stage_issuance",

@@ -36,7 +36,7 @@
 
 ### 7. 큐 적재 흐름 요약
 - 국가 불일치(`country_mismatch`) 등 리스크 감지 시 `publish("GeoRiskDetected", asdict(event))`를 통해 이벤트를 즉시 발행한다.
-- 발행과 동시에 `enqueue(RISK_QUEUE, "process_geo_risk_event", event_payload=payload)`를 실행하여, 후속 비동기 리스크 처리 파이프라인에 원자적으로 적재한다.
+- (W3 변경) 후속 비동기 처리는 차윤(Risk) 도메인의 `risk_worker`가 위반(violation) 항목으로 통합 처리하므로, 기존의 `geo_risk_worker`는 삭제됨.
 
 ## 8. 제약 사항
 - 도메인 외부(`audit`, `supplier` 등) 모델 직접 import 금지.
@@ -46,5 +46,5 @@
 ## 9. W3 구현 진행 현황 (Geo Audit 노드 그래프 결합)
 - [x] Day 1: 버그 2개 수정 (`geo_analysis` → `stage_geo` / `check_coordinate_authenticity` 깡통 호출 우회 해결)
 - [x] Day 2: 좌표-국가 불일치 검사 PostGIS 동작 확인 완료
-- [x] Day 3: `geo_audit` 노드 LangGraph 파이프라인 결합 및 `GeoRiskDetected` 원자적 발행(`publish`+`enqueue`) 통합 적용 완료
+- [x] Day 3: `geo_audit` 노드 LangGraph 파이프라인 결합 및 `GeoRiskDetected` 발행 통합 적용 완료
 - [x] Day 4: 튜터형 학습 완료 (PostGIS 공간 쿼리, 재귀 CTE, 이벤트/큐 분산 처리, 멱등성 등 5대 핵심 아키텍처 원리 정립)

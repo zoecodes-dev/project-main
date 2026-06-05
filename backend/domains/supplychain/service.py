@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.events.types import GeoRiskDetectedEvent
 from backend.infrastructure.event_bus import publish
-from backend.infrastructure.queue import RISK_QUEUE, enqueue
 from backend.infrastructure.trace import trace_node
 from backend.domains.supplychain.repository import SupplyChainRepository
 
@@ -108,10 +107,7 @@ class SupplyChainService:
 
     async def _publish_geo_risk(self, event: GeoRiskDetectedEvent) -> None:
         """
-        GeoRiskDetected 발행 + 후속 리스크 처리 큐 적재.
-        - event_bus.publish: A(Supervisor 라우팅)가 수신 (LISTEN/NOTIFY)
-        - queue.enqueue(risk_queue): 비동기 리스크 평가 워커로 위임
+        GeoRiskDetected 이벤트 발행 (후속 처리는 risk_worker가 통합 처리)
         """
         payload = asdict(event)
         await publish(event.event_name, payload)
-        await enqueue(RISK_QUEUE, "process_geo_risk_event", event_payload=payload)
