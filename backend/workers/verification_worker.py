@@ -55,3 +55,4 @@ class WorkerSettings:
     functions = [process_feoc_violation]
     redis_settings = RedisSettings.from_dsn(os.getenv("REDIS_URL", "redis://redis:6379/0"))
     queue_name = "verification_queue"
+    max_tries = 3  # 지수 백오프 3회
