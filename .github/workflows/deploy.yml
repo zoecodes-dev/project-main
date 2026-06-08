@@ -44,6 +44,7 @@ jobs:
             --comment "GitHub Actions deploy $GITHUB_SHA" \
             --parameters '{"commands":[
               "set -e",
+              "git config --global --add safe.directory /home/ubuntu/kira",
               "cd /home/ubuntu/kira",
               "git fetch origin main",
               "git reset --hard origin/main",
