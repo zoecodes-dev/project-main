@@ -48,3 +48,17 @@
 - [x] Day 2: 좌표-국가 불일치 검사 PostGIS 동작 확인 완료
 - [x] Day 3: `geo_audit` 노드 LangGraph 파이프라인 결합 및 `GeoRiskDetected` 발행 통합 적용 완료
 - [x] Day 4: 튜터형 학습 완료 (PostGIS 공간 쿼리, 재귀 CTE, 이벤트/큐 분산 처리, 멱등성 등 5대 핵심 아키텍처 원리 정립)
+
+## 10. W4 구현 진행 현황 (공급망 조회 및 EUDR)
+- [x] Day 1~2: N차 공급망 재귀 트리, 대체 공급망, Geo-Risk 노출 조회 API 확충 완료 (`router.py`)
+- [ ] Day 3: (전원) 프론트 화면 구조 합의 (작업 없음)
+- [ ] Day 4: EUDR 검사 로직(산림 훼손지 대조) 추가 및 본인 구간 시연 검증
+- [ ] Day 5: 튜터 학습 (PostGIS, CTE 쿼리 깊은 이해)
+
+## 11. API 엔드포인트 (W4 조회 라우터 확충)
+조회 전용 인터페이스로, 어떠한 이벤트(publish) 발행이나 강제 상태 전이도 발생시키지 않습니다.
+| Method | Path | 파라미터 | 설명 | 응답 데이터 |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/supply-chain/tree` | `product_id` 또는 `bom_version_id` | N차 공급망 재귀 CTE 트리 조회 | 평면 리스트 (hop_level, part, supplier, link_status 포함) |
+| `GET` | `/supply-chain/alternatives` | `part_id` | 특정 부품의 대체 공급사 풀 조회 | 대체 협력사 목록 |
+| `GET` | `/supply-chain/geo-risks` | 없음 | 지정학 공간 리스크(신장, 위장공장) 노출 목록 | xinjiang_adjacent, country_mismatch 목록 |
