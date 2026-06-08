@@ -34,8 +34,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.product.repository import ProductRepository
 from backend.domains.product.state_machine import (
-    activate_bom_version,
-    deprecate_bom_version,
+    activate_bom_version as sm_activate_bom_version,
+    deprecate_bom_version as sm_deprecate_bom_version,
 )
 from backend.events.types import (
     BOMImportedEvent,
@@ -324,7 +324,7 @@ async def activate_bom_version(
     [반환]
     전이 완료된 BOM 버전 정보 dict.
     """
-    bom = await activate_bom_version(db=db, bom_version_id=bom_version_id)
+    bom = await sm_activate_bom_version(db=db, bom_version_id=bom_version_id)
     await db.commit()
 
     return {
@@ -358,7 +358,7 @@ async def deprecate_bom_version(
     [반환]
     전이 완료된 BOM 버전 정보 dict.
     """
-    bom = await deprecate_bom_version(db=db, bom_version_id=bom_version_id)
+    bom = await sm_deprecate_bom_version(db=db, bom_version_id=bom_version_id)
     await db.commit()
 
     return {

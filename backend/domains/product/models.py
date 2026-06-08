@@ -26,6 +26,16 @@
 #   - 실제 환경에서는 repository.fetch_from_source() 내부 데이터 소스만 교체하면 됨.
 #   - ProductCreateRequest → ProductImportTrigger 로 의미 변경
 #     (외부에서 필드를 받아 생성하는 폼이 아니라, 동기화를 트리거하는 요청).
+#
+# [W4 변경 — 2025-W4]
+#   schema 변경에 따른 ORM 동기화.
+#   - Customer 모델 신설 (__tablename__="customers").
+#     고객사(BMW/Mercedes 등)를 ERP에서 Ingest하는 패턴. 도메인 내부 소유.
+#   - Product 에 customer_id·model_name·amperage_ah 컬럼 추가.
+#     같은 차종도 모델·암페어 조합이 다르면 BOM·공급망이 달라지므로 별도 row.
+#   - BomVersion 의 effective_from/to → production_from/to 로 개명.
+#     "규제 발효일"(regulations.effective_from)과 "생산 기간"을 명확히 분리.
+#     regulations.effective_from 은 변경 없음.
 # =============================================================================
 
 from __future__ import annotations
@@ -73,6 +83,112 @@ class BomVersionStatus(str, enum.Enum):
     DRAFT      = "draft"
     ACTIVE     = "active"
     DEPRECATED = "deprecated"
+
+
+# ---------------------------------------------------------------------------
+# 0. Customer  ← W4 신설
+# ---------------------------------------------------------------------------
+
+class Customer(Base):
+    """
+    고객사(완성차 OEM) 마스터.
+
+    [W4 신설 이유]
+    같은 배터리 사양이라도 BMW iX3(108Ah)·i4(81Ah)처럼 고객사·모델·암페어 조합이
+    다르면 투입 셀·BOM·협력사 계약이 달라져 DPP 증빙이 각각 필요해요.
+    그 제품들이 공통으로 참조할 고객사 마스터가 이 테이블이에요.
+
+    [결정 #1 동일 패턴]
+    고객사도 원청 ERP가 원천. KIRA에서 직접 만들면 ERP 코드와 매핑이 깨질 수 있어서
+    Ingest 패턴(source_system / external_id / synced_at)을 그대로 따라요.
+
+    [도메인 소유]
+    customers 테이블은 Product 도메인이 소유해요.
+    products.customer_id 가 이 테이블을 참조하며, 도메인 내부 relationship으로 선언해요.
+    """
+
+    __tablename__ = "customers"
+
+    customer_id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.uuid_generate_v4(),
+        comment="고객사 고유 식별자",
+    )
+
+    customer_code = Column(
+        String(50),
+        unique=True,
+        nullable=False,
+        comment="고객사 코드. UNIQUE. 예: 'BMW', 'MERCEDES'",
+    )
+
+    customer_name = Column(
+        String(255),
+        nullable=False,
+        comment="고객사 표시명. 예: 'BMW AG', 'Mercedes-Benz AG'",
+    )
+
+    country = Column(
+        String(2),
+        nullable=True,
+        comment="고객사 소재 국가 코드 (ISO 3166-1 alpha-2). 예: 'DE'",
+    )
+
+    # ------------------------------------------------------------------
+    # [결정 #1] 외부 원천 추적 컬럼 3종
+    # ------------------------------------------------------------------
+    source_system = Column(
+        String(100),
+        nullable=True,
+        server_default="ERP_PLM",
+        comment=(
+            "[결정 #1] 데이터 출처 식별자. "
+            "허용값: 'ERP_PLM'(기본) / 'SEED'(시연). "
+            "fetch_from_source() 에서 반드시 세팅."
+        ),
+    )
+
+    external_id = Column(
+        String(255),
+        nullable=True,
+        comment=(
+            "[결정 #1] 원천 시스템의 원본 고객사 PK(문자열). "
+            "UPSERT 시 ON CONFLICT(customer_code) 기준점."
+        ),
+    )
+
+    synced_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        comment=(
+            "[결정 #1] 이 시스템에 마지막으로 동기화된 UTC 시각. "
+            "fetch_from_source() 호출 시 datetime.now(timezone.utc) 로 갱신."
+        ),
+    )
+
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        comment="[결정 #1] 이 시스템에 처음 동기화된 시각. 원천 생성 시각 아님.",
+    )
+
+    # ------------------------------------------------------------------
+    # 도메인 내부 Relationships
+    # ------------------------------------------------------------------
+    products: Mapped[List["Product"]] = relationship(
+        "Product",
+        back_populates="customer",
+        lazy="select",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Customer code={self.customer_code!r} "
+            f"name={self.customer_name!r} "
+            f"country={self.country!r}>"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +244,19 @@ class Product(Base):
     )
 
     # ------------------------------------------------------------------
+    # 도메인 내부 FK (Customer) — relationship 선언
+    # ------------------------------------------------------------------
+    customer_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("customers.customer_id"),
+        nullable=True,
+        comment=(
+            "고객사 FK → customers.customer_id. "
+            "같은 고객사의 여러 모델이 이 FK를 공유해요."
+        ),
+    )
+
+    # ------------------------------------------------------------------
     # 타 도메인 FK (Supplier Domain) — relationship 미선언
     # ------------------------------------------------------------------
     manufacturer_id = Column(
@@ -147,6 +276,24 @@ class Product(Base):
         String(50),
         nullable=True,
         comment="배터리 형태. 예: 각형 / 파우치형 / 원통형",
+    )
+
+    model_name = Column(
+        String(100),
+        nullable=True,
+        comment=(
+            "차량 모델명. 예: 'iX3', 'i4', 'GLC'. "
+            "같은 고객사라도 모델이 다르면 BOM·협력사가 달라 별도 product row로 관리해요."
+        ),
+    )
+
+    amperage_ah = Column(
+        Numeric(10, 2),
+        nullable=True,
+        comment=(
+            "배터리 용량(Ah). 예: 108.00, 81.00. "
+            "고객사+모델+암페어 조합이 달라지면 DPP 증빙 대상이 달라지므로 별도 식별 키 역할."
+        ),
     )
 
     specs = Column(
@@ -214,6 +361,12 @@ class Product(Base):
     # ------------------------------------------------------------------
     # 도메인 내부 Relationships
     # ------------------------------------------------------------------
+    customer: Mapped[Optional["Customer"]] = relationship(
+        "Customer",
+        back_populates="products",
+        lazy="select",
+    )
+
     bom_versions: Mapped[List["BomVersion"]] = relationship(
         "BomVersion",
         back_populates="product",
@@ -285,16 +438,23 @@ class BomVersion(Base):
         comment="버전 식별 번호. 예: 'v1.0', 'v2.3'",
     )
 
-    effective_from = Column(
+    production_from = Column(
         Date,
         nullable=True,
-        comment="이 BOM 버전 적용 시작일",
+        comment=(
+            "이 BOM 버전으로 실제 생산을 시작한 날짜. "
+            "구 effective_from(규제 발효일) 과 혼동 주의 — "
+            "regulations.effective_from 은 그대로이고, 여기는 '생산 기간' 기준."
+        ),
     )
 
-    effective_to = Column(
+    production_to = Column(
         Date,
         nullable=True,
-        comment="이 BOM 버전 적용 종료일. NULL이면 현재 유효.",
+        comment=(
+            "이 BOM 버전 생산 종료일. NULL이면 현재도 생산 중. "
+            "as_of 날짜 조회 시: production_from <= as_of <= COALESCE(production_to, now())."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -869,15 +1029,19 @@ class ProductBrief(BaseModel):
     목록·단건 응답용 직렬화 스키마.
 
     [결정 #1] source_system, synced_at 추가.
-    프론트엔드에서 "언제 동기화된 데이터인지" 표시용.
+    [W4] customer_id, model_name, amperage_ah 추가.
+    프론트엔드 제품 목록에서 고객사·모델·암페어 필터링에 사용돼요.
     """
     product_id: uuid.UUID
     product_code: str
     product_name: Optional[str] = None
     type: Optional[str] = None
     manufacturer_id: Optional[uuid.UUID] = None
-    source_system: Optional[str] = None   # 결정 #1 추가
-    synced_at: Optional[str] = None       # 결정 #1 추가 (ISO 8601 문자열로 직렬화)
+    customer_id: Optional[uuid.UUID] = None      # W4 추가
+    model_name: Optional[str] = None             # W4 추가
+    amperage_ah: Optional[float] = None          # W4 추가
+    source_system: Optional[str] = None          # 결정 #1
+    synced_at: Optional[str] = None              # 결정 #1 (ISO 8601 문자열)
 
     model_config = {"from_attributes": True}
 

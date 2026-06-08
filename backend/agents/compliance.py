@@ -9,6 +9,7 @@ Day3 완성 상태:
   - REGULATION_BY_DESTINATION: supervisor가 import하는 매핑 딕셔너리 (Day1)
   - generate_embedding(): 텍스트 → Bedrock Cohere Embed v4 벡터 변환 (Day2)
   - search_regulations(): pgvector 코사인 유사도 RAG 검색 (Day2)
+  - ComplianceCompleted: 이벤트 dataclass (Day3)
   - _call_sonnet_for_verdict(): Sonnet 호출 래퍼 — cited_clauses 강제 (Day3)
   - judge_uflpa(): UFLPA 전용 judge — @trace_tool("compliance_judge_UFLPA") (Day3)
   - judge_ira(): IRA 전용 judge — @trace_tool("compliance_judge_IRA") (Day3)
@@ -18,8 +19,6 @@ Day3 완성 상태:
   - _insert_compliance_result(): compliance_results INSERT 헬퍼 (Day3)
   - compliance_node: 실판정 버전 — Day1 skeleton 교체 (Day3)
 
-[변경 이력]
-  - ComplianceCompleted dataclass 제거 → events/types.py의 ComplianceCompletedEvent 사용
 """
 
 from __future__ import annotations
@@ -36,7 +35,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agents.state import BatchState
-from backend.events.types import ComplianceCompletedEvent
 from backend.infrastructure.database import AsyncSessionLocal
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node, trace_tool
@@ -91,7 +89,18 @@ REGULATION_BY_DESTINATION: dict[str, list[str]] = {
 
 
 # ---------------------------------------------------------------------------
-# 2. RAG 도구 함수 (Day2 — 그대로 유지)
+# 2. 이벤트 dataclass (Day3)
+#    - events/types.py 에 동일 구조가 정의돼야 해요. 여기선 발행용으로만 씀.
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class ComplianceCompleted:
+    batch_id: str
+    verdicts: dict[str, str]   # {regulation_code: verdict 문자열}
+
+
+# ---------------------------------------------------------------------------
+# 3. RAG 도구 함수 (Day2 — 그대로 유지)
 # ---------------------------------------------------------------------------
 
 @trace_tool("generate_embedding")
@@ -180,7 +189,7 @@ async def search_regulations(
 
 
 # ---------------------------------------------------------------------------
-# 3. Sonnet 호출 래퍼 (Day3)
+# 4. Sonnet 호출 래퍼 (Day3)
 #    RAG로 가져온 조항 + 협력사 데이터를 Sonnet에게 주고 JSON 판정을 받는다.
 #    cited_clauses 가 비어 있으면 호출부(judge_*)에서 compliance_reject 처리.
 # ---------------------------------------------------------------------------
@@ -189,8 +198,8 @@ _SONNET_MODEL = "global.anthropic.claude-sonnet-4-6"
 
 
 def _get_anthropic_key() -> str:
-    from backend.core.config import config
-    return config.ANTHROPIC_API_KEY
+    from backend.core.config import settings
+    return settings.ANTHROPIC_API_KEY
 
 
 async def _call_sonnet_for_verdict(
@@ -291,7 +300,7 @@ def _validate_cited_clauses(result: dict, regulation_code: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 4. Stub judge — CBAM / CONFLICT_MINERALS / CRMA (Day3)
+# 5. Stub judge — CBAM / CONFLICT_MINERALS / CRMA (Day3)
 #    항상 compliance_passed 반환. Sonnet 호출 없음.
 #    cited_clauses도 stub으로 채워요 — 빈 리스트면 INSERT 헬퍼의
 #    "cited_clauses 누락" 경고 경로로 빠질 수 있어서요.
@@ -313,7 +322,7 @@ async def _stub_passed_judge(regulation_code: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 5. 규제별 전용 judge 함수 (Day3)
+# 6. 규제별 전용 judge 함수 (Day3)
 #    geo_audit.py 패턴 준수: 기능별 함수 분리 + 고정 이름 @trace_tool.
 #    시연 핵심인 UFLPA·IRA는 전용 함수, 나머지 실판정 5종은 judge_generic.
 # ---------------------------------------------------------------------------
@@ -404,30 +413,30 @@ async def judge_generic(
 
 
 # ---------------------------------------------------------------------------
-# 6. REGULATION_JUDGES — regulation_code → judge 함수 매핑 (Day3)
+# 7. REGULATION_JUDGES — regulation_code → judge 함수 매핑 (Day3)
 #    compliance_node가 이 딕셔너리로 올바른 judge를 선택한다.
 #    spec C-3의 REGULATION_JUDGES 구조를 그대로 따른다.
 # ---------------------------------------------------------------------------
 
 REGULATION_JUDGES: dict[str, Callable] = {
     # 시연 핵심 — 전용 judge
-    "UFLPA":             judge_uflpa,
-    "IRA":               judge_ira,
+    "UFLPA":            judge_uflpa,
+    "IRA":              judge_ira,
     # 실판정 5종 — 공통 judge (regulation_code를 인자로 넘김)
-    "EU_BATTERY":        judge_generic,
-    "EU_BATTERY_ART7":   judge_generic,
-    "EU_BATTERY_ART47":  judge_generic,
-    "EUDR":              judge_generic,
-    "CSDDD":             judge_generic,
+    "EU_BATTERY":       judge_generic,
+    "EU_BATTERY_ART7":  judge_generic,
+    "EU_BATTERY_ART47": judge_generic,
+    "EUDR":             judge_generic,
+    "CSDDD":            judge_generic,
     # Stub 3종 — 항시 compliance_passed
-    "CBAM":              _stub_passed_judge,
-    "CONFLICT_MINERALS": _stub_passed_judge,
-    "CRMA":              _stub_passed_judge,
+    "CBAM":             _stub_passed_judge,
+    "CONFLICT_MINERALS":_stub_passed_judge,
+    "CRMA":             _stub_passed_judge,
 }
 
 
 # ---------------------------------------------------------------------------
-# 7. compliance_results INSERT 헬퍼 (Day3)
+# 8. compliance_results INSERT 헬퍼 (Day3)
 # ---------------------------------------------------------------------------
 
 async def _insert_compliance_result(
@@ -485,7 +494,7 @@ async def _insert_compliance_result(
 
 
 # ---------------------------------------------------------------------------
-# 8. judge context 빌더 (Day3)
+# 9. judge context 빌더 (Day3)
 #    앞 단계(extraction, verification, geo) 결과를 합쳐
 #    judge에게 넘길 컨텍스트 dict를 구성한다.
 #    없는 키는 빈값으로 채워요(KeyError 방지).
@@ -512,7 +521,7 @@ def _build_judge_context(state: BatchState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 9. compliance_node — 실판정 버전 (Day3, Day1 skeleton 교체)
+# 10. compliance_node — 실판정 버전 (Day3, Day1 skeleton 교체)
 #
 #     graph.py 패턴: state 하나만 인자로 받음.
 #     DB 세션은 내부에서 AsyncSessionLocal로 직접 연다.
@@ -584,19 +593,25 @@ async def compliance_node(state: BatchState) -> BatchState:
     )
 
     # ComplianceCompleted 이벤트 발행 → 차윤(E) Readiness 재계산 트리거
-    # events/types.py의 ComplianceCompletedEvent 사용
     await publish(
         "ComplianceCompleted",
-        dataclasses.asdict(ComplianceCompletedEvent(batch_id=batch_id, verdicts=verdicts)),
+        dataclasses.asdict(ComplianceCompleted(batch_id=batch_id, verdicts=verdicts)),
     )
+
+    # dpp/service.py의 ESG Score 계산에 필요한 count 키 추가
+    # service.py: passed/gray_zone을 숫자로 읽어 ESG Score 계산
+    passed_count  = sum(1 for v in verdicts.values() if v == "compliance_passed")
+    warning_count = sum(1 for v in verdicts.values() if v == "compliance_warning")
 
     return {
         **state,
         "current_stage":    "stage_compliance",
         "confidence_score": new_confidence,
         "compliance_result": {
-            "verdicts":           verdicts,
+            "verdicts":           verdicts,           # {regulation_code: verdict} — risk_scoring용
             "needs_human_review": any_human_review,
             "evaluated_at":       datetime.now(timezone.utc).isoformat(),
+            "passed":    passed_count,    # dpp/service.py ESG Score 계산용
+            "gray_zone": warning_count,   # dpp/service.py ESG Score 계산용
         },
     }

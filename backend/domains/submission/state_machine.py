@@ -5,11 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy.exc import IntegrityError
-from backend.infrastructure.trace import trace_node
 from backend.domains.submission.models import SubmissionStatus, SUBMISSION_TRANSITIONS, DataRequestLog, SubmissionStatusHistory
 from backend.events.types import SubmissionStatusChangedEvent
 
-@trace_node("transition_submission", node_type="agent")
 async def transition_submission(
     db: AsyncSession,
     request_id: uuid.UUID,           # 데이터 수집 및 제출 요청건의 유니크 ID (마스터 테이블 외래키)
