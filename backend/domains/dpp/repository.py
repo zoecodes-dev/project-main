@@ -149,14 +149,13 @@ async def get_score_raw_data(db: AsyncSession, batch_id: uuid.UUID) -> Dict[str,
     compliance_counts = {row[0]: row[1] for row in comp_rows}
 
     # 3. Traceability Coverage (노드 승인 및 연결 확정 비율)
-    # TODO: supply_chain_map에 link_status 컬럼이 B migration으로 추가된 후 주석 해제
     trace_query = text("""
         SELECT
             COUNT(*) as total_nodes,
             SUM(
                 CASE
                     WHEN v.submission_status = 'submission_approved'
-                    /* AND scm.link_status = 'supplychain_confirmed' */
+                    AND scm.link_status = 'supplychain_confirmed'
                     THEN 1 ELSE 0
                 END
             ) as approved_nodes
@@ -194,7 +193,7 @@ async def get_score_raw_data(db: AsyncSession, batch_id: uuid.UUID) -> Dict[str,
         "traceability": traceability,
         "suppliers": suppliers_data,
         
-        # CBAM 연동용 메타데이터 (generator.py로 전달)
+        # CBAM 연동용 메타데이터 (service.py로 전달)
         "business_reg_no": batch_row.get("business_reg_no"),
         "tenant_company_name": batch_row.get("tenant_company_name"),
         "tenant_country": batch_row.get("tenant_country"),

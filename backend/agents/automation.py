@@ -2,7 +2,7 @@ import uuid
 from typing import Any, Dict
 
 from backend.agents.state import BatchState
-from backend.infrastructure.database import get_db
+from backend.infrastructure.database import AsyncSessionLocal
 from backend.infrastructure.trace import trace_node
 from backend.domains.verification.service import verify_feoc_rule
 from backend.domains.risk.service import calculate_risk_score
@@ -30,7 +30,7 @@ async def verification_node(state: BatchState) -> Dict[str, Any]:
     direct_ownership = float(extraction.get("direct_ownership", 0.0))
     indirect_ownership = float(extraction.get("indirect_ownership", 0.0))
 
-    async for db in get_db():
+    async with AsyncSessionLocal() as db:
         # 도메인 서비스(얇은 래퍼) 호출
         passed = await verify_feoc_rule(
             db=db,
@@ -74,7 +74,7 @@ async def risk_scoring_node(state: BatchState) -> Dict[str, Any]:
     if geo_res.get("risk_detected"):
         violations.append({"type": "GeoRiskDetected", "reason": "지리적 위험(GeoRisk) 검출"})
 
-    async for db in get_db():
+    async with AsyncSessionLocal() as db:
         risk_result = await calculate_risk_score(
             db=db,
             batch_id=batch_id,
@@ -93,6 +93,8 @@ async def risk_scoring_node(state: BatchState) -> Dict[str, Any]:
     # 에스컬레이션 되었다면 사유를 명확히 적어주어 HITL 노드가 헷갈리지 않게 해요
     if is_escalated:
         updates["error_reason"] = "risk_escalated"
+        # Supervisor가 hitl_interrupt 노드로 라우팅하도록 점수를 강제로 깎습니다.
+        updates["confidence_score"] = 0.84
         
     return updates
 
@@ -106,18 +108,21 @@ async def readiness_node(state: BatchState) -> Dict[str, Any]:
     """
     product_id = uuid.UUID(state["product_id"])
     
-    async for db in get_db():
+    async with AsyncSessionLocal() as db:
         result = await calculate_readiness(db, product_id)
         score = result["readiness_score"]
         
-        # Readiness가 1.0(만점) 미만이면 사람의 확인(HITL)이 필요하도록 상태를 바꿔요
-        batch_status = "batch_completed" if score >= 1.0 else "batch_hitl_wait"
-        
-        return {
+        updates = {
             "current_stage": "stage_readiness",
             "readiness_score": score,
-            "batch_status": batch_status
         }
+        
+        # 만점이 아니라면 보류 사유를 적고, Supervisor가 HITL로 보내도록 유도해요.
+        if score < 1.0:
+            updates["error_reason"] = "gray_zone"
+            updates["confidence_score"] = 0.84
+            
+        return updates
 
 
 @trace_node("issuance", "agent")
@@ -130,7 +135,7 @@ async def issuance_node(state: BatchState) -> Dict[str, Any]:
     batch_id = uuid.UUID(state["batch_id"])
     product_id = uuid.UUID(state["product_id"])
     
-    async for db in get_db():
+    async with AsyncSessionLocal() as db:
         # 1. 80필드 DPP 페이로드 생성
         payload = await generate_dpp_payload(db=db, product_id=product_id, batch_id=batch_id)
         

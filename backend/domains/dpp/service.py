@@ -5,9 +5,9 @@ from typing import Any, Dict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.event_bus import publish
-from backend.infrastructure.trace import trace_node
+from backend.infrastructure.trace import trace_node, trace_tool
 from backend.domains.dpp.repository import get_readiness_metrics, get_score_raw_data
-from backend.events.types import DPPReadinessUpdatedEvent, DPPIssuedEvent
+from backend.events.types import DPPReadinessUpdatedEvent
 from backend.domains.dpp.models import DppRecord
 
 
@@ -138,8 +138,8 @@ async def generate_dpp_payload(
             "17_customs_declaration_date": "TODO",
             "18_customs_office_of_import": "TODO",
             "19_cn_code_of_goods": raw_data.get("hs_code", "TODO"),
-            "20_goods_description": raw_data.get("product_name", raw_data.get("part_name", "TODO")),
-            "21_country_of_origin": raw_data.get("item_origin", raw_data["destination"]),
+            "20_goods_description": raw_data.get("product_name") or raw_data.get("part_name") or "TODO",
+            "21_country_of_origin": raw_data.get("item_origin") or raw_data.get("destination") or "TODO",
             "22_net_mass": raw_data.get("net_mass", 0.0),  # [3대 산식 변수] 수입 물품 순 중량
             "23_supplementary_units": "TODO",
             "24_commercial_invoice_number": raw_data.get("invoice_number", "TODO"),
@@ -219,6 +219,7 @@ async def generate_dpp_payload(
     }
 
 
+@trace_tool("create_dpp_record")
 async def create_dpp_record(
     db: AsyncSession,
     batch_id: uuid.UUID,
