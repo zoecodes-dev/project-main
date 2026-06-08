@@ -6,28 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
-from backend.domains.dpp.repository import get_readiness_metrics
 from backend.domains.dpp.repository import get_readiness_metrics, get_score_raw_data
-
-
-# ==============================================================================
-# 이벤트 객체 (Payload 구조체)
-# ==============================================================================
-
-@dataclasses.dataclass
-class DPPReadinessUpdatedEvent:
-    product_id: uuid.UUID
-    readiness_score: float
-    readiness_breakdown: Dict[str, bool]
-    event_name: str = "DPPReadinessUpdated"
-
-
-@dataclasses.dataclass
-class DPPIssuedEvent:
-    dpp_id: uuid.UUID
-    product_id: uuid.UUID
-    qr_code_url: str
-    event_name: str = "DPPIssued"
+from backend.events.types import DPPReadinessUpdatedEvent, DPPIssuedEvent
+from backend.domains.dpp.models import DppRecord
 
 
 # ==============================================================================
@@ -98,9 +79,9 @@ async def generate_dpp_payload(
     if total_regulations == 0:
         esg_score = 100.0
     else:
-        # schema.sql의 compliance_results.verdict 기준 상태값 매핑 ('passed', 'gray_zone', 'violation')
-        passed = raw_data["compliance"].get("passed", 0)
-        warning = raw_data["compliance"].get("gray_zone", 0)
+        # schema.sql의 compliance_results.verdict ('compliance_passed', 'compliance_warning' 등) 값을 집계해요.
+        passed = raw_data["compliance"].get("compliance_passed", 0)
+        warning = raw_data["compliance"].get("compliance_warning", 0)
         esg_score = round(((passed + warning * 0.5) / total_regulations) * 100, 2)
 
     # =====================================================================
@@ -236,3 +217,31 @@ async def generate_dpp_payload(
         },
         "annex_xiii_fields": cbam_80_fields
     }
+
+
+async def create_dpp_record(
+    db: AsyncSession,
+    batch_id: uuid.UUID,
+    product_id: uuid.UUID,
+    carbon_footprint: float,
+    qr_code_url: str,
+    payload: Dict[str, Any]
+) -> uuid.UUID:
+    """
+    [DPP Service]
+    발행 준비가 완료된 DPP 초안 레코드를 생성합니다.
+    """
+    # DB의 DEFAULT 'dpp_issued' 제약에 걸리지 않도록 status=None을 명시해 줘요.
+    # 그래야 assert_not_issued 가드를 무사히 통과하고 issue_dpp에서 확정 지을 수 있어요.
+    dpp_record = DppRecord(
+        batch_id=batch_id,
+        product_id=product_id,
+        carbon_footprint=carbon_footprint,
+        qr_code_url=qr_code_url,
+        payload=payload,
+        status=None
+    )
+    db.add(dpp_record)
+    await db.flush()
+    
+    return dpp_record.dpp_id

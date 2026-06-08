@@ -1,0 +1,94 @@
+name: Deploy to EC2 (SSM)
+
+# main 브랜치에 push되면 자동 배포
+on:
+  push:
+    branches:
+      - main
+
+# 동시 배포 방지 (이전 실행 취소)
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: true
+
+# OIDC 토큰 발급에 필요한 권한
+permissions:
+  id-token: write      # OIDC 토큰 요청
+  contents: read       # 저장소 체크아웃
+
+env:
+  AWS_REGION: ap-northeast-2
+  INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # 1) OIDC로 AWS 임시 자격 획득 (키 없음)
+      - name: AWS 자격 획득 (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 2) SSM으로 EC2에 배포 명령 전송하고 완료까지 대기
+      - name: SSM 배포 실행
+        run: |
+          set -euo pipefail
+
+          echo "배포 명령 전송 중..."
+          COMMAND_ID=$(aws ssm send-command \
+            --region "$AWS_REGION" \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "GitHub Actions deploy $GITHUB_SHA" \
+            --parameters '{"commands":[
+              "set -e",
+              "export HOME=/root",
+              "git config --global --add safe.directory /home/ubuntu/kira",
+              "cd /home/ubuntu/kira",
+              "git fetch origin main",
+              "git reset --hard origin/main",
+              "docker compose up -d --build",
+              "docker image prune -f",
+              "docker compose ps"
+            ],"executionTimeout":["1200"]}' \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "Command ID: $COMMAND_ID"
+          echo "EC2에서 실행 완료 대기 중..."
+
+          # 완료까지 폴링 (최대 20분)
+          aws ssm wait command-executed \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" || true
+
+          # 결과 조회
+          STATUS=$(aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "Status" --output text)
+
+          echo "===== 표준 출력 ====="
+          aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardOutputContent" --output text
+
+          echo "===== 표준 에러 ====="
+          aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardErrorContent" --output text
+
+          echo "최종 상태: $STATUS"
+          if [ "$STATUS" != "Success" ]; then
+            echo "❌ 배포 실패"
+            exit 1
+          fi
+          echo "✅ 배포 성공"

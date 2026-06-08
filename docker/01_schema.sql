@@ -377,12 +377,34 @@ CREATE TABLE training_records (
 -- 영역 7. 제품 / BOM / 부품 (C 담당 - Ingest 컬럼 전수 동기화)
 -- ============================================================
 
+-- [테이블 역할] 최종 고객사(OEM) 마스터. 원천(ERP/PLM 수주정보)에서 Ingest. 원청(배터리팩 제조사)에 납품받는 완성차 업체(BMW, Mercedes 등).
+CREATE TABLE customers (
+    customer_id     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    customer_code   VARCHAR(50) UNIQUE NOT NULL,
+    customer_name   VARCHAR(255) NOT NULL,
+    country         VARCHAR(2),
+
+    -- [결정 #1] 외부 원천시스템 연동 마크 (고객사도 ERP/PLM 수주정보에서 동기화)
+    source_system   VARCHAR(100) DEFAULT 'ERP_PLM',
+    external_id     VARCHAR(255),
+    synced_at       TIMESTAMPTZ DEFAULT now(),
+
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
 -- [테이블 역할] 원청사의 복사본 제품 마스터. (결정 #1 ERP Ingest 일치)
+-- 제품 식별 축: customer(고객사 OEM) + model_name(차종) + amperage_ah(용량). 같은 배터리도 고객사/모델별로 암페어가 달라 별도 제품으로 분리.
 CREATE TABLE products (
     product_id      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     product_code    VARCHAR(50) UNIQUE NOT NULL,
     product_name    VARCHAR(255),
     manufacturer_id UUID REFERENCES suppliers(supplier_id),
+
+    -- [제품 식별 축 추가] 고객사(OEM) + 모델 + 암페어
+    customer_id     UUID REFERENCES customers(customer_id),
+    model_name      VARCHAR(100),                -- 차종/모델 (예: iX3 50, i4, GLC EV, EQS)
+    amperage_ah     NUMERIC(10,2),               -- 셀/팩 용량 (Ah). 고객사·모델별로 상이.
+
     type            VARCHAR(50),
     specs           JSONB,
     
@@ -395,13 +417,14 @@ CREATE TABLE products (
     updated_at      TIMESTAMPTZ DEFAULT now()
 );
 
--- [테이블 역할] 동일 제품의 배치/Lot별 버전 이력. (결정 #1 ERP Ingest 일치)
+-- [테이블 역할] 동일 제품의 배치/Lot별 버전 이력. 생산 Lot이 달라지면(생산 기간이 달라지면) 들어가는 세부 자재·협력사가 바뀌므로 BOM 버전이 갈린다. (결정 #1 ERP Ingest 일치)
 CREATE TABLE bom_versions (
     bom_version_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     product_id     UUID REFERENCES products(product_id) ON DELETE CASCADE,
     version_number VARCHAR(20) NOT NULL,
-    effective_from DATE,
-    effective_to   DATE,
+    -- [의미 명확화] 이 BOM Lot이 실제 생산·유통된 기간. (구 effective_from/to → 규제 발효일이 아니라 생산기간임을 명확히 하기 위해 개명)
+    production_from DATE,
+    production_to   DATE,
     status         VARCHAR(20) DEFAULT 'draft' CONSTRAINT chk_bom_status CHECK (status IN ('draft', 'active', 'deprecated')),
     approved_by    UUID REFERENCES users(user_id),
     approved_at    TIMESTAMPTZ,
@@ -979,6 +1002,11 @@ CREATE INDEX idx_parts_hs_code           ON parts(hs_code);
 CREATE INDEX idx_batches_status          ON batches(status);
 CREATE INDEX idx_batches_tenant_status   ON batches(tenant_id, status);
 CREATE INDEX idx_dpp_product             ON dpp_records(product_id);
+-- [제품 식별 축] 고객사/모델/암페어 검색 + BOM 생산기간 조회
+CREATE INDEX idx_products_customer       ON products(customer_id);
+CREATE INDEX idx_products_cust_model     ON products(customer_id, model_name);
+CREATE INDEX idx_bom_versions_product    ON bom_versions(product_id);
+CREATE INDEX idx_bom_versions_period     ON bom_versions(product_id, production_from, production_to);
 CREATE INDEX idx_regulations_embedding   ON regulations USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX idx_compliance_supplier     ON compliance_results(supplier_id);
 

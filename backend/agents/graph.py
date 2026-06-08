@@ -1,12 +1,17 @@
 from dataclasses import asdict
+from inspect import isawaitable, signature
 from uuid import UUID
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
+from backend.agents.compliance import compliance_node
+from backend.agents.data_gateway import data_gateway_node
+from backend.agents.geo_audit import geo_audit_node
 from backend.agents.state import BatchState
 from backend.agents.supervisor import route
+from backend.agents.data_gateway import data_gateway_node
 from backend.domains.audit import repository
 from backend.domains.audit.state_machine import (
     pause_batch_for_review,
@@ -16,6 +21,12 @@ from backend.events.types import HITLRequestedEvent
 from backend.infrastructure.database import AsyncSessionLocal
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
+from backend.agents.automation import (
+    verification_node,
+    risk_scoring_node,
+    readiness_node,
+    issuance_node,
+)
 
 
 def supervisor_node(state: BatchState) -> BatchState:
@@ -31,6 +42,40 @@ def placeholder_node(next_stage: str):
         return {**state, "current_stage": next_stage}
 
     return advance_stage
+
+
+def traced_graph_node(node_name: str, node_func, node_type: str = "agent"):
+    @trace_node(node_name=node_name, node_type=node_type)
+    async def run_with_audit(state: BatchState, db) -> BatchState:
+        params = signature(node_func).parameters
+        if "db" in params:
+            result = node_func(state, db)
+        else:
+            result = node_func({**state, "db": db})
+        if isawaitable(result):
+            result = await result
+        clean_result = {**result}
+        clean_result.pop("db", None)
+        return clean_result
+
+    async def run(state: BatchState) -> BatchState:
+        async with AsyncSessionLocal() as db:
+            return await run_with_audit(state, db)
+
+    return run
+
+
+async def data_gateway_graph_node(state: BatchState) -> BatchState:
+    if state.get("document_id") is None:
+        return {
+            **state,
+            "current_stage": "stage_extraction",
+            "extraction_result": {
+                "parsed": False,
+                "note": "no document_id in graph smoke path",
+            },
+        }
+    return await data_gateway_node(state)
 
 
 def _batch_id(state: BatchState) -> UUID:
@@ -117,16 +162,16 @@ async def supplier_reverify_node(state: BatchState) -> BatchState:
 
 builder = StateGraph(BatchState)
 builder.add_node("supervisor", supervisor_node)
-builder.add_node("data_gateway", placeholder_node("stage_extraction"))
-builder.add_node("verification", placeholder_node("stage_verification"))
-builder.add_node("geo_audit", placeholder_node("stage_geo"))
-builder.add_node("compliance", placeholder_node("stage_compliance"))
-builder.add_node("risk_scoring", placeholder_node("stage_risk"))
-builder.add_node("readiness", placeholder_node("stage_readiness"))
-builder.add_node("issuance", placeholder_node("stage_issuance"))
-builder.add_node("supplier_reverify", supplier_reverify_node)
-builder.add_node("hitl_interrupt", hitl_interrupt_node)
-builder.add_node("completed", supervisor_node)
+builder.add_node("data_gateway", traced_graph_node("data_gateway", data_gateway_graph_node))
+builder.add_node("verification", traced_graph_node("verification", verification_node))
+builder.add_node("geo_audit", traced_graph_node("geo_audit", geo_audit_node))
+builder.add_node("compliance", traced_graph_node("compliance", compliance_node))
+builder.add_node("risk_scoring", traced_graph_node("risk_scoring", risk_scoring_node))
+builder.add_node("readiness", traced_graph_node("readiness", readiness_node))
+builder.add_node("issuance", traced_graph_node("issuance", issuance_node))
+builder.add_node("supplier_reverify", traced_graph_node("supplier_reverify", supplier_reverify_node, "human"))
+builder.add_node("hitl_interrupt", traced_graph_node("hitl_interrupt", hitl_interrupt_node, "human"))
+builder.add_node("completed", traced_graph_node("completed", supervisor_node))
 
 builder.set_entry_point("supervisor")
 builder.add_conditional_edges(
