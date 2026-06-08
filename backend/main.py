@@ -19,6 +19,7 @@ from backend.domains.supplier.router import router as supplier_router
 from backend.domains.audit.router import actions_router, router as audit_router
 from backend.domains.risk.router import router as risk_router
 from backend.domains.dpp.router import router as dpp_router
+from backend.hitl.router import router as hitl_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,6 +46,7 @@ app.include_router(audit_router)
 app.include_router(actions_router)
 app.include_router(risk_router)
 app.include_router(dpp_router)
+app.include_router(hitl_router)
 
 @app.get("/health")
 async def health_check():
