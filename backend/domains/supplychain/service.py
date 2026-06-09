@@ -65,6 +65,18 @@ class SupplyChainService:
     ) -> List[Dict[str, Any]]:
         return await self.repository.get_alternatives(product_id, part_id)
 
+    async def get_geo_risks(self, db: AsyncSession) -> Dict[str, Any]:
+        """
+        조회 전용 인터페이스: 이벤트를 발행하지 않고 지정학 리스크 결과를 반환합니다.
+        """
+        xinjiang_risks = await self.repository.check_geo_audit_risk_zone()
+        mismatch_risks = await self.repository.check_coordinate_authenticity(db)
+        
+        return {
+            "xinjiang_adjacent": xinjiang_risks,
+            "country_mismatch": mismatch_risks
+        }
+
     # ---------- Geo Audit ----------
     @trace_node("geo_audit_execute", "agent")
     async def execute_geo_audit(self, db: AsyncSession, batch_id: str | None = None) -> List[Dict[str, Any]]:

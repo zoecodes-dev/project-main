@@ -37,7 +37,7 @@ class SupplyChainRepository:
             WITH RECURSIVE sc_tree AS (
                 SELECT
                     scm.map_id, scm.parent_supplier_id, scm.child_supplier_id,
-                    scm.part_id, s.company_name, s.supplier_type, s.tier,
+                    scm.part_id, s.company_name, s.supplier_type, scm.hop_level,
                     sf.country,
                     ST_AsGeoJSON(sf.location) AS location_geojson,
                     1 AS depth,
@@ -55,7 +55,7 @@ class SupplyChainRepository:
 
                 SELECT
                     scm.map_id, scm.parent_supplier_id, scm.child_supplier_id,
-                    scm.part_id, s.company_name, s.supplier_type, s.tier,
+                    scm.part_id, s.company_name, s.supplier_type, scm.hop_level,
                     sf.country,
                     ST_AsGeoJSON(sf.location) AS location_geojson,
                     sct.depth + 1,
@@ -70,10 +70,10 @@ class SupplyChainRepository:
             )
             SELECT
                 map_id, parent_supplier_id, child_supplier_id, part_id,
-                company_name, supplier_type, tier, country,
+                company_name, supplier_type, hop_level, country,
                 location_geojson, depth, is_cycle
             FROM sc_tree
-            ORDER BY depth, tier;
+            ORDER BY depth, hop_level;
         """)
         result = await self.session.execute(query, {"product_id": product_id})
         return [dict(row._mapping) for row in result]
@@ -155,7 +155,7 @@ class SupplyChainRepository:
         """동일 part_id를 공급하는 다른 협력사 목록 (대체 공급망)."""
         query = text("""
             SELECT DISTINCT
-                s.supplier_id, s.company_name, s.supplier_type, s.tier,
+                s.supplier_id, s.company_name, s.supplier_type, scm.hop_level,
                 sr.ratio_percentage
             FROM supply_chain_map scm
             JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id

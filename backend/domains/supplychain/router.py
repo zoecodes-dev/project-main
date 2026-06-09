@@ -55,7 +55,7 @@ async def create_supply_relation(
 
 
 @router.get("/tree")
-@trace_tool("get_n_tier_supply_chain")
+@trace_tool("get_supply_tree")
 async def get_supply_chain_tree_endpoint(
     product_id: Optional[UUID] = None,
     bom_version_id: Optional[UUID] = None,
@@ -63,29 +63,33 @@ async def get_supply_chain_tree_endpoint(
 ):
     """N차 공급망 트리 (재귀 CTE)."""
     # 프론트 트리 렌더용 평면 리스트(hop_level, parent-child 포함) 반환
-    return await service.get_n_tier_supply_chain(
-        product_id=product_id,
-        bom_version_id=bom_version_id,
+    # service.get_supply_tree는 product_id(str)만 인자로 받음
+    return await service.get_supply_tree(
+        product_id=str(product_id) if product_id else ""
     )
 
 
 @router.get("/alternatives")
 @trace_tool("get_alternatives")
 async def get_supply_chain_alternatives_endpoint(
+    product_id: UUID,
     part_id: UUID,
     service: SupplyChainService = Depends(get_supply_chain_service),
 ):
     """동일 부품의 대체 공급망 탐색."""
     # 특정 부품 공급 중단 시 프론트에 대안 협력사 풀 제시
-    return await service.get_alternatives(part_id=part_id)
+    return await service.get_alternatives(
+        product_id=str(product_id),
+        part_id=str(part_id)
+    )
 
 
 @router.get("/geo-risks")
-@trace_tool("execute_geo_audit")
+@trace_tool("get_geo_risks")
 async def get_geo_risks_endpoint(
     session: AsyncSession = Depends(get_db),
     service: SupplyChainService = Depends(get_supply_chain_service),
 ):
     """지정학 공간 리스크(신장, 위장공장) 노출 목록."""
     # check_geo_audit_risk_zone(신장) + check_coordinate_authenticity(위장공장) 결과 통합 반환
-    return await service.execute_geo_audit(session)
+    return await service.get_geo_risks(session)
