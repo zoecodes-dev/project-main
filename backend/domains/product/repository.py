@@ -29,7 +29,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.product.models import (
     BomVersion,
+    Customer,
     Product,
     VALID_SOURCE_SYSTEMS,
 )
@@ -56,35 +57,31 @@ class ProductRepository:
     async def fetch_from_source(
         self,
         source_system: str = "SEED",
-    ) -> List[Product]:
+    ) -> Dict[str, Any]:
         """
-        [결정 #1] 외부 원천에서 제품 데이터를 읽어 products 테이블에 UPSERT한다.
+        [결정 #1] 외부 원천에서 제품 데이터를 읽어 customers + products 테이블에 UPSERT한다.
 
-        시연 구현:
-            원천 = 이 DB에 이미 적재된 시드 데이터.
-            source_system='SEED' 로 태깅해 ingest 경로를 추적 가능하게 함.
+        [W4 확장]
+        고객사(Customer)를 제품(Product)보다 먼저 UPSERT해요.
+        이유: products.customer_id 가 customers.customer_id 를 FK로 참조하기 때문에
+              customer row가 없으면 product INSERT 자체가 실패해요.
 
-        실환경 전환:
-            이 함수 내부의 "원천 조회" 부분만 ERP REST API 호출로 교체.
-            함수 시그니처·UPSERT 로직·이벤트 발행 연계는 변경 불필요.
-
-        발표 포인트:
-            "ingest 레이어가 있고, 지금은 시드를 읽지만
-             실제 환경에서는 ERP가 들어온다."
-
-        [세팅 규칙]
-            source_system : 파라미터로 전달받은 값 그대로 ('SEED' / 'ERP' / 'MES' / 'PLM')
-            external_id   : 원천 시스템의 PK 문자열. 시연에서는 product_code를 그대로 사용.
-            synced_at     : datetime.now(timezone.utc) — datetime.utcnow() 사용 금지(deprecated).
-
-        [UPSERT 전략]
-            ON CONFLICT (product_code) DO UPDATE
-            → 같은 product_code가 이미 있으면 동기화 정보만 갱신.
-            → 없으면 신규 INSERT.
-            → idempotent — 동일 ingest를 두 번 실행해도 중복 row 없음.
+        [처리 순서]
+            1. _load_seed_products() 로 raw dict 목록 조회
+            2. 고객사 UPSERT (_upsert_customer) — customer_code 기준 충돌 처리
+            3. 제품 UPSERT (_upsert_product) — product_code 기준, customer_id 채움
 
         [반환]
-            UPSERT된 Product ORM 객체 리스트.
+            {
+                "customers": [(Customer, is_new), ...],   # is_new=True면 신규 INSERT
+                "products":  [Product, ...],
+            }
+            service가 CustomerImported / ProductImported 발행 시 이 반환값을 씀.
+
+        [UPSERT 전략 — idempotent]
+            동일 ingest를 두 번 실행해도 중복 row 없음.
+            - 고객사: ON CONFLICT (customer_code) DO UPDATE synced_at
+            - 제품:   ON CONFLICT (product_code)  DO UPDATE customer_id + 동기화 정보
         """
         if source_system not in VALID_SOURCE_SYSTEMS:
             raise ValueError(
@@ -101,11 +98,45 @@ class ProductRepository:
         raw_products = await self._load_seed_products()
 
         # ------------------------------------------------------------------
-        # UPSERT — product_code 충돌 시 동기화 정보 갱신
+        # 1단계: 고객사 UPSERT
+        # customer_code 기준. 고객사가 확정되어야 제품에 customer_id를 채울 수 있어요.
+        # customer_code → Customer 객체 캐시 맵: 같은 고객사를 여러 제품이 공유할 때
+        # DB를 반복 조회하지 않기 위해 메모리에 들고 있어요.
         # ------------------------------------------------------------------
-        upserted: List[Product] = []
+        customer_cache: Dict[str, Tuple[Customer, bool]] = {}
 
         for raw in raw_products:
+            customer_code = raw.get("customer_code")
+            if not customer_code or customer_code in customer_cache:
+                # customer_code 없으면 고객사 미연결 제품 — 스킵
+                # 이미 처리된 고객사면 캐시 재사용 — 중복 UPSERT 방지
+                continue
+
+            customer, is_new = await self._upsert_customer(
+                customer_code=customer_code,
+                customer_name=raw.get("customer_name", customer_code),
+                country=raw.get("customer_country"),
+                external_id=raw.get("customer_external_id", customer_code),
+                source_system=source_system,
+                now=now,
+            )
+            customer_cache[customer_code] = (customer, is_new)
+
+        await self.session.flush()  # customer PK 확정 — product FK 참조 전 필수
+
+        # ------------------------------------------------------------------
+        # 2단계: 제품 UPSERT
+        # customer_cache 에서 customer_id 를 꺼내 product row에 채워요.
+        # ------------------------------------------------------------------
+        upserted_products: List[Product] = []
+
+        for raw in raw_products:
+            customer_code = raw.get("customer_code")
+            customer_id = None
+            if customer_code and customer_code in customer_cache:
+                customer_obj, _ = customer_cache[customer_code]
+                customer_id = customer_obj.customer_id
+
             stmt = (
                 pg_insert(Product)
                 .values(
@@ -114,6 +145,9 @@ class ProductRepository:
                     manufacturer_id=raw.get("manufacturer_id"),
                     type=raw.get("type"),
                     specs=raw.get("specs"),
+                    customer_id=customer_id,
+                    model_name=raw.get("model_name"),
+                    amperage_ah=raw.get("amperage_ah"),
                     source_system=source_system,
                     external_id=raw.get("external_id", raw["product_code"]),
                     synced_at=now,
@@ -122,6 +156,9 @@ class ProductRepository:
                     index_elements=["product_code"],
                     set_={
                         "product_name":  raw.get("product_name"),
+                        "customer_id":   customer_id,
+                        "model_name":    raw.get("model_name"),
+                        "amperage_ah":   raw.get("amperage_ah"),
                         "source_system": source_system,
                         "external_id":   raw.get("external_id", raw["product_code"]),
                         "synced_at":     now,
@@ -133,41 +170,150 @@ class ProductRepository:
             result = await self.session.execute(stmt)
             product = result.scalars().first()
             if product:
-                upserted.append(product)
+                upserted_products.append(product)
 
         await self.session.flush()
-        return upserted
+
+        return {
+            "customers": list(customer_cache.values()),   # [(Customer, is_new), ...]
+            "products":  upserted_products,
+        }
+
+    async def _upsert_customer(
+        self,
+        customer_code: str,
+        customer_name: str,
+        country: Optional[str],
+        external_id: str,
+        source_system: str,
+        now: datetime,
+    ) -> Tuple["Customer", bool]:
+        """
+        [W4 신설] customer_code 기준 고객사 UPSERT 헬퍼.
+
+        [충돌 처리]
+            ON CONFLICT (customer_code) DO UPDATE synced_at / source_system
+            고객사명·국가는 원천이 바뀌는 경우가 거의 없지만, synced_at 갱신으로
+            "마지막으로 확인된 시각"은 항상 최신 유지해요.
+
+        [is_new 플래그]
+            service가 CustomerImported 이벤트에 담아 발행해요.
+            downstream이 "신규 고객사 등장" vs "기존 갱신"을 구분할 수 있어요.
+            PostgreSQL의 xmax 컬럼으로 판별: INSERT면 xmax=0, UPDATE면 xmax>0.
+
+        [반환]
+            (Customer ORM 객체, is_new: bool)
+        """
+        stmt = (
+            pg_insert(Customer)
+            .values(
+                customer_code=customer_code,
+                customer_name=customer_name,
+                country=country,
+                source_system=source_system,
+                external_id=external_id,
+                synced_at=now,
+            )
+            .on_conflict_do_update(
+                index_elements=["customer_code"],
+                set_={
+                    "source_system": source_system,
+                    "external_id":   external_id,
+                    "synced_at":     now,
+                },
+            )
+            .returning(Customer, text("xmax::text::int = 0 AS is_new"))
+        )
+        result = await self.session.execute(stmt)
+        row = result.first()
+        customer: Customer = row[0]
+        is_new: bool = row[1]
+        return customer, is_new
 
     async def _load_seed_products(self) -> List[Dict[str, Any]]:
         """
-        시연용 시드 데이터를 DB에서 읽어 raw dict 리스트로 반환한다.
+        시연용 시드 데이터를 반환한다.
+
+        [W4 확장]
+        고객사(customer_code·customer_name·customer_country) +
+        모델(model_name) + 암페어(amperage_ah) 필드를 포함해요.
+        fetch_from_source가 이 raw dict를 읽어 고객사 → 제품 순으로 UPSERT해요.
+
+        [시드 구성 — 제품 4개, 고객사 2개]
+            BMW    → iX3  108Ah  (product_code: BMW-IX3-108)
+            BMW    → i4    81Ah  (product_code: BMW-I4-81)
+            Mercedes → GLC  90Ah  v1 deprecated  (product_code: MB-GLC-90-V1)
+            Mercedes → GLC  90Ah  v2 active       (product_code: MB-GLC-90-V2)
+            ※ GLC 두 버전은 생산기간이 다른 별도 BOM 버전 시연용.
+               product row는 2개, BOM 버전은 각 product마다 1개씩.
 
         [실환경 전환 포인트]
         이 함수를 ERP API 클라이언트 호출로 교체하면
         fetch_from_source() 나머지 로직은 그대로 재사용 가능.
-
-        현재 구현: products 테이블에서 source_system IS NULL인 row
-                   (= 시드에서 적재됐으나 아직 태깅 안 된 것)를 읽어 반환.
-                   이미 'SEED'로 태깅된 row는 재처리 방지를 위해 제외하지 않음
-                   (UPSERT의 ON CONFLICT가 멱등성 보장).
         """
-        result = await self.session.execute(
-            select(Product).order_by(Product.created_at.asc())
-        )
-        products = result.scalars().all()
-
         return [
             {
-                "product_code":    p.product_code,
-                "product_name":    p.product_name,
-                "manufacturer_id": p.manufacturer_id,
-                "type":            p.type,
-                "specs":           p.specs,
-                # external_id: 시연에서는 product_code를 원천 ID로 사용
-                "external_id":     p.product_code,
-            }
-            for p in products
+                # ── BMW iX3 50 108Ah ───────────────────────────────────
+                "product_code":         "BMW-IX3-NCM811-108",
+                "product_name":         "BMW iX3 Cylindrical NCM811 108Ah",
+                "type":                 "battery_pack",
+                "external_id":          "ERP-PROD-IX3",
+                # 고객사 정보
+                "customer_code":        "BMW",
+                "customer_name":        "BMW AG",
+                "customer_country":     "DE",
+                "customer_external_id": "ERP-CUST-BMW",
+                # 제품 3축
+                "model_name":           "iX3 50",
+                "amperage_ah":          108.00,
+            },
+            {
+                # ── BMW i4 81Ah ────────────────────────────────────────
+                "product_code":         "BMW-I4-NCM-81",
+                "product_name":         "BMW i4 Prismatic NCM 81Ah",
+                "type":                 "battery_pack",
+                "external_id":          "ERP-PROD-I4",
+                # 고객사 정보 — BMW는 위와 동일 customer_code → UPSERT 재사용
+                "customer_code":        "BMW",
+                "customer_name":        "BMW AG",
+                "customer_country":     "DE",
+                "customer_external_id": "ERP-CUST-BMW",
+                # 제품 3축
+                "model_name":           "i4",
+                "amperage_ah":          81.00,
+            },
+            {
+                # ── Mercedes GLC EV 94Ah ───────────────────────────────
+                "product_code":         "MB-GLC-NCM-94",
+                "product_name":         "Mercedes GLC EV Prismatic NCM 94Ah",
+                "type":                 "battery_pack",
+                "external_id":          "ERP-PROD-GLC",
+                # 고객사 정보
+                "customer_code":        "MERCEDES",
+                "customer_name":        "Mercedes-Benz Group AG",
+                "customer_country":     "DE",
+                "customer_external_id": "ERP-CUST-MB",
+                # 제품 3축
+                "model_name":           "GLC EV",
+                "amperage_ah":          94.00,
+            },
+            {
+                # ── Mercedes EQS 118Ah ─────────────────────────────────
+                "product_code":         "MB-EQS-NCM-118",
+                "product_name":         "Mercedes EQS Prismatic NCM 118Ah",
+                "type":                 "battery_pack",
+                "external_id":          "ERP-PROD-EQS",
+                # 고객사 정보 — MERCEDES는 위와 동일 → UPSERT 재사용
+                "customer_code":        "MERCEDES",
+                "customer_name":        "Mercedes-Benz Group AG",
+                "customer_country":     "DE",
+                "customer_external_id": "ERP-CUST-MB",
+                # 제품 3축
+                "model_name":           "EQS",
+                "amperage_ah":          118.00,
+            },
         ]
+
 
     # -----------------------------------------------------------------------
     # get_product

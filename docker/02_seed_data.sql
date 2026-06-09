@@ -50,28 +50,6 @@ INSERT INTO customers (customer_id, customer_code, customer_name, country, sourc
 
 
 -- ============================================================
--- 3. 제품 마스터 4종 + BOM 버전 (영역 7) — 3축(고객사·기간·조성)
--- ============================================================
--- ① BMW iX3 50 — 108Ah 원통형 NCM811 [Happy]
--- ② BMW i4     — 81Ah 각형 NCM       [Gray]
--- ③ Mercedes GLC EV — 94Ah 각형 NCM  [Sad, 기간별 2 Lot]
--- ④ Mercedes EQS    — 118Ah 각형 NCM [Happy]
-INSERT INTO products (product_id, product_code, product_name, manufacturer_id, customer_id, model_name, amperage_ah, type, source_system, external_id) VALUES
-('d1111111-0000-4000-8000-000000000001', 'BMW-IX3-NCM811-108', 'BMW iX3 Cylindrical NCM811 108Ah', 'a1111111-1111-4000-8000-000000000001', 'c0000000-0000-4000-8000-0000000000b1', 'iX3 50',  108.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-IX3'),
-('d2222222-0000-4000-8000-000000000002', 'BMW-I4-NCM-81',      'BMW i4 Prismatic NCM 81Ah',        'a1111111-1111-4000-8000-000000000001', 'c0000000-0000-4000-8000-0000000000b1', 'i4',       81.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-I4'),
-('d3333333-0000-4000-8000-000000000003', 'MB-GLC-NCM-94',      'Mercedes GLC EV Prismatic NCM 94Ah','a7777777-7777-4000-8000-000000000007', 'c0000000-0000-4000-8000-0000000000b2', 'GLC EV',   94.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-GLC'),
-('d4444444-0000-4000-8000-000000000004', 'MB-EQS-NCM-118',     'Mercedes EQS Prismatic NCM 118Ah', 'a7777777-7777-4000-8000-000000000007', 'c0000000-0000-4000-8000-0000000000b2', 'EQS',     118.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-EQS');
-
--- BOM 버전: ③ GLC만 기간별 2 Lot(2024 정상 / 2025 신장 위반), 나머지 단일
-INSERT INTO bom_versions (bom_version_id, product_id, version_number, production_from, production_to, status, source_system, external_id) VALUES
-('e1111111-0000-4000-8000-000000000001', 'd1111111-0000-4000-8000-000000000001', '1.0', '2025-01-01', NULL,         'active',     'ERP_PLM', 'ERP-BOM-IX3'),
-('e2222222-0000-4000-8000-000000000002', 'd2222222-0000-4000-8000-000000000002', '1.0', '2025-01-01', NULL,         'active',     'ERP_PLM', 'ERP-BOM-I4'),
-('e3333333-0000-4000-8000-000000000031', 'd3333333-0000-4000-8000-000000000003', '1.0', '2024-01-01', '2024-12-31', 'deprecated', 'ERP_PLM', 'ERP-BOM-GLC-2024'),
-('e3333333-0000-4000-8000-000000000032', 'd3333333-0000-4000-8000-000000000003', '2.0', '2025-01-01', NULL,         'active',     'ERP_PLM', 'ERP-BOM-GLC-2025'),
-('e4444444-0000-4000-8000-000000000004', 'd4444444-0000-4000-8000-000000000004', '1.0', '2025-01-01', NULL,         'active',     'ERP_PLM', 'ERP-BOM-EQS');
-
-
--- ============================================================
 -- 4. 협력사 마스터 (영역 2) — 12개사
 -- ============================================================
 -- 제조사/셀
@@ -150,6 +128,30 @@ INSERT INTO supplier_onboarding (supplier_id, consent_status, consent_signed_at,
 INSERT INTO supplier_certifications (supplier_id, certification_type, certification_no, issued_at, expires_at, issuing_body) VALUES
 ('a1111111-1111-4000-8000-000000000001', 'ISO 14001', 'ISO-14001-HY-2023', '2023-01-01', '2026-12-31', 'KAB'),
 ('a5555555-5555-4000-8000-000000000005', 'Bettercoal', 'BC-GMC-2022',       '2022-06-01', now()::date + 20, 'Bettercoal');
+
+
+-- ============================================================
+-- 3. 제품 마스터 4종 + BOM 버전 (영역 7) — 3축(고객사·기간·조성)
+-- ============================================================
+-- ① BMW iX3 50 — 108Ah 원통형 NCM811 [Happy]
+-- ② BMW i4     — 81Ah 각형 NCM       [Gray]
+-- ③ Mercedes GLC EV — 94Ah 각형 NCM  [Sad, 기간별 2 Lot]
+-- ④ Mercedes EQS    — 118Ah 각형 NCM [Happy]
+-- [순서 이동 이유] products.manufacturer_id → suppliers FK 의존.
+--   suppliers 마스터(4번)와 공장(5번)이 모두 INSERT된 뒤에 와야 FK 위반이 안 난다.
+INSERT INTO products (product_id, product_code, product_name, manufacturer_id, customer_id, model_name, amperage_ah, type, source_system, external_id) VALUES
+('d1111111-0000-4000-8000-000000000001', 'BMW-IX3-NCM811-108', 'BMW iX3 Cylindrical NCM811 108Ah', 'a1111111-1111-4000-8000-000000000001', 'c0000000-0000-4000-8000-0000000000b1', 'iX3 50',  108.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-IX3'),
+('d2222222-0000-4000-8000-000000000002', 'BMW-I4-NCM-81',      'BMW i4 Prismatic NCM 81Ah',        'a1111111-1111-4000-8000-000000000001', 'c0000000-0000-4000-8000-0000000000b1', 'i4',       81.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-I4'),
+('d3333333-0000-4000-8000-000000000003', 'MB-GLC-NCM-94',      'Mercedes GLC EV Prismatic NCM 94Ah','a7777777-7777-4000-8000-000000000007', 'c0000000-0000-4000-8000-0000000000b2', 'GLC EV',   94.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-GLC'),
+('d4444444-0000-4000-8000-000000000004', 'MB-EQS-NCM-118',     'Mercedes EQS Prismatic NCM 118Ah', 'a7777777-7777-4000-8000-000000000007', 'c0000000-0000-4000-8000-0000000000b2', 'EQS',     118.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-EQS');
+
+-- BOM 버전: ③ GLC만 기간별 2 Lot(2024 정상 / 2025 신장 위반), 나머지 단일
+INSERT INTO bom_versions (bom_version_id, product_id, version_number, production_from, production_to, status, source_system, external_id) VALUES
+('e1111111-0000-4000-8000-000000000001', 'd1111111-0000-4000-8000-000000000001', '1.0', '2025-01-01', NULL,         'active',     'ERP_PLM', 'ERP-BOM-IX3'),
+('e2222222-0000-4000-8000-000000000002', 'd2222222-0000-4000-8000-000000000002', '1.0', '2025-01-01', NULL,         'active',     'ERP_PLM', 'ERP-BOM-I4'),
+('e3333333-0000-4000-8000-000000000031', 'd3333333-0000-4000-8000-000000000003', '1.0', '2024-01-01', '2024-12-31', 'deprecated', 'ERP_PLM', 'ERP-BOM-GLC-2024'),
+('e3333333-0000-4000-8000-000000000032', 'd3333333-0000-4000-8000-000000000003', '2.0', '2025-01-01', NULL,         'active',     'ERP_PLM', 'ERP-BOM-GLC-2025'),
+('e4444444-0000-4000-8000-000000000004', 'd4444444-0000-4000-8000-000000000004', '1.0', '2025-01-01', NULL,         'active',     'ERP_PLM', 'ERP-BOM-EQS');
 
 
 -- ============================================================

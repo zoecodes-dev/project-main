@@ -1,7 +1,7 @@
 # Product Domain — 설계 명세서
 
 > **담당**: 팀원 C (Product Domain)
-> **최종 수정**: 2026-06-08 (W4 — Customer 모델 신설, Product 컬럼 추가, BomVersion 컬럼 개명)
+> **최종 수정**: 2026-06-09 (W4 Day2 — Ingest 확장: 고객사 UPSERT + CustomerImported 이벤트 신설)
 > **참조**: `PROJECT_CORE.md` 4-2절 / `schema.sql` 영역 7 / `DECISION_LOG.md` 결정 #1, #2, W4
 
 ---
@@ -283,11 +283,18 @@ SELECT * FROM bom_tree ORDER BY depth, tier_level, part_code;
 Product Domain은 이벤트를 **발행만** 한다. 다른 도메인을 직접 import하지 않는다.
 
 ```
-[발행 이벤트 — 결정 #1]
+[발행 이벤트 — W4 Day2 기준]
+  CustomerImported → SupplyChain Domain, Compliance Domain (신규 고객사 등장 신호)
+                     ※ is_new=True인 신규 고객사만 발행. 기존 갱신(UPSERT 충돌)은 생략.
+
   BOMImported      → SupplyChain Domain (BOM 기반 공급망 구성 트리거)
   LotImported      → DPP Domain (Readiness 트리거) — W3에서 lot_id 채움
   ProductImported  → SupplyChain Domain (공급망 맵 초기화 트리거)
                      Compliance Domain (규제 검증 시작 트리거)
+
+[발행 순서 규칙]
+  CustomerImported → BOMImported → LotImported → ProductImported
+  products.customer_id FK 의존 때문에 customer가 먼저 확정되어야 한다.
 
 [수신 이벤트]
   없음. Product Domain은 이벤트 수신자가 아니다.
@@ -304,6 +311,9 @@ Product Domain은 이벤트를 **발행만** 한다. 다른 도메인을 직접 
 - [x] 모든 상태 전이에 `@trace_node` 적용
 - [x] `fetch_from_source()` `@trace_tool` 적용
 - [x] `only_confirmed` 파라미터 수신 (필터 활성화는 B migration 대기)
+- [x] 고객사 UPSERT (`customer_code` 기준, 중복 row 없음) — W4 Day2
+- [x] 제품 UPSERT 시 `customer_id` · `model_name` · `amperage_ah` 적재 — W4 Day2
+- [x] `CustomerImported` 이벤트 신설 및 신규 고객사 시 발행 — W4 Day2
 - [ ] `hs_code` 6자리 미만 `422` — W3 parts ingest 함수 생성 시 추가 예정
 
 ---
@@ -314,10 +324,10 @@ Product Domain은 이벤트를 **발행만** 한다. 다른 도메인을 직접 
 backend/domains/product/
   ├── README.md               ← 이 문서
   ├── __init__.py
-  ├── models.py               ✅ W4 완료 (Customer 신설, Product 컬럼 3개 추가, BomVersion 개명)
-  ├── repository.py           ✅ W2 완료 / ⏳ W4 Day2 — customer·amperage Ingest 확장 예정
+  ├── models.py               ✅ W4 Day1 완료 (Customer 신설, Product 컬럼 3개 추가, BomVersion 개명)
+  ├── repository.py           ✅ W4 Day2 완료 (고객사 UPSERT + _upsert_customer 헬퍼 + 시드 데이터 확장)
   ├── state_machine.py        ✅ W2 완료 (BOM 상태 전이 전담)
-  ├── service.py              ✅ W2 완료 / 🐛 activate_bom_version 이름 충돌 수정 예정
+  ├── service.py              ✅ W4 Day2 완료 (CustomerImported 발행 추가, fetch_from_source 반환 형태 변경 대응)
   └── router.py               ✅ W2 완료 (202 트리거, only_confirmed 파라미터)
 ```
 
@@ -428,21 +438,35 @@ curl -X POST http://localhost:8000/api/v1/products \
 성공 (202):
 ```json
 {
-  "synced_count": 3,
+  "synced_customer_count": 2,
+  "new_customer_count": 2,
+  "synced_product_count": 4,
   "source_system": "SEED",
+  "customers": [
+    {
+      "customer_id": "a1bbcc99-...",
+      "customer_code": "BMW",
+      "customer_name": "BMW AG",
+      "is_new": true,
+      "synced_at": "2026-06-09T09:00:00+00:00"
+    }
+  ],
   "products": [
     {
       "product_id": "d1eebc99-...",
-      "product_code": "BAT-NCM811-100Ah",
-      "product_name": "NCM811 High Capacity Battery",
+      "product_code": "BMW-IX3-108",
+      "product_name": "BMW iX3 배터리팩 108Ah",
+      "customer_id": "a1bbcc99-...",
+      "model_name": "iX3",
+      "amperage_ah": 108.0,
       "source_system": "SEED",
-      "synced_at": "2026-05-28T09:00:00+00:00"
+      "synced_at": "2026-06-09T09:00:00+00:00"
     }
   ]
 }
 ```
 
-흐름: `POST /products` → `BOMImported` + `LotImported` + `ProductImported` 순서 발행 → `products` 테이블 UPSERT
+흐름: `POST /products` → 고객사 UPSERT → `CustomerImported`(신규만) → 제품별 `BOMImported` + `LotImported` + `ProductImported` 순서 발행
 
 ---
 
@@ -563,7 +587,10 @@ curl -X POST http://localhost:8000/api/v1/products/bom-versions/aabbcc-.../activ
 | `deprecate_bom_version()` `@trace_node` | ✅ `state_machine.py` 적용 |
 | `fetch_from_source()` `@trace_tool` | ✅ `repository.py` 적용 |
 | `get_bom_tree()` `@trace_tool` | ✅ `repository.py` 적용 |
-| 이벤트 3종 발행 순서 | ✅ `BOMImported` → `LotImported` → `ProductImported` |
+| 이벤트 발행 순서 | ✅ `CustomerImported` → `BOMImported` → `LotImported` → `ProductImported` |
+| `CustomerImported` 신규 고객사만 발행 | ✅ `is_new=True` 조건 분기 |
+| 고객사 UPSERT 멱등성 | ✅ `ON CONFLICT(customer_code)` — 동일 ingest 2회 실행 시 중복 row 없음 |
+| 제품 UPSERT 시 `customer_id` 채움 | ✅ `customer_cache` 경유 — flush 후 FK 참조 |
 | active BOM 없음 404 | ✅ `service.get_bom_tree()` 처리 |
 | 제품 없음 404 | ✅ `service.get_product()` / `service.get_bom_tree()` 처리 |
 | 잘못된 BOM 전이 422 | ✅ `state_machine._validate_transition()` 처리 |
@@ -665,10 +692,11 @@ ORDER BY region, regulation_code;
 
 | 항목 | 파일 | 상태 |
 |---|---|---|
-| `activate_bom_version` import alias 버그 | `service.py` | 🐛 수정 필요 (alias `sm_` 패턴으로) |
-| `repository.py` — customer·model·amperage Ingest 반영 | `repository.py` | ⏳ W4 Day2 예정 |
+| `activate_bom_version` import alias 버그 | `service.py` | ✅ W4 Day2 수정 완료 (`sm_` alias 패턴) |
+| `repository.py` — customer·model·amperage Ingest 반영 | `repository.py` | ✅ W4 Day2 완료 |
+| `events/types.py` — `CustomerImportedEvent` 신설 | `events/types.py` | ✅ W4 Day2 완료 |
 | `supply_chain_map.link_status` 필터 활성화 | `repository.py` TODO 주석 | ⏳ schema migration 완료 후 주석 해제 |
-| `events/types.py` 이름 변경 3종 | `service.py` import | ⏳ 처리 대기 |
+| `hs_code` 6자리 미만 `422` 검증 | `service.py` 또는 `repository.py` | ⏳ W3 parts ingest 함수 생성 시 추가 예정 |
 
 ---
 

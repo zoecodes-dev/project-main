@@ -39,6 +39,7 @@ from backend.domains.product.state_machine import (
 )
 from backend.events.types import (
     BOMImportedEvent,
+    CustomerImportedEvent,
     LotImportedEvent,
     ProductImportedEvent,
 )
@@ -76,48 +77,69 @@ async def import_products(
     source_system: str = "SEED",
 ) -> Dict[str, Any]:
     """
-    [결정 #1] 외부 원천에서 제품 데이터를 동기화하고 이벤트를 발행한다.
+    [결정 #1 + W4] 외부 원천에서 고객사·제품 데이터를 동기화하고 이벤트를 발행한다.
 
-    시연 구현:
-        원천 = DB 시드 데이터 (source_system='SEED').
-        repository.fetch_from_source()가 UPSERT 처리.
+    [W4 확장]
+    고객사 ingest가 추가됐어요. fetch_from_source가 고객사 UPSERT를 제품보다
+    먼저 처리하고, 이 함수는 그 결과를 받아 이벤트를 올바른 순서로 발행해요.
 
-    실환경 전환:
-        repository._load_seed_products() 내부만 ERP API로 교체.
-        이 함수의 로직·이벤트 발행 연계는 변경 불필요.
+    [이벤트 발행 순서 — W4]
+        1. CustomerImported  — 고객사 UPSERT 완료 (신규 시만)
+           ※ 기존 고객사 갱신(is_new=False)은 downstream 변화 없으므로 발행 생략.
+        2. BOMImported       — bom_version ingest 완료
+        3. LotImported       — batch(Lot) ingest 완료
+        4. ProductImported   — 제품 전체 ingest 완료 (마지막)
 
-    [이벤트 발행 순서 — 결정 #1]
-        각 제품마다:
-          1. BOMImported  — bom_version ingest 완료
-          2. LotImported  — batch(Lot) ingest 완료
-             ※ W2: batch_id=None 플레이스홀더. W3 batch ingest 구현 시 반드시 처리:
-                   - batches 레코드 생성 후 실제 batch_id 주입
-                   - batches.source_system = 'MES' (schema DEFAULT와 일치)
-                   - batches.external_id, synced_at 세팅 필수
-          3. ProductImported — 제품 전체 ingest 완료 (마지막)
-
-        ProductImported를 마지막에 발행하는 이유:
-          BOM·Lot 준비가 완료된 시점에 "제품 전체가 준비됐다"는 신호를 보내야
-          downstream(SupplyChain, Compliance 등)이 안전하게 처리할 수 있기 때문.
+        CustomerImported를 먼저 발행하는 이유:
+          products.customer_id 가 customers.customer_id FK를 참조하기 때문에
+          "고객사 준비됨" 신호가 먼저 가야 downstream이 안전하게 처리할 수 있어요.
+          ProductImported를 마지막에 발행하는 이유는 기존과 동일 — BOM·Lot 준비 후
+          "제품 전체가 준비됐다"는 신호를 보내야 해요.
 
     [호출 흐름]
         router → service.import_products()
-               → repository.fetch_from_source()   # UPSERT
-               → publish("BOMImported", ...)
-               → publish("LotImported", ...)
-               → publish("ProductImported", ...)
+               → repository.fetch_from_source()          # 고객사·제품 UPSERT
+               → db.commit()
+               → publish("CustomerImported", ...)        # 신규 고객사만
+               → 제품별: publish("BOMImported", ...)
+                         publish("LotImported", ...)
+                         publish("ProductImported", ...)
 
     [반환]
-        동기화된 제품 수와 제품 목록 요약 dict.
+        동기화된 고객사·제품 수와 목록 요약 dict.
     """
     repo = ProductRepository(db)
 
-    products = await repo.fetch_from_source(source_system=source_system)
+    result = await repo.fetch_from_source(source_system=source_system)
     await db.commit()
 
-    # 이벤트 발행 — 제품별 순서: BOMImported → LotImported → ProductImported
+    customer_results: list = result["customers"]    # [(Customer, is_new), ...]
+    products: list         = result["products"]     # [Product, ...]
+
+    # ------------------------------------------------------------------
+    # 1. CustomerImported 발행 — 신규 고객사(is_new=True)만
+    # is_new=False(기존 갱신)는 downstream에 아무 변화 없으므로 이벤트 생략.
+    # ------------------------------------------------------------------
+    for customer, is_new in customer_results:
+        if not is_new:
+            continue
+
+        customer_event = CustomerImportedEvent(
+            customer_id=customer.customer_id,
+            customer_code=customer.customer_code,
+            external_id=customer.external_id,
+            is_new=True,
+        )
+        await publish(
+            "CustomerImported",
+            _serialize_payload(asdict(customer_event)),
+        )
+
+    # ------------------------------------------------------------------
+    # 2. 제품별 BOMImported → LotImported → ProductImported
+    # ------------------------------------------------------------------
     for product in products:
-        # 1. BOMImported
+        # 2-1. BOMImported
         bom_event = BOMImportedEvent(
             product_id=product.product_id,
             bom_version_id=None,  # TODO: W3에서 실제 bom_version_id 조회 후 채움
@@ -128,20 +150,20 @@ async def import_products(
             _serialize_payload(asdict(bom_event)),
         )
 
-        # 2. LotImported
+        # 2-2. LotImported
         lot_event = LotImportedEvent(
-            batch_id=None,  # TODO(W3): repo.create_batch() 호출 후 실제 batch_id로 교체.   
+            batch_id=None,  # TODO(W3): repo.create_batch() 호출 후 실제 batch_id로 교체.
                             # batches.source_system='MES', external_id, synced_at 세팅 필수.
-                            # schema.sql batches 테이블 DEFAULT 'MES' 참조.               
-            product_id=product.product_id, 
+                            # schema.sql batches 테이블 DEFAULT 'MES' 참조.
+            product_id=product.product_id,
             external_id=product.external_id,
         )
         await publish(
             "LotImported",
             _serialize_payload(asdict(lot_event)),
         )
-        
-        # 3. ProductImported
+
+        # 2-3. ProductImported
         product_event = ProductImportedEvent(
             product_id=product.product_id,
             external_id=product.external_id,
@@ -152,13 +174,28 @@ async def import_products(
         )
 
     return {
-        "synced_count":   len(products),
-        "source_system":  source_system,
+        "synced_customer_count": len(customer_results),
+        "new_customer_count":    sum(1 for _, is_new in customer_results if is_new),
+        "synced_product_count":  len(products),
+        "source_system":         source_system,
+        "customers": [
+            {
+                "customer_id":   str(c.customer_id),
+                "customer_code": c.customer_code,
+                "customer_name": c.customer_name,
+                "is_new":        is_new,
+                "synced_at":     c.synced_at.isoformat() if c.synced_at else None,
+            }
+            for c, is_new in customer_results
+        ],
         "products": [
             {
                 "product_id":   str(p.product_id),
                 "product_code": p.product_code,
                 "product_name": p.product_name,
+                "customer_id":  str(p.customer_id) if p.customer_id else None,
+                "model_name":   p.model_name,
+                "amperage_ah":  float(p.amperage_ah) if p.amperage_ah else None,
                 "source_system": p.source_system,
                 "synced_at":    p.synced_at.isoformat() if p.synced_at else None,
             }
@@ -235,6 +272,9 @@ async def list_products(
             "product_name":    p.product_name,
             "manufacturer_id": str(p.manufacturer_id) if p.manufacturer_id else None,
             "type":            p.type,
+            "customer_id":     str(p.customer_id) if p.customer_id else None,
+            "model_name":      p.model_name,
+            "amperage_ah":     float(p.amperage_ah) if p.amperage_ah else None,
             "source_system":   p.source_system,
             "synced_at":       p.synced_at.isoformat() if p.synced_at else None,
             "created_at":      p.created_at.isoformat() if p.created_at else None,
