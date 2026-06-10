@@ -71,10 +71,12 @@ class SupplyChainService:
         """
         xinjiang_risks = await self.repository.check_geo_audit_risk_zone()
         mismatch_risks = await self.repository.check_coordinate_authenticity(db)
+        eudr_risks = await self.repository.check_eudr_deforestation(db)
         
         return {
             "xinjiang_adjacent": xinjiang_risks,
-            "country_mismatch": mismatch_risks
+            "country_mismatch": mismatch_risks,
+            "eudr_deforestation": eudr_risks
         }
 
     # ---------- Geo Audit ----------
@@ -87,6 +89,7 @@ class SupplyChainService:
         """
         audit_results = await self.repository.check_geo_audit_risk_zone()
         mismatch_results = await self.repository.check_coordinate_authenticity(db)
+        eudr_results = await self.repository.check_eudr_deforestation(db)
 
         detected_risks: List[Dict[str, Any]] = []
         for result in audit_results:
@@ -108,6 +111,19 @@ class SupplyChainService:
                     batch_id=batch_id,
                     factory_id=result["factory_id"],
                     risk_type="country_mismatch",
+                    supplier_id=result["supplier_id"],
+                    company_name=result["company_name"],
+                    coordinates=result["coordinates"],
+                )
+                await self._publish_geo_risk(event)
+                detected_risks.append(asdict(event))
+
+        for result in eudr_results:
+            if result.get("is_deforested"):
+                event = GeoRiskDetectedEvent(
+                    batch_id=batch_id,
+                    factory_id=result["factory_id"],
+                    risk_type="eudr_deforestation",
                     supplier_id=result["supplier_id"],
                     company_name=result["company_name"],
                     coordinates=result["coordinates"],
