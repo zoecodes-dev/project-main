@@ -443,3 +443,24 @@ INSERT INTO hitl_reviews (review_id, batch_id, reason, trigger_stage, assigned_t
 INSERT INTO audit_trail (batch_id, step_number, node_type, node_name, input_hash, output_hash, prev_hash, duration_ms) VALUES
 ('ba111111-0000-4000-8000-000000000001', 1, 'agent', 'data_gateway', '0000000000000000000000000000000000000000000000000000000000000001', '0000000000000000000000000000000000000000000000000000000000000002', NULL, 120),
 ('ba111111-0000-4000-8000-000000000001', 2, 'agent', 'compliance',   '0000000000000000000000000000000000000000000000000000000000000002', '0000000000000000000000000000000000000000000000000000000000000003', '0000000000000000000000000000000000000000000000000000000000000002', 340);
+-- ============================================================
+-- TO-BE 확장 시드 (프로세스 정의서 반영)
+-- ============================================================
+
+-- 1) 다단계 결재선용 조직도(manager_id). 기존 role: admin(0001) / owner_esg(0002) / owner_purchasing(0003)
+-- Admin(0001) = 최고 임원. owner_esg(0002) 상급자 → Admin(0001). owner_purchasing(0003) 상급자 → owner_esg(0002).
+UPDATE users SET manager_id = '11111111-0000-4000-8000-000000000001'
+WHERE user_id = '11111111-0000-4000-8000-000000000002';
+UPDATE users SET manager_id = '11111111-0000-4000-8000-000000000002'
+WHERE user_id = '11111111-0000-4000-8000-000000000003';
+
+-- 2) Watchlist (UFLPA Entity List 예시). matched_supplier_id 로 실제 Sad path 공급사에 매칭.
+--    'Global Mining Corp' → Xinjiang Nickel Refinery(acac…ac) 매칭 = 소급 강등 시연용.
+--    'Xinjiang Mining Group' → 미매칭(NULL, 텍스트 후보만) = 자동대조 미스 케이스 시연.
+INSERT INTO watchlists (watchlist_id, entity_name, country, reason, matched_supplier_id, source) VALUES
+('a0000000-0000-4000-8000-000000000001', 'Global Mining Corp',     'CN', '신장 위구르 강제노동 의혹 제재 대상 (UFLPA Entity List)', 'acacacac-acac-4000-8000-0000000000ac', 'UFLPA_ENTITY_LIST'),
+('a0000000-0000-4000-8000-000000000002', 'Xinjiang Mining Group',  'CN', '신장 지역 채굴 제재 대상',                              NULL,                                   'UFLPA_ENTITY_LIST');
+
+-- 3) 실사 정책 문서 1건 (CSDDD 대응, active)
+INSERT INTO due_diligence_policies (policy_id, title, version, status, document_url, created_by, published_at) VALUES
+('d0000000-0000-4000-8000-000000000001', 'KIRA 공급망 실사 정책', 'v1.0', 'active', 's3://kira-documents/policies/dd_policy_v1.pdf', '11111111-0000-4000-8000-000000000002', now());
