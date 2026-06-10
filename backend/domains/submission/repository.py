@@ -19,6 +19,7 @@ from backend.domains.submission.models import (
     DocumentExtractionResult,
     ProcessedJob,
 )
+from backend.domains.supplier.models import Supplier
 
 async def create_data_request(db: AsyncSession, log_record: DataRequestLog) -> DataRequestLog:
     """
@@ -116,7 +117,7 @@ async def create_extraction_result(
 async def list_extraction_results_by_suppliers(
     db: AsyncSession,
     supplier_ids: list[uuid.UUID],
-) -> list[DocumentExtractionResult]:
+) -> list[tuple[DocumentExtractionResult, str | None]]:
     """
     [SELECT] 주어진 협력사들의 모든 문서 추출결과를 모은다.
     data_request_log(target_supplier_id) → document_extraction_results(request_id) 조인.
@@ -127,15 +128,16 @@ async def list_extraction_results_by_suppliers(
         return []
  
     stmt = (
-        select(DocumentExtractionResult)
+        select(DocumentExtractionResult, Supplier.supplier_type)
         .join(
             DataRequestLog,
             DataRequestLog.request_id == DocumentExtractionResult.request_id,
         )
+        .join(Supplier, Supplier.supplier_id == DataRequestLog.target_supplier_id)
         .where(DataRequestLog.target_supplier_id.in_(supplier_ids))
     )
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return list(result.all())
 
 # ============================================================================
 # [동작] idempotency_key를 PK로 INSERT 시도 →
