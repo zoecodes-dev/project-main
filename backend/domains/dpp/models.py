@@ -8,8 +8,6 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.infrastructure.database import Base
-from backend.domains.audit import models as _audit_models  # registers tenants/users tables
-from backend.domains.product import models as _product_models  # registers products/bom tables
 
 
 class Batch(Base):

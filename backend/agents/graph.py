@@ -1,5 +1,4 @@
 from dataclasses import asdict
-from inspect import isawaitable, signature
 from uuid import UUID
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -41,22 +40,6 @@ def placeholder_node(next_stage: str):
         return {**state, "current_stage": next_stage}
 
     return advance_stage
-
-
-def traced_graph_node(node_name: str, node_func, node_type: str = "agent"):
-    @trace_node(node_name=node_name, node_type=node_type)
-    async def run_with_audit(state: BatchState, db) -> BatchState:
-        params = signature(node_func).parameters
-        result = node_func(state, db) if "db" in params else node_func(state)
-        if isawaitable(result):
-            result = await result
-        return result
-
-    async def run(state: BatchState) -> BatchState:
-        async with AsyncSessionLocal() as db:
-            return await run_with_audit(state, db)
-
-    return run
 
 
 # geo_audit_node 시그니처가 (state, db)라 LangGraph의 state-only 호출 규약에 맞추는 어댑터.
@@ -124,13 +107,7 @@ async def hitl_interrupt_node(state: BatchState) -> BatchState:
         raise ValueError("HITLApproved response is required to resume the batch")
 
     await _resume_batch(batch_id)
-    return {
-        **paused_state,
-        "batch_status": "batch_processing",
-        "confidence_score": max(float(state.get("confidence_score") or 0.0), 0.85),
-        "hitl_required": False,
-        "error_reason": None,
-    }
+    return {**paused_state, "batch_status": "batch_processing"}
 
 
 @trace_node(node_name="supplier_reverify", node_type="human")
@@ -151,25 +128,20 @@ async def supplier_reverify_node(state: BatchState) -> BatchState:
     )
 
     await _resume_batch(batch_id)
-    return {
-        **paused_state,
-        "batch_status": "batch_processing",
-        "confidence_score": max(float(state.get("confidence_score") or 0.0), 0.85),
-        "error_reason": None,
-    }
+    return {**paused_state, "batch_status": "batch_processing"}
 
 
 builder = StateGraph(BatchState)
 builder.add_node("supervisor", supervisor_node)
-builder.add_node("data_gateway", traced_graph_node("data_gateway", data_gateway_node))
-builder.add_node("verification", traced_graph_node("verification", verification_node))
+builder.add_node("data_gateway", data_gateway_node)
+builder.add_node("verification", verification_node)
 builder.add_node("geo_audit", _geo_audit_with_db)
-builder.add_node("compliance", traced_graph_node("compliance", compliance_node))
-builder.add_node("risk_scoring", traced_graph_node("risk_scoring", risk_scoring_node))
-builder.add_node("readiness", traced_graph_node("readiness", readiness_node))
-builder.add_node("issuance", traced_graph_node("issuance", issuance_node))
-builder.add_node("supplier_reverify", traced_graph_node("supplier_reverify", supplier_reverify_node, "human"))
-builder.add_node("hitl_interrupt", traced_graph_node("hitl_interrupt", hitl_interrupt_node, "human"))
+builder.add_node("compliance", compliance_node)
+builder.add_node("risk_scoring", risk_scoring_node)
+builder.add_node("readiness", readiness_node)
+builder.add_node("issuance", issuance_node)
+builder.add_node("supplier_reverify", supplier_reverify_node)
+builder.add_node("hitl_interrupt", hitl_interrupt_node)
 builder.add_node("completed", supervisor_node)
 
 builder.set_entry_point("supervisor")
@@ -201,8 +173,8 @@ for node_name in (
 ):
     builder.add_edge(node_name, "supervisor")
 
-builder.add_edge("supplier_reverify", "supervisor")
-builder.add_edge("hitl_interrupt", "supervisor")
+builder.add_edge("supplier_reverify", END)
+builder.add_edge("hitl_interrupt", END)
 builder.add_edge("completed", END)
 
 # Development checkpoint storage. Production should replace this with a durable saver.
