@@ -1,11 +1,13 @@
 import uuid
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 
 from backend.infrastructure.database import get_db
 from backend.domains.verification.service import verify_feoc_rule
+from backend.infrastructure.trace import trace_tool
 
 router = APIRouter(prefix="/verification", tags=["Verification"])
 
@@ -56,3 +58,26 @@ async def trigger_dummy_feoc_rule(req: FEOCDummyRequest, db: AsyncSession = Depe
         # verify_feoc_rule 서비스 함수가 내부적으로 위반 시 Queue 적재 및 이벤트 발행을
         # 모두 처리하므로, 라우터에서는 결과만 반환합니다.
         return {"status": "compliance_violation", "message": "FEOC 규제 위반 (25% 이상) - 후속 작업이 비동기 처리됩니다."}
+
+@router.get("/{batch_id}")
+@trace_tool("get_verification_result")
+async def get_verification_result(batch_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """
+    [API] GET /verification/{batch_id}
+    특정 배치의 FEOC 검증(IRA) 결과를 조회합니다.
+    (타 도메인 모델 import 금지 원칙에 따라 Raw SQL을 활용해 컴플라이언스 이력에서 가져옵니다.)
+    """
+    stmt = text("""
+        SELECT cr.verdict, cr.reasoning_text, cr.confidence_score
+        FROM compliance_results cr
+        JOIN regulations r ON cr.regulation_id = r.regulation_id
+        WHERE cr.batch_id = :batch_id AND r.regulation_code = 'IRA'
+        LIMIT 1
+    """)
+    result = await db.execute(stmt, {"batch_id": str(batch_id)})
+    row = result.mappings().first()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="해당 배치의 FEOC(IRA) 검증 결과가 아직 없습니다.")
+        
+    return {"batch_id": str(batch_id), "feoc_result": dict(row)}
