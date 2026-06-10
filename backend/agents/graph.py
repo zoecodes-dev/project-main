@@ -1,17 +1,15 @@
 from dataclasses import asdict
-from inspect import isawaitable, signature
 from uuid import UUID
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 
 from backend.agents.compliance import compliance_node
 from backend.agents.data_gateway import data_gateway_node
 from backend.agents.geo_audit import geo_audit_node
 from backend.agents.state import BatchState
 from backend.agents.supervisor import route
-from backend.agents.data_gateway import data_gateway_node
 from backend.domains.audit import repository
 from backend.domains.audit.state_machine import (
     pause_batch_for_review,
@@ -44,38 +42,11 @@ def placeholder_node(next_stage: str):
     return advance_stage
 
 
-def traced_graph_node(node_name: str, node_func, node_type: str = "agent"):
-    @trace_node(node_name=node_name, node_type=node_type)
-    async def run_with_audit(state: BatchState, db) -> BatchState:
-        params = signature(node_func).parameters
-        if "db" in params:
-            result = node_func(state, db)
-        else:
-            result = node_func({**state, "db": db})
-        if isawaitable(result):
-            result = await result
-        clean_result = {**result}
-        clean_result.pop("db", None)
-        return clean_result
-
-    async def run(state: BatchState) -> BatchState:
-        async with AsyncSessionLocal() as db:
-            return await run_with_audit(state, db)
-
-    return run
-
-
-async def data_gateway_graph_node(state: BatchState) -> BatchState:
-    if state.get("document_id") is None:
-        return {
-            **state,
-            "current_stage": "stage_extraction",
-            "extraction_result": {
-                "parsed": False,
-                "note": "no document_id in graph smoke path",
-            },
-        }
-    return await data_gateway_node(state)
+# geo_audit_node 시그니처가 (state, db)라 LangGraph의 state-only 호출 규약에 맞추는 어댑터.
+# trace는 geo_audit_node 자체 @trace_node가 담당한다.
+async def _geo_audit_with_db(state: BatchState) -> BatchState:
+    async with AsyncSessionLocal() as db:
+        return await geo_audit_node(state, db)
 
 
 def _batch_id(state: BatchState) -> UUID:
@@ -162,16 +133,16 @@ async def supplier_reverify_node(state: BatchState) -> BatchState:
 
 builder = StateGraph(BatchState)
 builder.add_node("supervisor", supervisor_node)
-builder.add_node("data_gateway", traced_graph_node("data_gateway", data_gateway_graph_node))
-builder.add_node("verification", traced_graph_node("verification", verification_node))
-builder.add_node("geo_audit", traced_graph_node("geo_audit", geo_audit_node))
-builder.add_node("compliance", traced_graph_node("compliance", compliance_node))
-builder.add_node("risk_scoring", traced_graph_node("risk_scoring", risk_scoring_node))
-builder.add_node("readiness", traced_graph_node("readiness", readiness_node))
-builder.add_node("issuance", traced_graph_node("issuance", issuance_node))
-builder.add_node("supplier_reverify", traced_graph_node("supplier_reverify", supplier_reverify_node, "human"))
-builder.add_node("hitl_interrupt", traced_graph_node("hitl_interrupt", hitl_interrupt_node, "human"))
-builder.add_node("completed", traced_graph_node("completed", supervisor_node))
+builder.add_node("data_gateway", data_gateway_node)
+builder.add_node("verification", verification_node)
+builder.add_node("geo_audit", _geo_audit_with_db)
+builder.add_node("compliance", compliance_node)
+builder.add_node("risk_scoring", risk_scoring_node)
+builder.add_node("readiness", readiness_node)
+builder.add_node("issuance", issuance_node)
+builder.add_node("supplier_reverify", supplier_reverify_node)
+builder.add_node("hitl_interrupt", hitl_interrupt_node)
+builder.add_node("completed", supervisor_node)
 
 builder.set_entry_point("supervisor")
 builder.add_conditional_edges(
@@ -208,3 +179,23 @@ builder.add_edge("completed", END)
 
 # Development checkpoint storage. Production should replace this with a durable saver.
 graph = builder.compile(checkpointer=InMemorySaver())
+
+
+# ── HITL resume 접점 ──────────────────────────────────────────────────────────
+# thread_id 규칙: str(batch_id). graph 최초 invoke 시에도 동일 규칙을 사용할 것.
+#
+# 차윤의 POST /hitl/{batch_id}/resolve 가 approve 결정을 내리면 이 함수를 호출한다.
+#   from backend.agents.graph import resume_graph
+#   await resume_graph(str(batch_id), resolution)
+#
+# reject 시에는 재개하지 않는다 — batch 상태 처리는 차윤 쪽 hitl.service 가 담당.
+
+async def resume_graph(batch_id: str, resolution: str) -> None:
+    """approve 결정 후 interrupt() 로 멈춘 graph 를 재개한다."""
+    if resolution != "approve":
+        return
+    config = {"configurable": {"thread_id": batch_id}}
+    await graph.ainvoke(
+        Command(resume={"event_name": "HITLApproved"}),
+        config=config,
+    )
