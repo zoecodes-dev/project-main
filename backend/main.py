@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from starlette.responses import PlainTextResponse
 
 from backend.infrastructure.database import verify_extensions
+from backend.infrastructure.event_bus import start_event_listener, stop_event_listener
 from backend.domains.supplychain.router import router as supplychain_router
 from backend.domains.submission.router import router as submission_router
 from backend.domains.verification.router import router as verification_router
@@ -23,10 +24,12 @@ from backend.hitl.router import router as hitl_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # startup: 필수 확장 검증
+    # startup: 필수 확장 검증 + 이벤트 LISTEN 루프 기동
     await verify_extensions()
+    await start_event_listener()
     yield
-    # shutdown: (필요 시 정리)
+    # shutdown: LISTEN 루프 정리
+    await stop_event_listener()
 
 
 app = FastAPI(

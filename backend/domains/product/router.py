@@ -29,18 +29,21 @@
 #     예: app.include_router(router, prefix="/api/v1/products")
 # =============================================================================
 
-from typing import Any, Dict, List
+from datetime import date
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.product import service
+
 from backend.domains.product.models import (
     BomTreeResponse,
     ProductBrief,
     ProductImportTrigger,
-)
+)    
+
 from backend.infrastructure.database import get_db
 
 router = APIRouter(prefix="/products", tags=["Product"])
@@ -78,14 +81,44 @@ async def trigger_import_endpoint(
 # GET /products — 제품 목록
 # ---------------------------------------------------------------------------
 
-@router.get("", response_model=List[ProductBrief])
+@router.get("", response_model=List[Dict[str, Any]])
 async def list_products_endpoint(
-    limit: int = Query(default=20, ge=1, le=100, description="최대 반환 건수"),
-    offset: int = Query(default=0, ge=0, description="건너뛸 건수"),
+    customer_id: Optional[UUID] = Query(
+        default=None,
+        description="고객사 UUID로 필터. 없으면 전체.",
+    ),
+    model_name: Optional[str] = Query(
+        default=None,
+        description="모델명 부분 일치 검색 (대소문자 무관). 예: 'iX3'",
+    ),
+    min_ah: Optional[float] = Query(
+        default=None,
+        ge=0,
+        description="암페어 최솟값 (포함). 예: 80.0",
+    ),
+    max_ah: Optional[float] = Query(
+        default=None,
+        ge=0,
+        description="암페어 최댓값 (포함). 예: 120.0",
+    ),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """제품 목록 조회 (synced_at 내림차순, limit/offset 페이지네이션)."""
-    return await service.list_products(db=db, limit=limit, offset=offset)
+    """
+    제품 목록 조회. 고객사·모델·암페어 범위 필터 지원.
+    응답에 customer_name 포함 (Customer 테이블 조인).
+    파라미터 없이 호출하면 전체 목록.
+    """
+    return await service.list_products_filtered(
+        db=db,
+        customer_id=customer_id,
+        model_name=model_name,
+        min_ah=min_ah,
+        max_ah=max_ah,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -102,39 +135,6 @@ async def get_product_endpoint(
     존재하지 않는 product_id → 404 (service에서 처리, 여기서 중복 체크 안 함).
     """
     return await service.get_product(db=db, product_id=product_id)
-
-
-# ---------------------------------------------------------------------------
-# GET /products/{product_id}/bom — BOM 트리
-# ---------------------------------------------------------------------------
-
-@router.get("/{product_id}/bom", response_model=BomTreeResponse)
-async def get_product_bom_tree_endpoint(
-    product_id: UUID,
-    only_confirmed: bool = Query(
-        default=True,
-        description=(
-            "[결정 #2] supply_chain_map.link_status 필터. "
-            "True=confirmed 링크만(기본값, 운영 화면용) / "
-            "False=pending 포함 전체 트리(공급망 맵 전체 뷰용)."
-        ),
-    ),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    5계층 BOM 트리 조회 (Pack → Module → Cell → 전구체 → 광물).
-
-    active BOM 버전 기준.
-    - 제품 없음 → 404
-    - active BOM 없음 → 404
-    - BOM 있으나 items 비어 있음 → 200 + warning 필드
-    """
-    return await service.get_bom_tree(
-        db=db,
-        product_id=product_id,
-        only_confirmed=only_confirmed,
-    )
-
 
 # ---------------------------------------------------------------------------
 # POST /products/bom-versions/{bom_version_id}/activate — BOM 버전 활성화
@@ -184,3 +184,59 @@ async def deprecate_bom_version_endpoint(
         db=db,
         bom_version_id=bom_version_id,
     )
+    
+# ---------------------------------------------------------------------------
+# GET /products/{product_id}/bom-versions — BOM 버전 목록
+# ---------------------------------------------------------------------------
+
+@router.get("/{product_id}/bom-versions", response_model=List[Dict[str, Any]])
+async def get_bom_versions_endpoint(
+    product_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    제품의 전체 BOM 버전 목록 조회 (active  deprecated).
+
+    production_from 내림차순 — 최신 생산기간이 상단.
+    is_current=True 인 항목이 현재 active 버전.
+
+    - 제품 없음 → 404
+    - BOM 버전 없음 → 200  빈 배열 []
+    """
+    return await service.get_bom_versions(db=db, product_id=product_id)
+
+
+# ---------------------------------------------------------------------------
+# GET /products/{product_id}/bom?as_of=YYYY-MM-DD — 날짜 기준 BOM 조회
+# ---------------------------------------------------------------------------
+
+@router.get("/{product_id}/bom", response_model=Dict[str, Any])
+async def get_product_bom_as_of_endpoint(
+    product_id: UUID,
+    as_of: Optional[date] = Query(
+        default=None,
+        description=(
+            "조회 기준 날짜 (YYYY-MM-DD). "
+            "없으면 active BOM 트리 반환 (기존 동작). "
+            "있으면 해당 날짜에 유효했던 BOM 버전 반환."
+        ),
+    ),
+    only_confirmed: bool = Query(default=True),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    BOM 조회 통합 엔드포인트.
+    as_of 없음 → active BOM 트리 전체 반환 (기존 get_product_bom_tree_endpoint와 동일).
+    as_of 있음 → 해당 날짜에 유효한 BOM 버전 메타데이터 반환.
+    """
+    if as_of is not None:
+        return await service.get_bom_version_as_of(
+            db=db,
+            product_id=product_id,
+            as_of=as_of,
+        )
+    return await service.get_bom_tree(
+        db=db,
+        product_id=product_id,
+        only_confirmed=only_confirmed,
+    )    

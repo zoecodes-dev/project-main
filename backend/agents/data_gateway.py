@@ -229,15 +229,15 @@ async def data_gateway_node(state: BatchState) -> BatchState:
         sc_repo = SupplyChainRepository(db)
         rows = await sc_repo.get_n_tier_supply_chain(str(product_id))
         # 반환은 flat List[Dict]. 공급사는 child_supplier_id 키에 들어온다(중복 제거).
-        supplier_ids = list({
-            r["child_supplier_id"]
+        supplier_ids = sorted({
+            str(r["child_supplier_id"])
             for r in rows
             if r.get("child_supplier_id")
         })
  
         # (2) 그 공급사들의 추출결과를 모은다 (E 제공 조회)
         results = await submission_repo.list_extraction_results_by_suppliers(
-            db, [UUID(str(s)) for s in supplier_ids]
+            db, [UUID(s) for s in supplier_ids]
         )
  
     # (3) 집계: 최저 신뢰도 + 미확인/누락 검사
@@ -254,7 +254,11 @@ async def data_gateway_node(state: BatchState) -> BatchState:
     lowest = 1.0
     unconfirmed = 0
     has_missing = False
-    for r, supplier_type in results:
+    for item in results:
+        if isinstance(item, tuple):
+            r, supplier_type = item
+        else:
+            r, supplier_type = item, None
         cmap = r.confidence_map or {}
         if cmap:
             lowest = min(lowest, min(cmap.values()))
@@ -278,6 +282,7 @@ async def data_gateway_node(state: BatchState) -> BatchState:
         "extraction_result": {
             "checked": True,
             "count": len(results),
+            "supplier_id": supplier_ids[0] if supplier_ids else None,
             "lowest_confidence": lowest,
             "unconfirmed": unconfirmed,
             "has_missing": has_missing,

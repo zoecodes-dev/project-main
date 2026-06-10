@@ -28,11 +28,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -602,3 +602,137 @@ class ProductRepository:
             "only_confirmed": only_confirmed,
             "tree":           root_node,
         }
+        
+    # -----------------------------------------------------------------------
+    # list_products_filtered
+    # -----------------------------------------------------------------------
+
+    @trace_tool("list_products_filtered")
+    async def list_products_filtered(
+        self,
+        customer_id: Optional[UUID] = None,
+        model_name: Optional[str] = None,
+        min_ah: Optional[float] = None,
+        max_ah: Optional[float] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> List[Tuple[Product, Optional[str]]]:
+        """
+        고객사·모델·암페어 범위로 제품을 필터링하여 반환한다.
+
+        [조인 이유]
+        응답에 customer_name이 필요해서 Customer를 LEFT JOIN해요.
+        customer_id가 없는 제품(고객사 미연결)도 목록에 포함되도록 OUTER JOIN.
+
+        [필터 전략]
+        파라미터가 None이면 해당 조건을 WHERE절에 추가하지 않아요.
+        즉, 아무 파라미터 없이 호출하면 전체 목록이 나와요.
+
+        [반환]
+        (Product, customer_name: str | None) 튜플 목록.
+        service에서 customer_name을 dict에 담을 때 튜플 두 번째 자리에서 꺼내요.
+        """
+        stmt = (
+            select(Product, Customer.customer_name)
+            .outerjoin(Customer, Product.customer_id == Customer.customer_id)
+        )
+
+        conditions = []
+        if customer_id is not None:
+            conditions.append(Product.customer_id == customer_id)
+        if model_name is not None:
+            # ilike = case-insensitive LIKE. 부분 일치로 "iX3" → "BMW iX3 50" 검색 가능.
+            conditions.append(Product.model_name.ilike(f"%{model_name}%"))
+        if min_ah is not None:
+            conditions.append(Product.amperage_ah >= min_ah)
+        if max_ah is not None:
+            conditions.append(Product.amperage_ah <= max_ah)
+
+        if conditions:
+            stmt = stmt.where(and_(*conditions))
+
+        stmt = (
+            stmt
+            .order_by(
+                Product.synced_at.desc().nulls_last(),
+                Product.created_at.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+
+        result = await self.session.execute(stmt)
+        return result.all()   # [(Product, customer_name), ...]
+
+    # -----------------------------------------------------------------------
+    # get_bom_versions
+    # -----------------------------------------------------------------------
+
+    @trace_tool("get_bom_versions")
+    async def get_bom_versions(
+        self,
+        product_id: UUID,
+    ) -> List[BomVersion]:
+        """
+        product_id에 해당하는 모든 BOM 버전을 production_from 내림차순으로 반환한다.
+
+        [status 필터 없음]
+        active  deprecated 전부 반환해요.
+        "현재"와 "과거" BOM을 함께 보는 게 이 API의 목적이에요.
+
+        [정렬]
+        production_from 내림차순 → 최신 생산기간이 상단.
+        production_from이 NULL인 row는 후순위(nulls_last).
+        """
+        result = await self.session.execute(
+            select(BomVersion)
+            .where(BomVersion.product_id == product_id)
+            .order_by(
+                BomVersion.production_from.desc().nulls_last(),
+                BomVersion.created_at.desc(),
+            )
+        )
+        return list(result.scalars().all())
+
+    # -----------------------------------------------------------------------
+    # get_bom_version_as_of
+    # -----------------------------------------------------------------------
+
+    @trace_tool("get_bom_version_as_of")
+    async def get_bom_version_as_of(
+        self,
+        product_id: UUID,
+        as_of: date,
+    ) -> Optional[BomVersion]:
+        """
+        특정 날짜(as_of)에 생산 중이었던 BOM 버전을 반환한다.
+
+        [조건 해석]
+            production_from <= as_of
+            AND (production_to IS NULL OR production_to >= as_of)
+
+        production_to IS NULL = "아직 종료일 미정 = 현재도 생산 중".
+        이 케이스를 OR로 함께 잡아야 현재 active 버전도 as_of 조회에 걸려요.
+        예: as_of=오늘, production_to=NULL → active 버전이 정상 반환됨.
+
+        [LIMIT 1]
+        한 product·날짜 조합에서 버전이 겹치면 안 되는 게 원칙이지만,
+        데이터 오염 방어로 LIMIT 1 처리해요.
+        """
+        result = await self.session.execute(
+            select(BomVersion)
+            .where(
+                and_(
+                    BomVersion.product_id == product_id,
+                    BomVersion.production_from <= as_of,
+                    or_(
+                        BomVersion.production_to.is_(None),
+                        BomVersion.production_to >= as_of,
+                    ),
+                )
+            )
+            .order_by(BomVersion.production_from.desc())
+            .limit(1)
+        )
+        return result.scalars().first()
+        

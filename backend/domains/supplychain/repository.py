@@ -241,3 +241,32 @@ class SupplyChainRepository:
         # session은 의존성 주입된 self.session 사용. 인자 db는 상위 서비스 호출 호환을 위해 유지합니다.
         result = await self.session.execute(query)
         return [dict(row._mapping) for row in result]
+
+    @trace_tool("check_eudr_deforestation")
+    async def check_eudr_deforestation(self, db: AsyncSession) -> List[Dict[str, Any]]:
+        """
+        EUDR(산림 훼손) 위험지역 검사를 수행합니다.
+        시연을 위해 특정 좌표계(ST_MakeEnvelope)를 가상의 위험 폴리곤으로 간주하고,
+        공장 좌표가 그 내부에(ST_Within) 있는지 검사합니다.
+        """
+        query = text("""
+            WITH eudr_risk_zone AS (
+                -- 시연용 가상 산림 훼손지: 인도네시아 보르네오 섬 인근 임의 좌표 박스
+                -- Longitude(X): 110.0 ~ 118.0 / Latitude(Y): -4.0 ~ 4.0
+                SELECT ST_SetSRID(ST_MakeEnvelope(110.0, -4.0, 118.0, 4.0), 4326) AS geom
+            )
+            SELECT
+                sf.factory_id,
+                s.supplier_id,
+                s.company_name,
+                ST_AsGeoJSON(sf.location) AS coordinates,
+                ST_Within(sf.location, r.geom) AS is_deforested
+            FROM supplier_factories sf
+            JOIN suppliers s ON sf.supplier_id = s.supplier_id
+            CROSS JOIN eudr_risk_zone r
+            WHERE sf.is_active = TRUE
+              AND sf.location IS NOT NULL;
+        """)
+        
+        result = await self.session.execute(query)
+        return [dict(row._mapping) for row in result]

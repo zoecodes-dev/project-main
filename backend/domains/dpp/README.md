@@ -57,3 +57,11 @@ DPP는 법적 효력을 가지는 공식 문서이므로, 한 번 발행된(`dpp
   }
 }
 ```
+
+## 4. 추가 API 엔드포인트 스펙 (조회용)
+프론트엔드 DPP 이력 대시보드를 위한 조회 API 세트입니다.
+* **`GET /dpp/records`**: 발행이 완료된 전체 DPP 이력(목록)을 반환합니다. 
+  - 쿼리 파라미터 `?customer_id=` 를 통해 특정 고객사 마스터별 스캔 및 추출이 가능합니다.
+* **`GET /dpp/records/{dpp_id}`**: 80여 개의 필드가 담긴 DPP Payload 상세 데이터를 반환합니다.
+  - **인터페이스 동기화**: 응답 객체의 `payload.product_info` 내에 은지님이 개편한 고객사 식별자(`customer_id`), 고객사명(`customer_name`), 배터리 모델명(`model_name`), 단위 암페어 용량(`amperage_ah`) 데이터가 정밀하게 포함되어 반환됩니다.
+*(모든 조회 API는 `@trace_tool` 데코레이터를 통해 행위가 추적됩니다.)*
