@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -235,6 +236,9 @@ async def get_product(
         "product_code":    product.product_code,
         "product_name":    product.product_name,
         "manufacturer_id": str(product.manufacturer_id) if product.manufacturer_id else None,
+        "customer_id":     str(product.customer_id) if product.customer_id else None,
+        "model_name":      product.model_name,
+        "amperage_ah":     float(product.amperage_ah) if product.amperage_ah else None,
         "type":            product.type,
         "specs":           product.specs,
         "source_system":   product.source_system,
@@ -407,3 +411,146 @@ async def deprecate_bom_version(
         "version_number": bom.version_number,
         "status":         bom.status,
     }
+    
+# ---------------------------------------------------------------------------
+# list_products_filtered
+# ---------------------------------------------------------------------------
+
+async def list_products_filtered(
+    db: AsyncSession,
+    customer_id: Optional[UUID] = None,
+    model_name: Optional[str] = None,
+    min_ah: Optional[float] = None,
+    max_ah: Optional[float] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """
+    고객사·모델·암페어 범위 필터로 제품 목록을 반환한다.
+
+    repository에서 (Product, customer_name) 튜플로 오는 걸
+    여기서 dict로 펼쳐요. customer_name은 조인 결과라서
+    Product ORM 객체에 없고 튜플 두 번째 자리에 있어요.
+    """
+    repo = ProductRepository(db)
+    rows = await repo.list_products_filtered(
+        customer_id=customer_id,
+        model_name=model_name,
+        min_ah=min_ah,
+        max_ah=max_ah,
+        limit=limit,
+        offset=offset,
+    )
+
+    return [
+        {
+            "product_id":    str(product.product_id),
+            "product_code":  product.product_code,
+            "product_name":  product.product_name,
+            "customer_id":   str(product.customer_id) if product.customer_id else None,
+            "customer_name": customer_name,
+            "model_name":    product.model_name,
+            "amperage_ah":   float(product.amperage_ah) if product.amperage_ah else None,
+            "type":          product.type,
+            "source_system": product.source_system,
+            "synced_at":     product.synced_at.isoformat() if product.synced_at else None,
+        }
+        for product, customer_name in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# get_bom_versions
+# ---------------------------------------------------------------------------
+
+async def get_bom_versions(
+    db: AsyncSession,
+    product_id: UUID,
+) -> List[Dict[str, Any]]:
+    """
+    제품의 전체 BOM 버전 목록을 반환한다 (active  deprecated 포함).
+
+    [404 분기]
+    제품 자체가 없으면 404. BOM 버전이 0개인 건 404가 아니라 빈 배열 반환이에요.
+    "제품은 있는데 BOM을 아직 안 만든" 상태도 유효하거든요.
+
+    [is_current 필드]
+    status='active'인 버전에 is_current=True를 달아줘요.
+    프론트가 "현재 버전" 강조 표시를 하기 위한 힌트예요.
+    """
+    repo = ProductRepository(db)
+
+    product = await repo.get_product(product_id=product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=404,
+            detail="제품을 찾을 수 없습니다.",
+        )
+
+    versions = await repo.get_bom_versions(product_id=product_id)
+
+    return [
+        {
+            "bom_version_id":  str(v.bom_version_id),
+            "product_id":      str(v.product_id),
+            "version_number":  v.version_number,
+            "status":          v.status,
+            "is_current":      v.status == "active",
+            "production_from": v.production_from.isoformat() if v.production_from else None,
+            "production_to":   v.production_to.isoformat() if v.production_to else None,
+            "approved_by":     str(v.approved_by) if v.approved_by else None,
+            "approved_at":     v.approved_at.isoformat() if v.approved_at else None,
+            "source_system":   v.source_system,
+            "synced_at":       v.synced_at.isoformat() if v.synced_at else None,
+        }
+        for v in versions
+    ]
+
+
+# ---------------------------------------------------------------------------
+# get_bom_version_as_of
+# ---------------------------------------------------------------------------
+
+async def get_bom_version_as_of(
+    db: AsyncSession,
+    product_id: UUID,
+    as_of: date,
+) -> Dict[str, Any]:
+    """
+    특정 날짜에 생산 중이었던 BOM 버전을 반환한다.
+
+    [404 분기 — 두 가지]
+    ① 제품 없음 → 404 "제품을 찾을 수 없습니다."
+    ② 해당 날짜에 맞는 BOM 버전 없음
+       → 404 "해당 날짜에 유효한 BOM 버전이 존재하지 않습니다."
+    """
+    repo = ProductRepository(db)
+
+    product = await repo.get_product(product_id=product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=404,
+            detail="제품을 찾을 수 없습니다.",
+        )
+
+    version = await repo.get_bom_version_as_of(
+        product_id=product_id,
+        as_of=as_of,
+    )
+    if version is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"해당 날짜({as_of})에 유효한 BOM 버전이 존재하지 않습니다.",
+        )
+
+    return {
+        "bom_version_id":  str(version.bom_version_id),
+        "product_id":      str(version.product_id),
+        "version_number":  version.version_number,
+        "status":          version.status,
+        "is_current":      version.status == "active",
+        "production_from": version.production_from.isoformat() if version.production_from else None,
+        "production_to":   version.production_to.isoformat() if version.production_to else None,
+        "as_of_queried":   as_of.isoformat(),
+        "source_system":   version.source_system,
+    }    
