@@ -41,6 +41,7 @@ CREATE TABLE users (
         CONSTRAINT chk_user_role CHECK (role IN ('admin', 'owner_esg', 'owner_purchasing', 'supplier_ceo', 'supplier_esg')),
     is_active      BOOLEAN DEFAULT TRUE,
     last_login_at  TIMESTAMPTZ,
+    manager_id     UUID REFERENCES users(user_id) ON DELETE SET NULL, -- [다단계 결재] 상급자 자기참조 (결재선 자동 구성)
     created_at     TIMESTAMPTZ DEFAULT now()
 );
 
@@ -1037,6 +1038,171 @@ CREATE INDEX idx_notifications_pending    ON notifications(status, created_at) W
 -- [신설] processed_jobs는 PK(idempotency_key)로 자동 인덱싱됨. DLQ 모니터링/재시도용 부분 인덱스.
 CREATE INDEX idx_processed_jobs_failed    ON processed_jobs(queue_name, processed_at) WHERE status = 'failed';
 
+
+-- ============================================================
+-- KIRA 플랫폼 2차 확장 스키마 (프로세스 정의서 TO-BE 전수 수용)
+-- 선결과제: user/org · report(결재) · watchlist/소급 · 당국제출 · 대외전송 · 사람결정 증적
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- [지혜-A] 결재(report) 도메인 — 다단계 결재. manager_id 는 users 테이블에 통합됨.
+-- ------------------------------------------------------------
+CREATE TABLE reports (
+    report_id       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_id        UUID REFERENCES batches(batch_id) ON DELETE CASCADE,
+    title           VARCHAR(255) NOT NULL,
+    description     TEXT,
+    requester_id    UUID NOT NULL REFERENCES users(user_id),
+    status          VARCHAR(30) DEFAULT 'draft'
+        CONSTRAINT chk_report_status CHECK (status IN ('draft', 'approval_pending', 'fully_approved', 'returned')),
+    current_step    INT DEFAULT 1,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE report_approval_steps (
+    step_id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    report_id       UUID NOT NULL REFERENCES reports(report_id) ON DELETE CASCADE,
+    step_number     INT NOT NULL,
+    approver_id     UUID NOT NULL REFERENCES users(user_id),
+    status          VARCHAR(30) DEFAULT 'pending'
+        CONSTRAINT chk_step_status CHECK (status IN ('pending', 'approved', 'rejected')),
+    decision_text   TEXT,
+    decided_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(report_id, step_number)
+);
+
+-- ------------------------------------------------------------
+-- [은지-C] Watchlist (UFLPA/제재명단) + 소급 재검증
+-- ⚠️수정#2: matched_supplier_id 추가 — 등재 entity ↔ 우리 공급사 매칭(자동 소급 강등의 연결고리).
+--          텍스트 이름만으론 자동 대조가 약해 supplier FK 를 둠. 미매칭 시 NULL(텍스트 후보만).
+-- ------------------------------------------------------------
+CREATE TABLE watchlists (
+    watchlist_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    entity_name         VARCHAR(255) NOT NULL,
+    country             VARCHAR(2),
+    reason              TEXT,
+    matched_supplier_id UUID REFERENCES suppliers(supplier_id) ON DELETE SET NULL, -- ⚠️#2 우리 공급사 매칭(소급 강등 연결)
+    source              VARCHAR(30) DEFAULT 'UFLPA_ENTITY_LIST'
+        CONSTRAINT chk_watchlist_source CHECK (source IN ('UFLPA_ENTITY_LIST', 'SANCTION', 'FEOC', 'MANUAL')),
+    listed_at           TIMESTAMPTZ DEFAULT now(),
+    is_active           BOOLEAN DEFAULT TRUE,
+    created_at          TIMESTAMPTZ DEFAULT now()
+);
+
+-- 소급 재검증 이력 (출처9). trigger_source_id 는 watchlists/regulations 를 가리키는 polymorphic — FK 없음(의도).
+CREATE TABLE reverification_logs (
+    reverification_id     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    trigger_type          VARCHAR(30) NOT NULL
+        CONSTRAINT chk_reverify_trigger CHECK (trigger_type IN ('watchlist_update', 'regulation_amendment', 'manual')),
+    trigger_source_id     UUID,         -- ⚠️#3 polymorphic(watchlist_id 또는 regulation_id) → FK 없음(의도)
+    status                VARCHAR(20) DEFAULT 'running'
+        CONSTRAINT chk_reverify_status CHECK (status IN ('running', 'completed', 'failed')),
+    affected_batch_count  INT DEFAULT 0,
+    changed_verdict_count INT DEFAULT 0, -- 재검증 결과 판정이 달라진(위반 강등 등) 건수
+    started_at            TIMESTAMPTZ DEFAULT now(),
+    completed_at          TIMESTAMPTZ,
+    results_summary       JSONB         -- {batch_id: 'old -> new'} 요약
+);
+
+-- ------------------------------------------------------------
+-- [차윤-X] 외부 당국 시스템 제출 + 참조번호 (EUDR TRACES / IRA 30D / DPP Registry / CBP)
+-- ------------------------------------------------------------
+CREATE TABLE authority_submissions (
+    submission_id      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_id           UUID REFERENCES batches(batch_id) ON DELETE CASCADE,
+    product_id         UUID REFERENCES products(product_id) ON DELETE CASCADE,
+    authority_type     VARCHAR(30) NOT NULL
+        CONSTRAINT chk_auth_type CHECK (authority_type IN ('TRACES_NT', 'IRA_30D', 'DPP_REGISTRY', 'CBP_DETENTION')),
+    reference_number   VARCHAR(100), -- TRACES-NT 고유 참조번호 / IRS Safe Harbor 등록번호 등
+    status             VARCHAR(20) DEFAULT 'pending'
+        CONSTRAINT chk_auth_submission_status CHECK (status IN ('pending', 'submitted', 'approved', 'failed')),
+    payload            JSONB,        -- 당국 전송 원본 JSON 스냅샷
+    response_metadata  JSONB,        -- 당국 수신 응답값
+    submitted_at       TIMESTAMPTZ,
+    created_at         TIMESTAMPTZ DEFAULT now()
+);
+
+-- [차윤-X] 대외 전송 로그 + 도달확인(Ack) (X-10 정밀 정합). recipient_id 는 customer/supplier/authority polymorphic — FK 없음(의도).
+CREATE TABLE transmission_logs (
+    transmission_id     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_id            UUID REFERENCES batches(batch_id) ON DELETE SET NULL,
+    sender_id           UUID REFERENCES users(user_id), -- 최종 발송 주체(원청 담당자)
+    recipient_type      VARCHAR(20) NOT NULL
+        CONSTRAINT chk_recipient_type CHECK (recipient_type IN ('customer', 'supplier', 'authority')),
+    recipient_id        UUID,         -- polymorphic(customers/suppliers/당국) → FK 없음(의도)
+    recipient_email     VARCHAR(255) NOT NULL,
+    transmission_type   VARCHAR(30) NOT NULL
+        CONSTRAINT chk_trans_type CHECK (
+            transmission_type IN ('dpp_report', 'compliance_summary', 'rework_request', 'post_violation_notice', 'customs_response')
+        ),
+    status              VARCHAR(20) DEFAULT 'sent'
+        CONSTRAINT chk_trans_status CHECK (status IN ('sent', 'delivered', 'failed', 'acknowledged')),
+    payload_summary     TEXT,
+    attachment_urls     JSONB,        -- 동반 PDF/증거묶음 URL 배열
+    ack_token           VARCHAR(64) UNIQUE, -- 수신확인 링크 검증용 유니크 토큰
+    sent_at             TIMESTAMPTZ DEFAULT now(),
+    delivered_at        TIMESTAMPTZ,
+    acknowledged_at     TIMESTAMPTZ   -- Ack 고리 완성 시각
+);
+
+-- ------------------------------------------------------------
+-- [영수-D] CBP 억류 통지(Detention) + 반증 대응 케이스 (회사경계·당국 대응)
+-- ------------------------------------------------------------
+CREATE TABLE detention_cases (
+    case_id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_id             UUID REFERENCES batches(batch_id) ON DELETE CASCADE,
+    notice_number        VARCHAR(100) UNIQUE NOT NULL,
+    status               VARCHAR(20) DEFAULT 'notified'
+        CONSTRAINT chk_detention_status CHECK (status IN ('notified', 'preparing_package', 'submitted', 'released', 'seized')),
+    detained_at          TIMESTAMPTZ NOT NULL,
+    due_date             TIMESTAMPTZ NOT NULL, -- 억류일 +30일 마감(SLA)
+    evidence_package_url VARCHAR(500),
+    submitted_at         TIMESTAMPTZ,
+    resolution_note      TEXT,
+    created_at           TIMESTAMPTZ DEFAULT now()
+);
+
+-- ------------------------------------------------------------
+-- [은지-C] 실사 정책 문서 (CSDDD·배터리 규제 대응)
+-- ------------------------------------------------------------
+CREATE TABLE due_diligence_policies (
+    policy_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title              VARCHAR(255) NOT NULL,
+    version            VARCHAR(20) NOT NULL,
+    status             VARCHAR(20) DEFAULT 'draft'
+        CONSTRAINT chk_policy_status CHECK (status IN ('draft', 'active', 'archived')),
+    document_url       VARCHAR(500) NOT NULL,
+    created_by         UUID REFERENCES users(user_id),
+    published_at       TIMESTAMPTZ,
+    created_at         TIMESTAMPTZ DEFAULT now()
+);
+
+-- ------------------------------------------------------------
+-- [지혜-A·차윤-E·은진] 결정 시점 데이터 스냅샷 + 부인방지 서명 (사람결정 증적 — 책임증명 비대칭 해소)
+-- step_id 는 report_approval_steps 또는 hitl_reviews 시점 polymorphic — FK 없음(의도).
+-- ------------------------------------------------------------
+CREATE TABLE audit_data_snapshots (
+    snapshot_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_id           UUID REFERENCES batches(batch_id) ON DELETE CASCADE,
+    step_id            UUID,         -- polymorphic(report_approval_steps.step_id 또는 hitl_reviews.review_id) → FK 없음(의도)
+    decided_by         UUID REFERENCES users(user_id), -- 승인 누른 사람(부인방지 주체)
+    snapshot_data      JSONB NOT NULL, -- 승인 순간의 active BOM·협력사·규제판정 JSON 동결
+    signature_hash     VARCHAR(64),  -- 무결성 검증 해시
+    created_at         TIMESTAMPTZ DEFAULT now()
+);
+
+-- TO-BE 확장 인덱스
+CREATE INDEX idx_reports_requester ON reports(requester_id);
+CREATE INDEX idx_report_steps_approver ON report_approval_steps(approver_id, status);
+CREATE INDEX idx_watchlists_entity ON watchlists(entity_name) WHERE is_active = TRUE;
+CREATE INDEX idx_watchlists_matched ON watchlists(matched_supplier_id) WHERE matched_supplier_id IS NOT NULL;
+CREATE INDEX idx_auth_submissions_batch ON authority_submissions(batch_id);
+CREATE INDEX idx_trans_logs_ack_token ON transmission_logs(ack_token) WHERE ack_token IS NOT NULL;
+CREATE INDEX idx_detention_cases_due ON detention_cases(due_date) WHERE status != 'released';
+CREATE INDEX idx_reverify_logs_status ON reverification_logs(status);
+CREATE INDEX idx_audit_snapshots_batch ON audit_data_snapshots(batch_id);
 
 -- ============================================================
 -- 마스터 데이터 시드 (Regulations - 최종 10개)
