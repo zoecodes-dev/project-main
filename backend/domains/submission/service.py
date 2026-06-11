@@ -224,3 +224,11 @@ async def get_supplier_submission_timeline(db: AsyncSession, supplier_id: uuid.U
     [조회 도구] 특정 협력사의 모든 데이터 제출 이력 타임라인 조회
     """
     return await get_timeline_by_supplier(db, supplier_id)
+
+
+@trace_tool("get_evidence_urls_dto")
+async def get_evidence_urls_dto(db: AsyncSession, supplier_id: uuid.UUID) -> list[dict]:
+    """증빙 URL DTO 조회 헬퍼"""
+    stmt = text("SELECT document_id, file_url, file_name, doc_category FROM submission_documents WHERE supplier_id = :supplier_id")
+    result = await db.execute(stmt, {"supplier_id": str(supplier_id)})
+    return [dict(r._mapping) for r in result.fetchall()]

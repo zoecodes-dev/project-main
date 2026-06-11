@@ -124,8 +124,8 @@ async def generate_dpp_payload(
             "05_customs_declarant_eori": raw_data.get("business_reg_no", "TODO"),
             "06_customs_declarant_name": raw_data.get("tenant_company_name", "KIRA OEM Inc."),
             "07_customs_declarant_country": raw_data.get("tenant_country", "KR"),
-            "08_importer_eori": raw_data.get("business_reg_no", "TODO"),
-            "09_importer_name": raw_data.get("tenant_company_name", "KIRA OEM Inc."),
+            "08_importer_eori": str(raw_data.get("customer_id")) if raw_data.get("customer_id") else "TODO",
+            "09_importer_name": raw_data.get("customer_name", "TODO"),
             "10_importer_country": raw_data.get("tenant_country", "KR"),
             "11_representative_eori": "TODO",
             "12_representative_name": "TODO",
@@ -141,7 +141,7 @@ async def generate_dpp_payload(
             "20_goods_description": raw_data.get("product_name") or raw_data.get("part_name") or "TODO",
             "21_country_of_origin": raw_data.get("item_origin") or raw_data.get("destination") or "TODO",
             "22_net_mass": raw_data.get("net_mass", 0.0),  # [3대 산식 변수] 수입 물품 순 중량
-            "23_supplementary_units": "TODO",
+            "23_supplementary_units": float(raw_data.get("amperage_ah", 0.0)),
             "24_commercial_invoice_number": raw_data.get("invoice_number", "TODO"),
             "25_commercial_invoice_date": "TODO",
             "26_total_invoice_value": raw_data.get("unit_price", 0.0),
@@ -210,10 +210,10 @@ async def generate_dpp_payload(
 
     return {
         "product_info": {
-            "customer_id": raw_data.get("customer_id"),
-            "customer_name": raw_data.get("customer_name", "Unknown"),
-            "model_name": raw_data.get("model_name", "Unknown"),
-            "amperage_ah": raw_data.get("amperage_ah", 0.0),
+            "customer_id": str(raw_data.get("customer_id")) if raw_data.get("customer_id") else None,
+            "customer_name": str(raw_data.get("customer_name", "Unknown")),
+            "model_name": str(raw_data.get("model_name", "Unknown")),
+            "amperage_ah": float(raw_data.get("amperage_ah", 0.0)),
         },
         "readiness_breakdown": readiness_breakdown,
         "scores": {

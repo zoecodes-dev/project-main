@@ -7,6 +7,10 @@ from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node, trace_tool
 from langchain_core.messages import HumanMessage, SystemMessage
 from backend.llm.bedrock_factory import get_llm_for_agent
+from backend.domains.verification.service import get_compliance_history_dto
+from backend.domains.supplychain.repository import SupplyChainRepository
+from backend.domains.submission.service import get_evidence_urls_dto
+from backend.infrastructure.queue import enqueue, HITL_QUEUE
 
 @trace_tool("summarize_hitl_context")
 async def _summarize_hitl_context(context_data: dict) -> str:
@@ -57,6 +61,15 @@ class HitlService:
                 "resolution": resolution
             }
         )
+        
+        # LangGraph 파이프라인 재개는 무거우므로 ARQ 워커(hitl_queue)로 위임합니다.
+        await enqueue(
+            HITL_QUEUE,
+            "process_hitl_resolution",
+            batch_id=str(batch_id),
+            resolution=resolution,
+            job_id=f"hitl_resume_{batch_id}"
+        )
 
         # 3. 반려 시 연관 제출 건 처리를 위해 Submission 도메인으로 신호 발행 (직접 SQL 수정 금지)
         if resolution == 'reject':
@@ -70,13 +83,33 @@ class HitlService:
             
         return review
 
-    async def get_review_context(self, batch_id: uuid.UUID) -> dict:
+    async def get_review_context(self, db: AsyncSession, batch_id: uuid.UUID) -> dict:
         review = await self.repo.get_by_batch_id(batch_id)
         if not review:
             raise ValueError("Review not found for given batch_id")
             
-        # 도메인 격리 원칙에 따라 조합된 Raw SQL 데이터를 받아와서 묶어줘요.
-        context_data = await self.repo.get_review_context_raw(batch_id)
+        # 각 도메인의 조회 헬퍼 함수(DTO 인터페이스)를 경유하여 데이터를 수집합니다.
+        comp_history = await get_compliance_history_dto(db, batch_id)
+        supplier_id = comp_history[0].get("supplier_id") if comp_history else None
+
+        supplier_master = {}
+        factory_gps = []
+        evidence_urls = []
+
+        if supplier_id:
+            sc_repo = SupplyChainRepository(db)
+            sup_data = await sc_repo.get_supplier_master_and_gps_dto(supplier_id)
+            supplier_master = sup_data["supplier_master"]
+            factory_gps = sup_data["factory_gps"]
+            evidence_urls = await get_evidence_urls_dto(db, supplier_id)
+
+        context_data = {
+            "compliance_history": comp_history,
+            "supplier_master": supplier_master,
+            "factory_gps": factory_gps,
+            "evidence_urls": evidence_urls
+        }
+        
         context_data["review_info"] = {
             "review_id": str(review.review_id),
             "batch_id": str(review.batch_id),
