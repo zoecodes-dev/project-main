@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
+from backend.infrastructure.auth import CurrentUser, get_current_user
 from backend.infrastructure.database import get_db
 from backend.hitl.repository import HitlRepository
 from backend.hitl.service import HitlService
@@ -38,19 +39,19 @@ async def get_hitl_context(batch_id: uuid.UUID, service: HitlService = Depends(g
 # 2. 범용 Resolve 엔드포인트
 @router.post("/{batch_id}/resolve")
 async def resolve_hitl_review(
-    batch_id: uuid.UUID, 
-    request: ResolveRequest, 
+    batch_id: uuid.UUID,
+    request: ResolveRequest,
+    current_user: CurrentUser = Depends(get_current_user),
     service: HitlService = Depends(get_hitl_service),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
 ):
     try:
         review = await service.resolve_batch(
             db,
-            batch_id=batch_id, 
-            resolution=request.resolution, 
-            decision_text=request.decision_text, 
-            user_id=current_user.user_id
+            batch_id=batch_id,
+            resolution=request.resolution,
+            decision_text=request.decision_text,
+            user_id=current_user.user_id,
         )
         await db.commit() # 트랜잭션 확정
         return {"status": "success", "review_id": review.review_id, "resolution": review.resolution}
@@ -60,19 +61,19 @@ async def resolve_hitl_review(
 # 3. 승인(Approve) 명시적 엔드포인트
 @router.post("/{batch_id}/approve")
 async def approve_hitl_review(
-    batch_id: uuid.UUID, 
-    request: DecisionRequest, 
+    batch_id: uuid.UUID,
+    request: DecisionRequest,
+    current_user: CurrentUser = Depends(get_current_user),
     service: HitlService = Depends(get_hitl_service),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
 ):
     try:
         review = await service.resolve_batch(
             db,
-            batch_id=batch_id, 
-            resolution='approve', 
-            decision_text=request.decision_text, 
-            user_id=current_user.user_id
+            batch_id=batch_id,
+            resolution="approve",
+            decision_text=request.decision_text,
+            user_id=current_user.user_id,
         )
         await db.commit()
         return {"status": "success", "review_id": review.review_id, "resolution": "approve"}
@@ -82,19 +83,19 @@ async def approve_hitl_review(
 # 3. 반려(Reject) 명시적 엔드포인트
 @router.post("/{batch_id}/reject")
 async def reject_hitl_review(
-    batch_id: uuid.UUID, 
-    request: DecisionRequest, 
+    batch_id: uuid.UUID,
+    request: DecisionRequest,
+    current_user: CurrentUser = Depends(get_current_user),
     service: HitlService = Depends(get_hitl_service),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
 ):
     try:
         review = await service.resolve_batch(
             db,
-            batch_id=batch_id, 
-            resolution='reject', 
-            decision_text=request.decision_text, 
-            user_id=current_user.user_id
+            batch_id=batch_id,
+            resolution="reject",
+            decision_text=request.decision_text,
+            user_id=current_user.user_id,
         )
         await db.commit()
         return {"status": "success", "review_id": review.review_id, "resolution": "reject"}
