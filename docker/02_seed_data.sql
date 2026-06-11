@@ -354,6 +354,14 @@ INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_
 INSERT INTO supply_ratio (map_id, factory_id, ratio_percentage, volume, unit) VALUES
 ('51111111-0000-4000-8000-000000000001', 'f1111111-0000-4000-8000-000000000001', 100.00, 10000, 'ea');
 
+-- 공장별 탄소발자국 선언 (EU 배터리법 ART7)
+-- 기존 공급사 단위 carbon_intensity → 공장 단위 선언으로 이관.
+-- 대성정밀 화성공장(f4)은 의도적으로 미INSERT → ART7 선언 누락 → needs_human_review 트리거 유지.
+INSERT INTO factory_carbon_declarations (factory_id, carbon_intensity, methodology, declared_at, valid_from, source) VALUES
+('f1111111-0000-4000-8000-000000000001', 2.3400, 'PEF', '2025-01-01', '2025-01-01', 'third_party_verified'),  -- 한양셀 포항 (Happy)
+('f7777777-0000-4000-8000-000000000007', 2.5100, 'PEF', '2025-01-01', '2025-01-01', 'third_party_verified'),  -- 우진배터리 울산 (Happy)
+('f2222222-0000-4000-8000-000000000002', 3.1000, 'PEF', '2025-01-01', '2025-01-01', 'supplier_declared');     -- 동성머티리얼 천안
+
 
 -- ============================================================
 -- 12. 운영 / 배치 / DPP (영역 9) — 4제품 배치

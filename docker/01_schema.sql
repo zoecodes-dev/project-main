@@ -545,6 +545,29 @@ CREATE TABLE supply_ratio (
     unit             VARCHAR(20)
 );
 
+-- [테이블 역할] 공장별 탄소발자국 선언 (EU 배터리법 ART7) [담당: 은지-C]
+-- ART7은 공장 단위 탄소집약도 선언 + 산정 방법론 명시 + 검증을 요구한다.
+-- 공급사 단위(supplier_manufacturer_details.carbon_intensity)로는 다공장
+-- 협력사를 분해할 수 없어, 공장 단위 선언을 1급 엔티티로 둔다.
+-- 배치 판정: batches.bom_version_id → supply_chain_map → supply_ratio(공장별 기여%)
+--           → 이 테이블의 carbon_intensity 가중평균.
+-- 선언 누락 공장이 있으면 ART7상 미충족 → compliance 에서 needs_human_review 처리.
+CREATE TABLE factory_carbon_declarations (
+    declaration_id   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    factory_id       UUID NOT NULL REFERENCES supplier_factories(factory_id) ON DELETE CASCADE,
+    carbon_intensity NUMERIC(10,4) NOT NULL,          -- kg CO2e/kWh (PEF 기반 산정)
+    methodology      VARCHAR(50),                     -- 산정 방법론 (예: 'PEF')
+    declared_at      DATE NOT NULL,
+    valid_from       DATE,
+    valid_to         DATE,
+    source           VARCHAR(30) NOT NULL DEFAULT 'supplier_declared'
+        CONSTRAINT chk_carbon_source CHECK (source IN ('supplier_declared', 'third_party_verified', 'estimated')),
+    is_active        BOOLEAN DEFAULT TRUE,
+    created_at       TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_factory_carbon_factory ON factory_carbon_declarations(factory_id) WHERE is_active = TRUE;
+
 
 -- ============================================================
 -- 영역 9. 운영 / 배치 / DPP (A, E 담당)
