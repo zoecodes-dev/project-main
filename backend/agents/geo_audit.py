@@ -11,7 +11,6 @@ from backend.infrastructure.trace import trace_node
 from backend.domains.supplychain.repository import SupplyChainRepository
 from backend.domains.supplychain.service import SupplyChainService
 
-@trace_node("geo_audit", "agent")
 async def geo_audit_node(state: BatchState, db: AsyncSession) -> BatchState:
     """
     배치의 모든 공장 좌표를 검사하고 결과를 state에 기록.
