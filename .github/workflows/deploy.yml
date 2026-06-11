@@ -50,6 +50,7 @@ jobs:
               "git fetch origin main",
               "git reset --hard origin/main",
               "docker compose up -d --build",
+              "docker exec kira-nginx nginx -s reload",
               "docker image prune -f",
               "docker compose ps"
             ],"executionTimeout":["1200"]}' \
