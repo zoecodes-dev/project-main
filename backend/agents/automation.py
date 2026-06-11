@@ -3,7 +3,6 @@ from typing import Any, Dict
 
 from backend.agents.state import BatchState
 from backend.infrastructure.database import AsyncSessionLocal
-from backend.infrastructure.trace import trace_node
 from backend.domains.verification.service import verify_feoc_rule
 from backend.domains.risk.service import calculate_risk_score
 from backend.domains.dpp.service import calculate_readiness
@@ -11,7 +10,6 @@ from backend.domains.dpp.service import generate_dpp_payload, create_dpp_record
 from backend.domains.dpp.state_machine import issue_dpp
 
 
-@trace_node("verification", "agent")
 async def verification_node(state: BatchState) -> Dict[str, Any]:
     """
     [Verification Engine]
@@ -46,7 +44,6 @@ async def verification_node(state: BatchState) -> Dict[str, Any]:
     }
 
 
-@trace_node("risk_scoring", "agent")
 async def risk_scoring_node(state: BatchState) -> Dict[str, Any]:
     """
     [Pipeline Coordinator]
@@ -99,7 +96,6 @@ async def risk_scoring_node(state: BatchState) -> Dict[str, Any]:
     return updates
 
 
-@trace_node("readiness", "agent")
 async def readiness_node(state: BatchState) -> Dict[str, Any]:
     """
     [Pipeline Coordinator]
@@ -125,7 +121,6 @@ async def readiness_node(state: BatchState) -> Dict[str, Any]:
         return updates
 
 
-@trace_node("issuance", "agent")
 async def issuance_node(state: BatchState) -> Dict[str, Any]:
     """
     [Pipeline Coordinator]
