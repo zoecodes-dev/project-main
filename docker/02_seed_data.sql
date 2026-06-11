@@ -472,3 +472,21 @@ INSERT INTO watchlists (watchlist_id, entity_name, country, reason, matched_supp
 -- 3) 실사 정책 문서 1건 (CSDDD 대응, active)
 INSERT INTO due_diligence_policies (policy_id, title, version, status, document_url, created_by, published_at) VALUES
 ('d0000000-0000-4000-8000-000000000001', 'KIRA 공급망 실사 정책', 'v1.0', 'active', 's3://kira-documents/policies/dd_policy_v1.pdf', '11111111-0000-4000-8000-000000000002', now());
+
+
+-- ===== SEED DELTA: 결재선용 부서장 추가 (02_seed_data.sql) =====
+-- A 방향: role enum 변경 없음. 직책 계층(담당↔부서장)은 manager_id 로만 표현.
+-- ESG 담당(002)이 컴플라이언스 보고서 기안 → ESG 부서장(008) 결재 → 끝. (2단계)
+
+-- 1) 기존 INSERT INTO users 의 컬럼 목록에 manager_id 추가하고, 7행 모두 manager_id 값 명시.
+--    (admin/supplier 들은 NULL, ESG Manager 만 008 을 가리킴)
+INSERT INTO users (user_id, tenant_id, email, password_hash, name, role, manager_id) VALUES
+('11111111-0000-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'admin@kira.demo',       'hashed_pw', 'Admin User',      'admin',            NULL),
+('11111111-0000-4000-8000-000000000002', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@kira.demo',         'hashed_pw', 'ESG Manager',     'owner_esg',        '11111111-0000-4000-8000-000000000008'),
+('11111111-0000-4000-8000-000000000003', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'buyer@kira.demo',       'hashed_pw', 'Purchasing Lead', 'owner_purchasing', NULL),
+('11111111-0000-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'ceo@hanyang.demo',      'hashed_pw', 'Hanyang CEO',     'supplier_ceo',     NULL),
+('11111111-0000-4000-8000-000000000005', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@globalmining.demo', 'hashed_pw', 'GMC ESG',         'supplier_esg',     NULL),
+('11111111-0000-4000-8000-000000000006', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@daesung.demo',      'hashed_pw', 'Daesung ESG',     'supplier_esg',     NULL),
+('11111111-0000-4000-8000-000000000007', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'ceo@woojin.demo',       'hashed_pw', 'Woojin CEO',      'supplier_ceo',     NULL),
+-- ▶추가: ESG 부서장 (결재선 최상단, manager_id NULL)
+('11111111-0000-4000-8000-000000000008', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg.head@kira.demo',    'hashed_pw', 'ESG Head',        'owner_esg',        NULL);
