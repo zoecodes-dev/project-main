@@ -12,8 +12,6 @@ document_extraction_results에 적재한다. (spec 3-5 라이프사이클 1~2단
   - 이 워커: file → parse_document(Bedrock Vision) → create_extraction_result 적재
   - data_gateway_node: 적재된 결과를 batch 파이프라인에서 조회+검증 (별개)
 
-[멱등성] processed_jobs 영속화는 E 소관 헬퍼 대기 중. geo_risk_worker와
-  동일하게 W3은 인메모리 골격으로 두고, E 헬퍼가 나오면 교체한다(TODO).
   한 워커 = 한 Queue (spec 5-3).
 """
 from arq.connections import RedisSettings
