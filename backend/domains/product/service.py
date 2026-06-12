@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -34,11 +35,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.product.repository import ProductRepository
 from backend.domains.product.state_machine import (
-    activate_bom_version,
-    deprecate_bom_version,
+    activate_bom_version as sm_activate_bom_version,
+    deprecate_bom_version as sm_deprecate_bom_version,
 )
 from backend.events.types import (
     BOMImportedEvent,
+    CustomerImportedEvent,
     LotImportedEvent,
     ProductImportedEvent,
 )
@@ -76,48 +78,69 @@ async def import_products(
     source_system: str = "SEED",
 ) -> Dict[str, Any]:
     """
-    [결정 #1] 외부 원천에서 제품 데이터를 동기화하고 이벤트를 발행한다.
+    [결정 #1 + W4] 외부 원천에서 고객사·제품 데이터를 동기화하고 이벤트를 발행한다.
 
-    시연 구현:
-        원천 = DB 시드 데이터 (source_system='SEED').
-        repository.fetch_from_source()가 UPSERT 처리.
+    [W4 확장]
+    고객사 ingest가 추가됐어요. fetch_from_source가 고객사 UPSERT를 제품보다
+    먼저 처리하고, 이 함수는 그 결과를 받아 이벤트를 올바른 순서로 발행해요.
 
-    실환경 전환:
-        repository._load_seed_products() 내부만 ERP API로 교체.
-        이 함수의 로직·이벤트 발행 연계는 변경 불필요.
+    [이벤트 발행 순서 — W4]
+        1. CustomerImported  — 고객사 UPSERT 완료 (신규 시만)
+           ※ 기존 고객사 갱신(is_new=False)은 downstream 변화 없으므로 발행 생략.
+        2. BOMImported       — bom_version ingest 완료
+        3. LotImported       — batch(Lot) ingest 완료
+        4. ProductImported   — 제품 전체 ingest 완료 (마지막)
 
-    [이벤트 발행 순서 — 결정 #1]
-        각 제품마다:
-          1. BOMImported  — bom_version ingest 완료
-          2. LotImported  — batch(Lot) ingest 완료
-             ※ W2: batch_id=None 플레이스홀더. W3 batch ingest 구현 시 반드시 처리:
-                   - batches 레코드 생성 후 실제 batch_id 주입
-                   - batches.source_system = 'MES' (schema DEFAULT와 일치)
-                   - batches.external_id, synced_at 세팅 필수
-          3. ProductImported — 제품 전체 ingest 완료 (마지막)
-
-        ProductImported를 마지막에 발행하는 이유:
-          BOM·Lot 준비가 완료된 시점에 "제품 전체가 준비됐다"는 신호를 보내야
-          downstream(SupplyChain, Compliance 등)이 안전하게 처리할 수 있기 때문.
+        CustomerImported를 먼저 발행하는 이유:
+          products.customer_id 가 customers.customer_id FK를 참조하기 때문에
+          "고객사 준비됨" 신호가 먼저 가야 downstream이 안전하게 처리할 수 있어요.
+          ProductImported를 마지막에 발행하는 이유는 기존과 동일 — BOM·Lot 준비 후
+          "제품 전체가 준비됐다"는 신호를 보내야 해요.
 
     [호출 흐름]
         router → service.import_products()
-               → repository.fetch_from_source()   # UPSERT
-               → publish("BOMImported", ...)
-               → publish("LotImported", ...)
-               → publish("ProductImported", ...)
+               → repository.fetch_from_source()          # 고객사·제품 UPSERT
+               → db.commit()
+               → publish("CustomerImported", ...)        # 신규 고객사만
+               → 제품별: publish("BOMImported", ...)
+                         publish("LotImported", ...)
+                         publish("ProductImported", ...)
 
     [반환]
-        동기화된 제품 수와 제품 목록 요약 dict.
+        동기화된 고객사·제품 수와 목록 요약 dict.
     """
     repo = ProductRepository(db)
 
-    products = await repo.fetch_from_source(source_system=source_system)
+    result = await repo.fetch_from_source(source_system=source_system)
     await db.commit()
 
-    # 이벤트 발행 — 제품별 순서: BOMImported → LotImported → ProductImported
+    customer_results: list = result["customers"]    # [(Customer, is_new), ...]
+    products: list         = result["products"]     # [Product, ...]
+
+    # ------------------------------------------------------------------
+    # 1. CustomerImported 발행 — 신규 고객사(is_new=True)만
+    # is_new=False(기존 갱신)는 downstream에 아무 변화 없으므로 이벤트 생략.
+    # ------------------------------------------------------------------
+    for customer, is_new in customer_results:
+        if not is_new:
+            continue
+
+        customer_event = CustomerImportedEvent(
+            customer_id=customer.customer_id,
+            customer_code=customer.customer_code,
+            external_id=customer.external_id,
+            is_new=True,
+        )
+        await publish(
+            "CustomerImported",
+            _serialize_payload(asdict(customer_event)),
+        )
+
+    # ------------------------------------------------------------------
+    # 2. 제품별 BOMImported → LotImported → ProductImported
+    # ------------------------------------------------------------------
     for product in products:
-        # 1. BOMImported
+        # 2-1. BOMImported
         bom_event = BOMImportedEvent(
             product_id=product.product_id,
             bom_version_id=None,  # TODO: W3에서 실제 bom_version_id 조회 후 채움
@@ -128,20 +151,20 @@ async def import_products(
             _serialize_payload(asdict(bom_event)),
         )
 
-        # 2. LotImported
+        # 2-2. LotImported
         lot_event = LotImportedEvent(
-            batch_id=None,  # TODO(W3): repo.create_batch() 호출 후 실제 batch_id로 교체.   
+            batch_id=None,  # TODO(W3): repo.create_batch() 호출 후 실제 batch_id로 교체.
                             # batches.source_system='MES', external_id, synced_at 세팅 필수.
-                            # schema.sql batches 테이블 DEFAULT 'MES' 참조.               
-            product_id=product.product_id, 
+                            # schema.sql batches 테이블 DEFAULT 'MES' 참조.
+            product_id=product.product_id,
             external_id=product.external_id,
         )
         await publish(
             "LotImported",
             _serialize_payload(asdict(lot_event)),
         )
-        
-        # 3. ProductImported
+
+        # 2-3. ProductImported
         product_event = ProductImportedEvent(
             product_id=product.product_id,
             external_id=product.external_id,
@@ -152,13 +175,28 @@ async def import_products(
         )
 
     return {
-        "synced_count":   len(products),
-        "source_system":  source_system,
+        "synced_customer_count": len(customer_results),
+        "new_customer_count":    sum(1 for _, is_new in customer_results if is_new),
+        "synced_product_count":  len(products),
+        "source_system":         source_system,
+        "customers": [
+            {
+                "customer_id":   str(c.customer_id),
+                "customer_code": c.customer_code,
+                "customer_name": c.customer_name,
+                "is_new":        is_new,
+                "synced_at":     c.synced_at.isoformat() if c.synced_at else None,
+            }
+            for c, is_new in customer_results
+        ],
         "products": [
             {
                 "product_id":   str(p.product_id),
                 "product_code": p.product_code,
                 "product_name": p.product_name,
+                "customer_id":  str(p.customer_id) if p.customer_id else None,
+                "model_name":   p.model_name,
+                "amperage_ah":  float(p.amperage_ah) if p.amperage_ah else None,
                 "source_system": p.source_system,
                 "synced_at":    p.synced_at.isoformat() if p.synced_at else None,
             }
@@ -198,6 +236,9 @@ async def get_product(
         "product_code":    product.product_code,
         "product_name":    product.product_name,
         "manufacturer_id": str(product.manufacturer_id) if product.manufacturer_id else None,
+        "customer_id":     str(product.customer_id) if product.customer_id else None,
+        "model_name":      product.model_name,
+        "amperage_ah":     float(product.amperage_ah) if product.amperage_ah else None,
         "type":            product.type,
         "specs":           product.specs,
         "source_system":   product.source_system,
@@ -235,6 +276,9 @@ async def list_products(
             "product_name":    p.product_name,
             "manufacturer_id": str(p.manufacturer_id) if p.manufacturer_id else None,
             "type":            p.type,
+            "customer_id":     str(p.customer_id) if p.customer_id else None,
+            "model_name":      p.model_name,
+            "amperage_ah":     float(p.amperage_ah) if p.amperage_ah else None,
             "source_system":   p.source_system,
             "synced_at":       p.synced_at.isoformat() if p.synced_at else None,
             "created_at":      p.created_at.isoformat() if p.created_at else None,
@@ -324,7 +368,7 @@ async def activate_bom_version(
     [반환]
     전이 완료된 BOM 버전 정보 dict.
     """
-    bom = await activate_bom_version(db=db, bom_version_id=bom_version_id)
+    bom = await sm_activate_bom_version(db=db, bom_version_id=bom_version_id)
     await db.commit()
 
     return {
@@ -358,7 +402,7 @@ async def deprecate_bom_version(
     [반환]
     전이 완료된 BOM 버전 정보 dict.
     """
-    bom = await deprecate_bom_version(db=db, bom_version_id=bom_version_id)
+    bom = await sm_deprecate_bom_version(db=db, bom_version_id=bom_version_id)
     await db.commit()
 
     return {
@@ -367,3 +411,146 @@ async def deprecate_bom_version(
         "version_number": bom.version_number,
         "status":         bom.status,
     }
+    
+# ---------------------------------------------------------------------------
+# list_products_filtered
+# ---------------------------------------------------------------------------
+
+async def list_products_filtered(
+    db: AsyncSession,
+    customer_id: Optional[UUID] = None,
+    model_name: Optional[str] = None,
+    min_ah: Optional[float] = None,
+    max_ah: Optional[float] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """
+    고객사·모델·암페어 범위 필터로 제품 목록을 반환한다.
+
+    repository에서 (Product, customer_name) 튜플로 오는 걸
+    여기서 dict로 펼쳐요. customer_name은 조인 결과라서
+    Product ORM 객체에 없고 튜플 두 번째 자리에 있어요.
+    """
+    repo = ProductRepository(db)
+    rows = await repo.list_products_filtered(
+        customer_id=customer_id,
+        model_name=model_name,
+        min_ah=min_ah,
+        max_ah=max_ah,
+        limit=limit,
+        offset=offset,
+    )
+
+    return [
+        {
+            "product_id":    str(product.product_id),
+            "product_code":  product.product_code,
+            "product_name":  product.product_name,
+            "customer_id":   str(product.customer_id) if product.customer_id else None,
+            "customer_name": customer_name,
+            "model_name":    product.model_name,
+            "amperage_ah":   float(product.amperage_ah) if product.amperage_ah else None,
+            "type":          product.type,
+            "source_system": product.source_system,
+            "synced_at":     product.synced_at.isoformat() if product.synced_at else None,
+        }
+        for product, customer_name in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# get_bom_versions
+# ---------------------------------------------------------------------------
+
+async def get_bom_versions(
+    db: AsyncSession,
+    product_id: UUID,
+) -> List[Dict[str, Any]]:
+    """
+    제품의 전체 BOM 버전 목록을 반환한다 (active  deprecated 포함).
+
+    [404 분기]
+    제품 자체가 없으면 404. BOM 버전이 0개인 건 404가 아니라 빈 배열 반환이에요.
+    "제품은 있는데 BOM을 아직 안 만든" 상태도 유효하거든요.
+
+    [is_current 필드]
+    status='active'인 버전에 is_current=True를 달아줘요.
+    프론트가 "현재 버전" 강조 표시를 하기 위한 힌트예요.
+    """
+    repo = ProductRepository(db)
+
+    product = await repo.get_product(product_id=product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=404,
+            detail="제품을 찾을 수 없습니다.",
+        )
+
+    versions = await repo.get_bom_versions(product_id=product_id)
+
+    return [
+        {
+            "bom_version_id":  str(v.bom_version_id),
+            "product_id":      str(v.product_id),
+            "version_number":  v.version_number,
+            "status":          v.status,
+            "is_current":      v.status == "active",
+            "production_from": v.production_from.isoformat() if v.production_from else None,
+            "production_to":   v.production_to.isoformat() if v.production_to else None,
+            "approved_by":     str(v.approved_by) if v.approved_by else None,
+            "approved_at":     v.approved_at.isoformat() if v.approved_at else None,
+            "source_system":   v.source_system,
+            "synced_at":       v.synced_at.isoformat() if v.synced_at else None,
+        }
+        for v in versions
+    ]
+
+
+# ---------------------------------------------------------------------------
+# get_bom_version_as_of
+# ---------------------------------------------------------------------------
+
+async def get_bom_version_as_of(
+    db: AsyncSession,
+    product_id: UUID,
+    as_of: date,
+) -> Dict[str, Any]:
+    """
+    특정 날짜에 생산 중이었던 BOM 버전을 반환한다.
+
+    [404 분기 — 두 가지]
+    ① 제품 없음 → 404 "제품을 찾을 수 없습니다."
+    ② 해당 날짜에 맞는 BOM 버전 없음
+       → 404 "해당 날짜에 유효한 BOM 버전이 존재하지 않습니다."
+    """
+    repo = ProductRepository(db)
+
+    product = await repo.get_product(product_id=product_id)
+    if product is None:
+        raise HTTPException(
+            status_code=404,
+            detail="제품을 찾을 수 없습니다.",
+        )
+
+    version = await repo.get_bom_version_as_of(
+        product_id=product_id,
+        as_of=as_of,
+    )
+    if version is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"해당 날짜({as_of})에 유효한 BOM 버전이 존재하지 않습니다.",
+        )
+
+    return {
+        "bom_version_id":  str(version.bom_version_id),
+        "product_id":      str(version.product_id),
+        "version_number":  version.version_number,
+        "status":          version.status,
+        "is_current":      version.status == "active",
+        "production_from": version.production_from.isoformat() if version.production_from else None,
+        "production_to":   version.production_to.isoformat() if version.production_to else None,
+        "as_of_queried":   as_of.isoformat(),
+        "source_system":   version.source_system,
+    }    

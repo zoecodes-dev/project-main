@@ -19,6 +19,22 @@ async def get_dpp_record(db: AsyncSession, dpp_id: uuid.UUID) -> DppRecord | Non
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
+@trace_tool("list_dpp_records_raw")
+async def list_dpp_records_raw(db: AsyncSession, customer_id: uuid.UUID | None = None) -> List[Dict[str, Any]]:
+    """
+    [도메인 격리 준수] 발행 이력(records)을 조회할 때 특정 고객사(customer_id) 필터링을 
+    위해 Raw SQL로 products 테이블과 안전하게 조인합니다.
+    """
+    query = "SELECT d.dpp_id, d.batch_id, d.product_id, d.issued_at, d.status, d.carbon_footprint FROM dpp_records d"
+    params = {}
+    if customer_id:
+        query += " JOIN products p ON d.product_id = p.product_id WHERE p.customer_id = :customer_id"
+        params["customer_id"] = str(customer_id)
+    query += " ORDER BY d.issued_at DESC NULLS LAST"
+    
+    result = await db.execute(text(query), params)
+    return [dict(r._mapping) for r in result.fetchall()]
+
 
 @trace_tool("get_readiness_metrics")
 async def get_readiness_metrics(db: AsyncSession, product_id: uuid.UUID) -> Dict[str, bool]:
@@ -32,7 +48,7 @@ async def get_readiness_metrics(db: AsyncSession, product_id: uuid.UUID) -> Dict
         JOIN supply_chain_map scm ON bv.bom_version_id = scm.bom_version_id
         WHERE bv.product_id = :product_id AND bv.status = 'active'
     """)
-    result = await db.execute(supplier_query, {"product_id": product_id})
+    result = await db.execute(supplier_query, {"product_id": str(product_id)})
     supplier_ids = [row[0] for row in result.fetchall()]
 
     if not supplier_ids:
@@ -96,6 +112,10 @@ async def get_score_raw_data(db: AsyncSession, batch_id: uuid.UUID) -> Dict[str,
             t.company_name AS tenant_company_name,
             'KR' AS tenant_country,
             pr.product_name,
+            pr.model_name,
+            pr.amperage_ah,
+            c.customer_name,
+            c.customer_id,
             bi.origin_country AS item_origin,
             p.hs_code,
             p.part_name,
@@ -118,6 +138,7 @@ async def get_score_raw_data(db: AsyncSession, batch_id: uuid.UUID) -> Dict[str,
         JOIN tenants t ON b.tenant_id = t.tenant_id
         JOIN bom_versions bv ON b.bom_version_id = bv.bom_version_id
         JOIN products pr ON b.product_id = pr.product_id
+        LEFT JOIN customers c ON pr.customer_id = c.customer_id
         LEFT JOIN bom_items bi ON bv.bom_version_id = bi.bom_version_id
         -- 최상위 납품(1차 협력사) 정보 조인을 위한 supply_chain_map (hop_level=1)
         LEFT JOIN supply_chain_map scm ON scm.bom_version_id = b.bom_version_id AND scm.hop_level = 1
@@ -132,10 +153,10 @@ async def get_score_raw_data(db: AsyncSession, batch_id: uuid.UUID) -> Dict[str,
         WHERE b.batch_id = :batch_id
         LIMIT 1
     """)
-    batch_row = (await db.execute(batch_query, {"batch_id": batch_id})).mappings().fetchone()
+    batch_row = (await db.execute(batch_query, {"batch_id": str(batch_id)})).mappings().fetchone()
     if not batch_row:
         raise ValueError("배치 정보를 찾을 수 없습니다.")
-    bom_version_id = batch_row["bom_version_id"]
+    bom_version_id = str(batch_row["bom_version_id"])
     destination = batch_row["destination"]
 
     # 2. ESG Compliance (verdict 집계)
@@ -145,18 +166,17 @@ async def get_score_raw_data(db: AsyncSession, batch_id: uuid.UUID) -> Dict[str,
         WHERE batch_id = :batch_id
         GROUP BY verdict
     """)
-    comp_rows = (await db.execute(comp_query, {"batch_id": batch_id})).fetchall()
+    comp_rows = (await db.execute(comp_query, {"batch_id": str(batch_id)})).fetchall()
     compliance_counts = {row[0]: row[1] for row in comp_rows}
 
     # 3. Traceability Coverage (노드 승인 및 연결 확정 비율)
-    # TODO: supply_chain_map에 link_status 컬럼이 B migration으로 추가된 후 주석 해제
     trace_query = text("""
         SELECT
             COUNT(*) as total_nodes,
             SUM(
                 CASE
                     WHEN v.submission_status = 'submission_approved'
-                    /* AND scm.link_status = 'supplychain_confirmed' */
+                    AND scm.link_status = 'supplychain_confirmed'
                     THEN 1 ELSE 0
                 END
             ) as approved_nodes
@@ -194,7 +214,7 @@ async def get_score_raw_data(db: AsyncSession, batch_id: uuid.UUID) -> Dict[str,
         "traceability": traceability,
         "suppliers": suppliers_data,
         
-        # CBAM 연동용 메타데이터 (generator.py로 전달)
+        # CBAM 연동용 메타데이터 (service.py로 전달)
         "business_reg_no": batch_row.get("business_reg_no"),
         "tenant_company_name": batch_row.get("tenant_company_name"),
         "tenant_country": batch_row.get("tenant_country"),
@@ -203,6 +223,10 @@ async def get_score_raw_data(db: AsyncSession, batch_id: uuid.UUID) -> Dict[str,
         "hs_code": batch_row.get("hs_code"),
         "part_name": batch_row.get("part_name"),
         "product_name": batch_row.get("product_name"),
+        "model_name": batch_row.get("model_name"),
+        "amperage_ah": float(batch_row["amperage_ah"]) if batch_row.get("amperage_ah") is not None else 0.0,
+        "customer_name": batch_row.get("customer_name"),
+        "customer_id": str(batch_row["customer_id"]) if batch_row.get("customer_id") else None,
         "item_origin": batch_row.get("item_origin"),
         "certification_no": batch_row.get("certification_no"),
         "unit_price": float(batch_row["unit_price"]) if batch_row.get("unit_price") is not None else 0.0,

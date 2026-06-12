@@ -48,7 +48,7 @@ class DataRequestLog(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=True
     )
     due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True) # 데이터 제출 마감일 (SLA 관리 기준점)
-    response_status: Mapped[Optional[ResponseStatus]] = mapped_column(                      # 단순 제출 여부 상태 (PENDING / SUBMITTED / DELAYED)
+    response_status: Mapped[Optional[ResponseStatus]] = mapped_column(                      # 단순 제출 여부 상태 (PENDING / RESPONDED / OVERDUE / ESCALATED)
         Enum(ResponseStatus, native_enum=False, length=30), default=ResponseStatus.PENDING, server_default="response_pending", nullable=True
     )
     reminder_count: Mapped[Optional[int]] = mapped_column(Integer, default=0, server_default="0", nullable=True)         # 마감 미준수 협력사 독촉장(리마인드) 발송 횟수

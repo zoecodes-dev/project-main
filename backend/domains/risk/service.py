@@ -12,19 +12,6 @@ from backend.infrastructure.trace import trace_node
 from backend.events.types import RiskEscalatedEvent
 
 
-def _serialize_payload(payload: dict) -> dict:
-    """UUID, datetime 객체를 JSON 직렬화 가능하도록 문자열로 변환합니다."""
-    result = {}
-    for k, v in payload.items():
-        if isinstance(v, UUID):
-            result[k] = str(v)
-        elif hasattr(v, "isoformat"):
-            result[k] = v.isoformat()
-        else:
-            result[k] = v
-    return result
-
-
 @trace_node(node_name="calculate_risk_score", node_type="agent")
 async def calculate_risk_score(db: AsyncSession, batch_id: UUID, supplier_id: UUID, violations: list[dict]) -> dict:
     """
@@ -73,7 +60,7 @@ async def calculate_risk_score(db: AsyncSession, batch_id: UUID, supplier_id: UU
             batch_id=batch_id,
             reason=f"Risk score reached {final_score} (critical)"
         )
-        await publish("RiskEscalated", _serialize_payload(dataclasses.asdict(event)))
+        await publish("RiskEscalated", dataclasses.asdict(event))
         
     return {
         "supplier_id": str(supplier_id),

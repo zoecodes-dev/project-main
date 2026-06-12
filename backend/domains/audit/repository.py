@@ -59,6 +59,56 @@ async def list_full_chain(db: AsyncSession, batch_id: UUID) -> list[AuditTrail]:
     return list(result.scalars().all())
 
 
+async def list_action_items(
+    db: AsyncSession,
+    status: str | None = None,
+    source_type: str | None = None,
+    assigned_to: UUID | None = None,
+    unresolved_only: bool = False,
+) -> list[dict]:
+    stmt = """
+        SELECT
+            action_id,
+            source_type,
+            title,
+            supplier_id,
+            assigned_to,
+            due_date,
+            action_status
+        FROM v_action_items
+        WHERE (CAST(:status AS text) IS NULL OR action_status = CAST(:status AS text))
+          AND (CAST(:source_type AS text) IS NULL OR source_type = CAST(:source_type AS text))
+          AND (CAST(:assigned_to AS uuid) IS NULL OR assigned_to = CAST(:assigned_to AS uuid))
+          AND (:unresolved_only = FALSE OR action_status != 'resolved')
+        ORDER BY due_date ASC NULLS LAST, action_id ASC
+    """
+    result = await db.execute(
+        text(stmt),
+        {
+            "status": status,
+            "source_type": source_type,
+            "assigned_to": str(assigned_to) if assigned_to is not None else None,
+            "unresolved_only": unresolved_only,
+        },
+    )
+    return [dict(row._mapping) for row in result.all()]
+
+
+async def list_gap_analysis_results(db: AsyncSession, regulation_id: UUID) -> list[dict]:
+    stmt = text(
+        """
+        SELECT
+            affected_supplier_ids,
+            newly_required_fields
+        FROM gap_analysis_results
+        WHERE regulation_id = CAST(:regulation_id AS uuid)
+        ORDER BY analyzed_at DESC
+        """
+    )
+    result = await db.execute(stmt, {"regulation_id": str(regulation_id)})
+    return [dict(row._mapping) for row in result.all()]
+
+
 async def create_pending_hitl_review(
     db: AsyncSession,
     batch_id: UUID,

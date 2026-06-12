@@ -44,10 +44,13 @@ jobs:
             --comment "GitHub Actions deploy $GITHUB_SHA" \
             --parameters '{"commands":[
               "set -e",
+              "export HOME=/root",
+              "git config --global --add safe.directory /home/ubuntu/kira",
               "cd /home/ubuntu/kira",
               "git fetch origin main",
               "git reset --hard origin/main",
               "docker compose up -d --build",
+              "docker exec kira-nginx nginx -s reload",
               "docker image prune -f",
               "docker compose ps"
             ],"executionTimeout":["1200"]}' \

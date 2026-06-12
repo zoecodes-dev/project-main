@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, Dict
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Column, String, Numeric, ForeignKey, DateTime, text
+from sqlalchemy import Column, String, Numeric, ForeignKey, DateTime, text, Text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -54,6 +54,22 @@ class DppRecord(Base):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=True)
     
     approved_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+
+
+class DppDeliveryHistory(Base):
+    """
+    최종 발급된 DPP의 대외 전송(이메일 등) 이력을 기록하는 모델입니다.
+    """
+    __tablename__ = "dpp_delivery_history"
+
+    delivery_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("uuid_generate_v4()"), default=uuid.uuid4)
+    dpp_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("dpp_records.dpp_id"), nullable=False)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=True)  # 도메인 격리 원칙으로 문자열(UUID)만 저장
+    recipient_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    sent_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=True)
 
 
 # ==============================================================================

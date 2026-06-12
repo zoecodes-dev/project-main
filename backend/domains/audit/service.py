@@ -74,6 +74,26 @@ async def get_trail(
     return await repository.list_trail_by_batch(db, batch_id, node_type, start, end)
 
 
+async def get_action_items(
+    db: AsyncSession,
+    status: str | None = None,
+    source_type: str | None = None,
+) -> list[dict]:
+    return await repository.list_action_items(db, status=status, source_type=source_type)
+
+
+async def get_my_action_items(db: AsyncSession, user_id: UUID) -> list[dict]:
+    return await repository.list_action_items(
+        db,
+        assigned_to=user_id,
+        unresolved_only=True,
+    )
+
+
+async def get_gap_analysis_results(db: AsyncSession, regulation_id: UUID) -> list[dict]:
+    return await repository.list_gap_analysis_results(db, regulation_id)
+
+
 async def verify_chain(db: AsyncSession, batch_id: UUID) -> ChainVerification:
     """
     해시 체인 무결성 검증.

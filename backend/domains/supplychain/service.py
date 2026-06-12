@@ -113,6 +113,100 @@ class SupplyChainService:
         payload = {**new_map, "reason": reason}
         await publish("SourceChangeDeclared", payload)
         return new_map
+    async def get_geo_risks(self, db: AsyncSession) -> Dict[str, Any]:
+        """
+        조회 전용 인터페이스: 이벤트를 발행하지 않고 지정학 리스크 결과를 반환합니다.
+        """
+        xinjiang_risks = await self.repository.check_geo_audit_risk_zone()
+        mismatch_risks = await self.repository.check_coordinate_authenticity(db)
+        eudr_risks = await self.repository.check_eudr_deforestation(db)
+        
+        return {
+            "xinjiang_adjacent": xinjiang_risks,
+            "country_mismatch": mismatch_risks,
+            "eudr_deforestation": eudr_risks
+        }
+
+    async def get_hitl_geo_context(self, db: AsyncSession) -> Dict[str, Any]:
+        """
+        HITL 검토 화면용 조회 유틸리티.
+        차윤(E)이 다루기 쉽도록 반환되는 GeoJSON 좌표를 단순한 [latitude, longitude] 배열로 포장하고,
+        '신장 50km 이내', '신고국 불일치' 등의 회색지대(Gray Zone) 판단 결과를 함께 제공합니다.
+        """
+        xinjiang_risks = await self.repository.check_geo_audit_risk_zone()
+        mismatch_risks = await self.repository.check_coordinate_authenticity(db)
+        eudr_risks = await self.repository.check_eudr_deforestation(db)
+
+        def _parse_geojson_to_latlng(geojson_str: str | None) -> List[float] | None:
+            if not geojson_str:
+                return None
+            try:
+                geom = json.loads(geojson_str)
+                lon, lat = geom.get("coordinates", [0.0, 0.0])
+                return [lat, lon]  # 위경도 순서(latitude, longitude)로 반환
+            except Exception:
+                return None
+
+        def _format_risk_items(risk_list: List[Dict[str, Any]], risk_type: str) -> List[Dict[str, Any]]:
+            formatted = []
+            for r in risk_list:
+                item = {
+                    "factory_id": str(r["factory_id"]),
+                    "supplier_id": str(r["supplier_id"]),
+                    "company_name": r["company_name"],
+                    "coordinates": _parse_geojson_to_latlng(r.get("coordinates"))
+                }
+                
+                # 회색지대(Gray Zone) 플래그 및 경고 메시지 세팅
+                if risk_type == "xinjiang":
+                    item["is_in_risk_zone"] = r.get("is_in_risk_zone")
+                    item["distance_km"] = float(r["distance_km"]) if r.get("distance_km") is not None else None
+                    if item["is_in_risk_zone"]:
+                        item["gray_zone_warning"] = "신장 지역 50km 이내 인접 (위험구역)"
+                elif risk_type == "country_mismatch":
+                    item["country"] = r.get("country")
+                    item["country_match"] = r.get("country_match")
+                    if not item["country_match"]:
+                        item["gray_zone_warning"] = f"신고 국가({item.get('country')})와 실제 좌표 불일치"
+                elif risk_type == "eudr":
+                    item["is_deforested"] = r.get("is_deforested")
+                    if item["is_deforested"]:
+                        item["gray_zone_warning"] = "EUDR 산림 훼손 의심 지역 내부 위치"
+                        
+                formatted.append(item)
+            return formatted
+
+        return {
+            "factory_gps": {
+                "xinjiang_adjacent": _format_risk_items(xinjiang_risks, "xinjiang"),
+                "country_mismatch": _format_risk_items(mismatch_risks, "country_mismatch"),
+                "eudr_deforestation": _format_risk_items(eudr_risks, "eudr")
+            }
+        }
+
+    async def evaluate_cross_entity_boundary(
+        self, requester_supplier_id: str, target_supplier_id: str
+    ) -> Dict[str, Any]:
+        """
+        회사 경계(Legal Entity) 검증 룰:
+        원청사 또는 상위 협력사(requester)에서 하위 협력사(target)로 데이터를 요청할 때,
+        두 협력사가 동일 법인 내부에 속하는지, 회사 경계를 넘는 외부 거래인지 판별합니다.
+        회사 경계를 넘을 경우 '통지' 및 '자진신고(Self-Declaration)' 의무를 부여합니다. (사후적발 방지 핵심)
+        """
+        if requester_supplier_id == target_supplier_id:
+            return {
+                "is_cross_boundary": False,
+                "requires_self_declaration": False,
+                "reason": "동일 협력사 내부 요청 (의무 없음)"
+            }
+            
+        # TODO: 실제 운영 환경에서는 business_reg_no(사업자번호)나 corporate_reg_no(법인등록번호)를 대조.
+        # 시연을 위해 서로 다른 ID일 경우 법인 경계를 넘은 외부 거래로 취급하여 통지/자진신고 의무 부여.
+        return {
+            "is_cross_boundary": True,
+            "requires_self_declaration": True,
+            "reason": "외부 법인 경계 횡단 (통지 및 자진신고 의무 발생)"
+        }
 
     # ---------- Geo Audit ----------
     def _format_coords(self, geojson_str: str | None) -> list[float]:
@@ -137,6 +231,7 @@ class SupplyChainService:
         """
         audit_results = await self.repository.check_geo_audit_risk_zone()
         mismatch_results = await self.repository.check_coordinate_authenticity(db)
+        eudr_results = await self.repository.check_eudr_deforestation(db)
 
         detected_risks: List[Dict[str, Any]] = []
         for result in audit_results:
@@ -163,6 +258,19 @@ class SupplyChainService:
                     supplier_id=result["supplier_id"],
                     company_name=result["company_name"],
                     coordinates=formatted_coords,
+                )
+                await self._publish_geo_risk(event)
+                detected_risks.append(asdict(event))
+
+        for result in eudr_results:
+            if result.get("is_deforested"):
+                event = GeoRiskDetectedEvent(
+                    batch_id=batch_id,
+                    factory_id=result["factory_id"],
+                    risk_type="eudr_deforestation",
+                    supplier_id=result["supplier_id"],
+                    company_name=result["company_name"],
+                    coordinates=result["coordinates"],
                 )
                 await self._publish_geo_risk(event)
                 detected_risks.append(asdict(event))

@@ -7,12 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.domains.dpp.models import DppRecord
 from backend.domains.dpp.repository import get_dpp_record
 from backend.domains.dpp.immutable_guard import assert_not_issued
-from backend.infrastructure.trace import trace_node
 from backend.infrastructure.event_bus import publish
-from backend.domains.dpp.service import DPPIssuedEvent
+from backend.events.types import DPPIssuedEvent
 
 
-@trace_node("issue_dpp", "agent")
 async def issue_dpp(db: AsyncSession, dpp_id: uuid.UUID) -> DppRecord:
     """
     DPP를 최종 발행('dpp_issued') 상태로 전이시켜요.
@@ -42,7 +40,6 @@ async def issue_dpp(db: AsyncSession, dpp_id: uuid.UUID) -> DppRecord:
     return dpp
 
 
-@trace_node("revoke_dpp", "agent")
 async def revoke_dpp(db: AsyncSession, dpp_id: uuid.UUID) -> DppRecord:
     """
     DPP를 폐기('dpp_revoked') 상태로 전이시켜요.

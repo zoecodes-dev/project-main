@@ -9,17 +9,31 @@ Day3 완성 상태:
   - REGULATION_BY_DESTINATION: supervisor가 import하는 매핑 딕셔너리 (Day1)
   - generate_embedding(): 텍스트 → Bedrock Cohere Embed v4 벡터 변환 (Day2)
   - search_regulations(): pgvector 코사인 유사도 RAG 검색 (Day2)
+  - ComplianceCompleted: 이벤트 dataclass (Day3)
   - _call_sonnet_for_verdict(): Sonnet 호출 래퍼 — cited_clauses 강제 (Day3)
   - judge_uflpa(): UFLPA 전용 judge — @trace_tool("compliance_judge_UFLPA") (Day3)
   - judge_ira(): IRA 전용 judge — @trace_tool("compliance_judge_IRA") (Day3)
-  - judge_generic(): 나머지 실판정 5종 공통 judge (Day3)
+  - judge_generic(): 나머지 실판정 3종 공통 judge (Day3)
   - _stub_passed_judge(): CBAM / CONFLICT_MINERALS / CRMA 깡통 judge (Day3)
   - REGULATION_JUDGES: regulation_code → judge 함수 매핑 딕셔너리 (Day3)
   - _insert_compliance_result(): compliance_results INSERT 헬퍼 (Day3)
   - compliance_node: 실판정 버전 — Day1 skeleton 교체 (Day3)
 
-[변경 이력]
-  - ComplianceCompleted dataclass 제거 → events/types.py의 ComplianceCompletedEvent 사용
+W4_목 추가 작업:
+  - _CARBON_THRESHOLD_VIOLATION / _CARBON_THRESHOLD_WARNING: 탄소발자국 임계치 상수
+  - _RECYCLED_CONTENT_MIN: 재활용 함량 최소 임계치 상수 (광물별)
+  - judge_carbon_footprint(): EU_BATTERY_ART7 탄소발자국 선언 검증
+      @trace_tool("compliance_judge_CARBON")
+      factory_carbon_declarations 테이블 기반 가중평균 조회
+      선언 누락 공장 있으면 needs_human_review=True
+  - judge_recycled_content(): EU_BATTERY 재활용 함량 검증
+      @trace_tool("compliance_judge_RECYCLED")
+      recycled_content_ratio + recycled_materials JSONB 광물별 임계치 비교
+      효율(%) 검증 미구현 — 12월 시행 전 스프린트에서 처리
+  - REGULATION_JUDGES 갱신: EU_BATTERY → judge_recycled_content,
+                             EU_BATTERY_ART7 → judge_carbon_footprint
+  - _build_judge_context() 갱신: recycled_content_ratio / recycled_materials 키 추가
+  - compliance_node @trace_node 데코레이터 제거 — graph 래퍼가 기록 담당
 """
 
 from __future__ import annotations
@@ -36,10 +50,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agents.state import BatchState
-from backend.events.types import ComplianceCompletedEvent
 from backend.infrastructure.database import AsyncSessionLocal
 from backend.infrastructure.event_bus import publish
-from backend.infrastructure.trace import trace_node, trace_tool
+from backend.infrastructure.trace import trace_tool
 from backend.llm.embedding_factory import embed_query
 
 logger = logging.getLogger(__name__)
@@ -54,7 +67,6 @@ logger = logging.getLogger(__name__)
 
 REGULATION_BY_DESTINATION: dict[str, list[str]] = {
     # EU 시장 진입 제품 — EU 규제 8종
-    # EU 배터리법(전체/Art.7/Art.47), 산림파괴방지법, 공급망실사, 탄소국경, 분쟁광물, 핵심원자재
     "EU": [
         "EU_BATTERY",
         "EU_BATTERY_ART7",
@@ -66,7 +78,6 @@ REGULATION_BY_DESTINATION: dict[str, list[str]] = {
         "CRMA",
     ],
     # 미국 시장 진입 제품 — US 규제 3종
-    # 위구르 강제노동방지법, IRA FEOC, 분쟁광물(EU·US 공통 적용)
     "US": [
         "UFLPA",
         "IRA",
@@ -91,7 +102,18 @@ REGULATION_BY_DESTINATION: dict[str, list[str]] = {
 
 
 # ---------------------------------------------------------------------------
-# 2. RAG 도구 함수 (Day2 — 그대로 유지)
+# 2. 이벤트 dataclass (Day3)
+#    - events/types.py 에 동일 구조가 정의돼야 해요. 여기선 발행용으로만 씀.
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class ComplianceCompleted:
+    batch_id: str
+    verdicts: dict[str, str]   # {regulation_code: verdict 문자열}
+
+
+# ---------------------------------------------------------------------------
+# 3. RAG 도구 함수 (Day2 — 그대로 유지)
 # ---------------------------------------------------------------------------
 
 @trace_tool("generate_embedding")
@@ -119,18 +141,6 @@ async def search_regulations(
       2. regulations 테이블에서 regulation_code 필터 + embedding_status='indexed' 조건으로
          코사인 거리(<=> 연산자)가 가장 작은(= 의미가 가장 가까운) row top_k 개 반환
       3. 각 row를 dict로 변환해 judge 함수에 전달
-
-    반환 예시:
-      [
-        {
-          "regulation_id": "...",
-          "regulation_code": "UFLPA",
-          "name": "Uyghur Forced Labor Prevention Act",
-          "description": "...",
-          "similarity": 0.92,
-        },
-        ...
-      ]
 
     주의:
       - embedding_status = 'indexed' 인 row만 검색 대상이다.
@@ -180,7 +190,7 @@ async def search_regulations(
 
 
 # ---------------------------------------------------------------------------
-# 3. Sonnet 호출 래퍼 (Day3)
+# 4. Sonnet 호출 래퍼 (Day3)
 #    RAG로 가져온 조항 + 협력사 데이터를 Sonnet에게 주고 JSON 판정을 받는다.
 #    cited_clauses 가 비어 있으면 호출부(judge_*)에서 compliance_reject 처리.
 # ---------------------------------------------------------------------------
@@ -189,8 +199,8 @@ _SONNET_MODEL = "global.anthropic.claude-sonnet-4-6"
 
 
 def _get_anthropic_key() -> str:
-    from backend.core.config import config
-    return config.ANTHROPIC_API_KEY
+    from backend.core.config import settings
+    return settings.ANTHROPIC_API_KEY
 
 
 async def _call_sonnet_for_verdict(
@@ -291,10 +301,8 @@ def _validate_cited_clauses(result: dict, regulation_code: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 4. Stub judge — CBAM / CONFLICT_MINERALS / CRMA (Day3)
+# 5. Stub judge — CBAM / CONFLICT_MINERALS / CRMA (Day3)
 #    항상 compliance_passed 반환. Sonnet 호출 없음.
-#    cited_clauses도 stub으로 채워요 — 빈 리스트면 INSERT 헬퍼의
-#    "cited_clauses 누락" 경고 경로로 빠질 수 있어서요.
 # ---------------------------------------------------------------------------
 
 _STUB_REGULATIONS: set[str] = {"CBAM", "CONFLICT_MINERALS", "CRMA"}
@@ -313,9 +321,31 @@ async def _stub_passed_judge(regulation_code: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 5. 규제별 전용 judge 함수 (Day3)
+# 5-A. 탄소발자국·재활용 임계치 상수 (Day2)
+#
+#   하드코딩 금지 원칙에 따라 모두 모듈 상수로 선언.
+#   규제 강화 시 이 상수만 변경하면 judge 로직은 수정 불필요.
+# ---------------------------------------------------------------------------
+
+# EU 배터리법 2023/1542 Art.7 / Annex II — 탄소발자국 (단위: kgCO2eq/kWh)
+# 2025.2 시행 기준. 향후 규제 강화 시 이 두 값만 변경.
+_CARBON_THRESHOLD_VIOLATION: float = 100.0  # 초과 시 compliance_violation
+_CARBON_THRESHOLD_WARNING:   float = 75.0   # 초과 시 compliance_warning
+
+# EU 배터리법 2023/1542 Annex XII — 재활용 함량 최소 기준 (단위: %)
+# key: 소문자 원소기호 (events/types.py RecycledMaterialsSchema 컨벤션 — B·C 공유)
+# 2031년 강화 전 현행 기준.
+_RECYCLED_CONTENT_MIN: dict[str, float] = {
+    "co": 16.0,  # 코발트
+    "ni":  6.0,  # 니켈
+    "li":  6.0,  # 리튬
+    "pb": 85.0,  # 납
+}
+
+
+# ---------------------------------------------------------------------------
+# 6. 규제별 전용 judge 함수
 #    geo_audit.py 패턴 준수: 기능별 함수 분리 + 고정 이름 @trace_tool.
-#    시연 핵심인 UFLPA·IRA는 전용 함수, 나머지 실판정 5종은 judge_generic.
 # ---------------------------------------------------------------------------
 
 @trace_tool("compliance_judge_UFLPA")
@@ -370,10 +400,198 @@ async def judge_ira(batch_id: str, context: dict, db: AsyncSession) -> dict:
     return _validate_cited_clauses(result, "IRA")
 
 
-# 나머지 실판정 5종 RAG 쿼리 힌트
+@trace_tool("compliance_judge_CARBON")
+async def judge_carbon_footprint(
+    batch_id: str, context: dict, db: AsyncSession
+) -> dict:
+    """
+    EU 배터리법 Art.7 탄소발자국 선언 검증. (Day2)
+
+    판정 로직:
+      1. factory_carbon_declarations 테이블에서 이 배치에 연결된 공장들의
+         carbon_intensity 를 supply_ratio.ratio_percentage 로 가중평균 조회.
+      2. 선언 누락 공장 수(missing_declaration_count) 확인.
+         누락 공장이 있으면 ART7 미충족 → needs_human_review=True.
+      3. 가중평균값을 임계치와 비교해 Sonnet에 힌트로 제공 후 판정.
+
+    판정 기준 (EU 2023/1542 Annex II):
+      - weighted_carbon_intensity > 100 kgCO2eq/kWh → compliance_violation
+      - weighted_carbon_intensity >  75 kgCO2eq/kWh → compliance_warning
+      - weighted_carbon_intensity <=  75             → compliance_passed
+      - 선언 데이터 전혀 없음                         → compliance_reject + needs_human_review
+      - 선언 누락 공장 존재                           → 판정 후 needs_human_review=True 강제
+
+    데이터 출처:
+      - factory_carbon_declarations (Day2 신설 테이블)
+      - supply_ratio.ratio_percentage (공장별 납품 기여율)
+      - batches.bom_version_id → supply_chain_map → supply_ratio 경로
+    """
+    clauses = await search_regulations(
+        "carbon footprint declaration lifecycle threshold kgCO2eq battery cell manufacturing",
+        "EU_BATTERY_ART7",
+        db,
+        top_k=5,
+    )
+
+    # (A) 가중평균 탄소집약도 조회
+    weighted_row = (await db.execute(
+        text("""
+            SELECT
+                SUM(fcd.carbon_intensity * sr.ratio_percentage)
+                    / NULLIF(SUM(sr.ratio_percentage), 0) AS weighted_carbon_intensity
+            FROM batches b
+            JOIN supply_chain_map scm ON scm.bom_version_id = b.bom_version_id
+            JOIN supply_ratio sr      ON sr.map_id = scm.map_id
+            JOIN factory_carbon_declarations fcd
+                 ON fcd.factory_id = sr.factory_id AND fcd.is_active = TRUE
+            WHERE b.batch_id = :batch_id
+        """),
+        {"batch_id": batch_id},
+    )).fetchone()
+
+    weighted_carbon = (
+        float(weighted_row.weighted_carbon_intensity)
+        if weighted_row and weighted_row.weighted_carbon_intensity is not None
+        else None
+    )
+
+    # (B) 선언 누락 공장 수 조회
+    missing_row = (await db.execute(
+        text("""
+            SELECT COUNT(*) AS missing_declaration_count
+            FROM batches b
+            JOIN supply_chain_map scm ON scm.bom_version_id = b.bom_version_id
+            JOIN supply_ratio sr      ON sr.map_id = scm.map_id
+            LEFT JOIN factory_carbon_declarations fcd
+                 ON fcd.factory_id = sr.factory_id AND fcd.is_active = TRUE
+            WHERE b.batch_id = :batch_id
+              AND fcd.declaration_id IS NULL
+        """),
+        {"batch_id": batch_id},
+    )).fetchone()
+
+    missing_count = int(missing_row.missing_declaration_count) if missing_row else 0
+
+    # 선언 데이터 전혀 없음 → 즉시 reject
+    if weighted_carbon is None:
+        return {
+            "verdict":            "compliance_reject",
+            "needs_human_review": True,
+            "cited_clauses":      [],
+            "confidence_score":   0.0,
+            "reasoning_text": (
+                "factory_carbon_declarations 에 이 배치와 연결된 선언 데이터가 없어요. "
+                "공장별 탄소발자국 선언을 등록해주세요."
+            ),
+        }
+
+    # Sonnet 컨텍스트 구성
+    enriched_context = {
+        **context,
+        "weighted_carbon_intensity":  weighted_carbon,
+        "missing_declaration_count":  missing_count,
+        "carbon_threshold_violation": _CARBON_THRESHOLD_VIOLATION,
+        "carbon_threshold_warning":   _CARBON_THRESHOLD_WARNING,
+        "pre_verdict_hint": (
+            "violation" if weighted_carbon > _CARBON_THRESHOLD_VIOLATION
+            else "warning" if weighted_carbon > _CARBON_THRESHOLD_WARNING
+            else "passed"
+        ),
+    }
+
+    try:
+        result = await _call_sonnet_for_verdict("EU_BATTERY_ART7", clauses, enriched_context)
+    except (httpx.HTTPError, json.JSONDecodeError, KeyError) as exc:
+        return {
+            "verdict":            "compliance_reject",
+            "needs_human_review": True,
+            "cited_clauses":      [],
+            "confidence_score":   0.0,
+            "reasoning_text":     f"Sonnet 호출 실패: {exc}",
+        }
+
+    result = _validate_cited_clauses(result, "EU_BATTERY_ART7")
+
+    # 선언 누락 공장 있으면 판정과 무관하게 needs_human_review 강제
+    if missing_count > 0:
+        result["needs_human_review"] = True
+        result["reasoning_text"] = (
+            f"[선언 누락 {missing_count}개 공장] " + result.get("reasoning_text", "")
+        )
+
+    return result
+
+
+@trace_tool("compliance_judge_RECYCLED")
+async def judge_recycled_content(
+    batch_id: str, context: dict, db: AsyncSession
+) -> dict:
+    """
+    EU 배터리법 재활용 함량 검증. (Day2)
+
+    판정 기준 (EU 2023/1542 Annex XII):
+      - recycled_materials 내 광물별 함량 < _RECYCLED_CONTENT_MIN → compliance_violation
+      - recycled_content_ratio 있으나 광물 특정 불가               → compliance_warning
+      - 기준 충족                                                   → compliance_passed
+      - 데이터 전체 없음                                            → compliance_reject + needs_human_review
+
+    미구현 사항:
+      - recycling_efficiency(효율%) 검증 — 2025-12 시행 전 스프린트에서 처리.
+        schema에 recycling_efficiency 컬럼 추가됨(Day2). extraction 연동 후 구현 예정.
+    """
+    clauses = await search_regulations(
+        "recycled content minimum threshold cobalt nickel lithium battery Annex XII",
+        "EU_BATTERY",
+        db,
+        top_k=5,
+    )
+
+    ratio: float | None = context.get("recycled_content_ratio")
+    materials: dict     = context.get("recycled_materials") or {}
+
+    # 사전 판정: 데이터 전체 누락
+    if ratio is None and not materials:
+        return {
+            "verdict":            "compliance_reject",
+            "needs_human_review": True,
+            "cited_clauses":      [],
+            "confidence_score":   0.0,
+            "reasoning_text": (
+                "recycled_content_ratio 와 recycled_materials 모두 없어요. "
+                "supplier_recycler_details 데이터를 확인해주세요."
+            ),
+        }
+
+    # 광물별 임계치 위반 사전 계산 — Sonnet 힌트로 제공
+    threshold_violations: list[str] = [
+        f"{mineral.upper()} {materials[mineral]}% < 최소 {min_pct}%"
+        for mineral, min_pct in _RECYCLED_CONTENT_MIN.items()
+        if mineral in materials and float(materials[mineral]) < min_pct
+    ]
+
+    enriched_context = {
+        **context,
+        "recycled_content_min_thresholds": _RECYCLED_CONTENT_MIN,
+        "threshold_violations_hint":       threshold_violations,
+        "pre_verdict_hint": "violation" if threshold_violations else "passed",
+    }
+
+    try:
+        result = await _call_sonnet_for_verdict("EU_BATTERY", clauses, enriched_context)
+    except (httpx.HTTPError, json.JSONDecodeError, KeyError) as exc:
+        return {
+            "verdict":            "compliance_reject",
+            "needs_human_review": True,
+            "cited_clauses":      [],
+            "confidence_score":   0.0,
+            "reasoning_text":     f"Sonnet 호출 실패: {exc}",
+        }
+
+    return _validate_cited_clauses(result, "EU_BATTERY")
+
+
+# 나머지 실판정 3종 RAG 쿼리 힌트
 _GENERIC_QUERY_HINTS: dict[str, str] = {
-    "EU_BATTERY":       "Annex XIII battery passport mandatory data fields",
-    "EU_BATTERY_ART7":  "carbon footprint declaration lifecycle threshold battery",
     "EU_BATTERY_ART47": "supply chain due diligence policy battery manufacturer",
     "EUDR":             "deforestation GPS polygon forest risk commodity operator FSC",
     "CSDDD":            "child labor forced labor human rights due diligence supply chain",
@@ -385,8 +603,8 @@ async def judge_generic(
     batch_id: str, regulation_code: str, context: dict, db: AsyncSession
 ) -> dict:
     """
-    EU_BATTERY / EU_BATTERY_ART7 / EU_BATTERY_ART47 / EUDR / CSDDD 공통 judge.
-    UFLPA·IRA처럼 시연 핵심은 아니지만 실판정 경로로 동작한다.
+    EU_BATTERY_ART47 / EUDR / CSDDD 공통 judge.
+    UFLPA·IRA·EU_BATTERY·EU_BATTERY_ART7처럼 시연 핵심은 아니지만 실판정 경로로 동작한다.
     """
     query_hint = _GENERIC_QUERY_HINTS.get(regulation_code, regulation_code)
     clauses = await search_regulations(query_hint, regulation_code, db, top_k=5)
@@ -404,30 +622,30 @@ async def judge_generic(
 
 
 # ---------------------------------------------------------------------------
-# 6. REGULATION_JUDGES — regulation_code → judge 함수 매핑 (Day3)
+# 7. REGULATION_JUDGES — regulation_code → judge 함수 매핑
 #    compliance_node가 이 딕셔너리로 올바른 judge를 선택한다.
-#    spec C-3의 REGULATION_JUDGES 구조를 그대로 따른다.
 # ---------------------------------------------------------------------------
 
 REGULATION_JUDGES: dict[str, Callable] = {
     # 시연 핵심 — 전용 judge
-    "UFLPA":             judge_uflpa,
-    "IRA":               judge_ira,
-    # 실판정 5종 — 공통 judge (regulation_code를 인자로 넘김)
-    "EU_BATTERY":        judge_generic,
-    "EU_BATTERY_ART7":   judge_generic,
-    "EU_BATTERY_ART47":  judge_generic,
-    "EUDR":              judge_generic,
-    "CSDDD":             judge_generic,
+    "UFLPA":            judge_uflpa,
+    "IRA":              judge_ira,
+    # Day2 신규 — 탄소발자국·재활용 전용 judge
+    "EU_BATTERY":       judge_recycled_content,   # Day2: judge_generic → judge_recycled_content
+    "EU_BATTERY_ART7":  judge_carbon_footprint,   # Day2: judge_generic → judge_carbon_footprint
+    # 실판정 3종 — 공통 judge (regulation_code를 인자로 넘김)
+    "EU_BATTERY_ART47": judge_generic,
+    "EUDR":             judge_generic,
+    "CSDDD":            judge_generic,
     # Stub 3종 — 항시 compliance_passed
-    "CBAM":              _stub_passed_judge,
-    "CONFLICT_MINERALS": _stub_passed_judge,
-    "CRMA":              _stub_passed_judge,
+    "CBAM":             _stub_passed_judge,
+    "CONFLICT_MINERALS":_stub_passed_judge,
+    "CRMA":             _stub_passed_judge,
 }
 
 
 # ---------------------------------------------------------------------------
-# 7. compliance_results INSERT 헬퍼 (Day3)
+# 8. compliance_results INSERT 헬퍼 (Day3)
 # ---------------------------------------------------------------------------
 
 async def _insert_compliance_result(
@@ -485,7 +703,7 @@ async def _insert_compliance_result(
 
 
 # ---------------------------------------------------------------------------
-# 8. judge context 빌더 (Day3)
+# 9. judge context 빌더 (Day3 + Day2 키 추가)
 #    앞 단계(extraction, verification, geo) 결과를 합쳐
 #    judge에게 넘길 컨텍스트 dict를 구성한다.
 #    없는 키는 빈값으로 채워요(KeyError 방지).
@@ -497,6 +715,7 @@ def _build_judge_context(state: BatchState) -> dict:
     geo:          dict = state.get("geo_result")          or {}
 
     return {
+        # ── 기존 키 ──
         "batch_id":                state["batch_id"],
         "product_id":              state["product_id"],
         "destination":             state.get("destination", ""),
@@ -508,18 +727,22 @@ def _build_judge_context(state: BatchState) -> dict:
         "mine_coordinates":        geo.get("mine_coordinates"),
         "geo_risk_flags":          geo.get("risk_flags", []),
         "verification_flags":      verification.get("flags", []),
+        # ── Day2 신규 키 ──
+        # supplier_recycler_details 출처.
+        # key 컨벤션: 소문자 원소기호(co/ni/li/pb) — events/types.py RecycledMaterialsSchema SSOT.
+        "recycled_content_ratio":  extraction.get("recycled_content_ratio"),
+        "recycled_materials":      extraction.get("recycled_materials"),
     }
 
 
 # ---------------------------------------------------------------------------
-# 9. compliance_node — 실판정 버전 (Day3, Day1 skeleton 교체)
+# 10. compliance_node — 실판정 버전 (Day3, Day1 skeleton 교체)
 #
+#     @trace_node 제거 — graph.py 래퍼(traced_graph_node)가 기록 담당.
 #     graph.py 패턴: state 하나만 인자로 받음.
 #     DB 세션은 내부에서 AsyncSessionLocal로 직접 연다.
-#     (지혜의 hitl_interrupt_node와 동일한 패턴)
 # ---------------------------------------------------------------------------
 
-@trace_node("compliance", "agent")
 async def compliance_node(state: BatchState) -> BatchState:
     """
     Compliance Interpreter 노드 — Day3 실판정 버전
@@ -561,10 +784,10 @@ async def compliance_node(state: BatchState) -> BatchState:
                 logger.warning("regulation_code=%s 에 매핑된 judge가 없어요.", reg_code)
                 continue
 
-            # stub(2-인자)과 전용/generic(3~4인자)의 시그니처가 달라서 분기해요
+            # stub(2-인자) / Day2 전용(3-인자) / UFLPA·IRA 전용(3-인자) / generic(4-인자) 분기
             if reg_code in _STUB_REGULATIONS:
                 result = await judge_fn(reg_code)
-            elif reg_code in ("UFLPA", "IRA"):
+            elif reg_code in ("UFLPA", "IRA", "EU_BATTERY_ART7", "EU_BATTERY"):
                 result = await judge_fn(batch_id, context, db)
             else:
                 result = await judge_fn(batch_id, reg_code, context, db)
@@ -584,11 +807,14 @@ async def compliance_node(state: BatchState) -> BatchState:
     )
 
     # ComplianceCompleted 이벤트 발행 → 차윤(E) Readiness 재계산 트리거
-    # events/types.py의 ComplianceCompletedEvent 사용
     await publish(
         "ComplianceCompleted",
-        dataclasses.asdict(ComplianceCompletedEvent(batch_id=batch_id, verdicts=verdicts)),
+        dataclasses.asdict(ComplianceCompleted(batch_id=batch_id, verdicts=verdicts)),
     )
+
+    # dpp/service.py의 ESG Score 계산에 필요한 count 키 추가
+    passed_count  = sum(1 for v in verdicts.values() if v == "compliance_passed")
+    warning_count = sum(1 for v in verdicts.values() if v == "compliance_warning")
 
     return {
         **state,
@@ -598,5 +824,77 @@ async def compliance_node(state: BatchState) -> BatchState:
             "verdicts":           verdicts,
             "needs_human_review": any_human_review,
             "evaluated_at":       datetime.now(timezone.utc).isoformat(),
+            "passed":    passed_count,
+            "gray_zone": warning_count,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# 11. HITL context용 규제 판정 이력 조회 함수 (W4 수 신규)
+#
+#     차윤(E)의 backend/hitl/service.py 의 get_review_context() 가
+#     compliance 도메인을 직접 import하지 않도록 이 함수만 호출해요.
+#
+#     【차윤과 합의할 시그니처】
+#       from backend.agents.compliance import get_compliance_history_for_batch
+#       compliance_history = await get_compliance_history_for_batch(db, batch_id)
+#       context_data["compliance_history"] = compliance_history
+# ---------------------------------------------------------------------------
+
+@trace_tool("get_compliance_history")
+async def get_compliance_history_for_batch(
+    db: AsyncSession,
+    batch_id: uuid.UUID | str,
+) -> list[dict]:
+    """
+    HITL 검토 화면의 compliance_history 섹션 데이터를 제공해요.
+
+    compliance_results + regulations 조인으로
+    판정(verdict) · 신뢰도 · 인용 조항 · 근거 텍스트를 반환해요.
+    검토자가 "왜 이 판정인지" 볼 수 있는 최소 필드로 구성했어요.
+
+    정렬: created_at DESC (최신 판정이 위로)
+    """
+    rows = (
+        await db.execute(
+            text("""
+                SELECT
+                    r.regulation_code,
+                    r.name                AS regulation_name,
+                    cr.verdict,
+                    cr.needs_human_review,
+                    cr.confidence_score,
+                    cr.cited_clauses,
+                    cr.reasoning_text,
+                    cr.created_at
+                FROM compliance_results cr
+                JOIN regulations r
+                  ON r.regulation_id = cr.regulation_id
+                WHERE cr.batch_id = :batch_id
+                ORDER BY cr.created_at DESC
+            """),
+            {"batch_id": str(batch_id)},
+        )
+    ).fetchall()
+
+    return [
+        {
+            "regulation_code":    row.regulation_code,
+            "regulation_name":    row.regulation_name,
+            "verdict":            row.verdict,
+            "needs_human_review": row.needs_human_review,
+            "confidence_score":   (
+                float(row.confidence_score)
+                if row.confidence_score is not None
+                else None
+            ),
+            "cited_clauses":      row.cited_clauses or [],
+            "reasoning_text":     row.reasoning_text or "",
+            "created_at":         (
+                row.created_at.isoformat()
+                if row.created_at else None
+            ),
+        }
+        for row in rows
+    ]

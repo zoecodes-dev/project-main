@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
+from pydantic import BaseModel, field_validator
+
 # UTC 시간 생성 헬퍼 함수
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -26,6 +28,26 @@ def _now_utc() -> datetime:
 # ============================================================
 # Product (C)
 # ============================================================
+@dataclass
+class CustomerImportedEvent:
+    """
+    고객사(완성차 OEM) UPSERT 완료 시 발행.
+    발행: C(Product Ingest) → 수신: 공급망·컴플라이언스 등 downstream.
+
+    발행 순서 규칙:
+        CustomerImported → (product UPSERT) → BOMImported → LotImported → ProductImported
+        products.customer_id FK 의존 때문에 customer가 먼저 확정되어야 한다.
+
+    is_new: True면 신규 INSERT, False면 기존 row 업데이트(UPSERT 충돌).
+        downstream이 "새 고객사 등장" vs "기존 갱신"을 구분할 수 있게 담아요.
+    """
+    customer_id: Optional[UUID] = None
+    customer_code: Optional[str] = None   # 예: 'BMW', 'MERCEDES'
+    external_id: Optional[str] = None     # 원천 ERP 식별자
+    is_new: bool = True                   # 신규 INSERT=True / UPSERT 갱신=False
+    event_name: str = "CustomerImported"
+    occurred_at: datetime = field(default_factory=_now_utc)
+
 @dataclass
 class ProductImportedEvent:
     product_id: Optional[UUID] = None
@@ -346,7 +368,7 @@ class TrainingOverdueEvent:
     due_date: Optional[datetime] = None
     event_name: str = "TrainingOverdue"
     occurred_at: datetime = field(default_factory=_now_utc)
-    
+
 # ============================================================
 # ValidationResult + validate_schema (B)
 # ============================================================
@@ -356,3 +378,34 @@ class ValidationResult:
     ok: bool
     missing_fields: list[str] = field(default_factory=list)
     normalized: dict = field(default_factory=dict)
+
+
+# ============================================================
+# RecycledMaterialsSchema (B·C 공유 — 도메인 간 계약)
+#
+# supplier_recycler_details.recycled_materials JSONB 의 공식 구조.
+# B(저장)·C(검증)가 동일 클래스를 공유해 key 불일치를 구조적으로 차단한다.
+#
+# 사용법:
+#   저장(B): RecycledMaterialsSchema(co=18.0, ni=7.0).model_dump(exclude_none=True)
+#   검증(C): RecycledMaterialsSchema(**row.recycled_materials)
+# ============================================================
+class RecycledMaterialsSchema(BaseModel):
+    """
+    supplier_recycler_details.recycled_materials JSONB 의 공식 구조.
+    key = 소문자 원소기호(co/ni/li/pb), value = 재활용 함량(%).
+    B(저장)·C(검증)가 동일 클래스를 공유해 key 불일치를 구조적으로 차단한다.
+    """
+    co: Optional[float] = None   # 코발트 함량 %
+    ni: Optional[float] = None   # 니켈 함량 %
+    li: Optional[float] = None   # 리튬 함량 %
+    pb: Optional[float] = None   # 납 함량 %
+
+    @field_validator("co", "ni", "li", "pb")
+    @classmethod
+    def _pct_range(cls, v):
+        if v is not None and not (0 <= v <= 100):
+            raise ValueError("재활용 함량은 0~100% 범위여야 합니다")
+        return v
+
+    model_config = {"extra": "forbid"}   # 정의 안 된 key 저장 시 에러 → 오타·오용 즉시 발견

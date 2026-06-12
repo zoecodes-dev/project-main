@@ -22,12 +22,17 @@
 ## 5. Geo Audit 검증 항목
 - **신장 위구르 자치구 근접성**: `ST_DWithin` 함수를 사용하여 경계 내부 또는 50km 이내 여부 판정.
 - **국가 정합성**: 신고된 국가(`country`)와 좌표(`location`)의 실제 일치 여부 검증.
-- **EUDR 산림 훼손**: 고위험 지역 좌표 대조 및 위성 데이터 분석 에이전트 연동.
+- **EUDR 산림 훼손**: `ST_Within`을 사용하여 산림 훼손 폴리곤 내부 포함 여부 판정 (시연용 CTE `ST_MakeEnvelope` 가상 바운딩 박스 연동).
 
 #### 🛡️ 모의 Sad Path 검출 로그 (W3 화요일)
 - **시나리오**: 베트남(VN)으로 신고된 위장 조립 공장이 실제로는 중국 광둥성 인근 좌표를 제출한 상황 모의.
 - **결과**: `check_coordinate_authenticity` 쿼리 실행 결과, `ST_Within` 판정에서 `country_match: False` 검출 완료.
 - **후속 작용**: 시스템이 즉시 `GeoRiskDetected(risk_type="country_mismatch")` 이벤트를 발행하여 감사 로그 기록 및 리스크 +30점 유발 검증 성공.
+
+#### 🛡️ 종단 시연 검증 로그 (W4 목요일 - ③ Mercedes GLC Sad Path)
+- **시나리오**: GLC 배치의 리튬 출처 광산이 신장(86.0, 41.0) 및 인도네시아 보르네오 EUDR 훼손지(114.0, 0.0)에 위치한 상황 모의.
+- **결과**: `ST_DWithin`(신장) 및 `ST_Within`(EUDR) 쿼리가 총 3건의 위반(기존 시드 1건 + 신규 2건)을 정확히 포획.
+- **예외 경계 마킹(Trace Warn)**: `audit_trail` 기록 중 시연용 임시 문자열(`test-glc-batch`)로 인한 UUID 파싱 경고(`DataError`)가 발생했으나, 메인 파이프라인(이벤트 발행 → risk_worker 점수 누적 → HITL `batch_hitl_wait` 전이)은 락 없이 완벽하게 종단 도달 완료.
 
 ## 6. 발행 이벤트 (events/types.py 정의 준수)
 | 이벤트명 | 발생 시점 | 수신 도메인 |
@@ -48,3 +53,17 @@
 - [x] Day 2: 좌표-국가 불일치 검사 PostGIS 동작 확인 완료
 - [x] Day 3: `geo_audit` 노드 LangGraph 파이프라인 결합 및 `GeoRiskDetected` 발행 통합 적용 완료
 - [x] Day 4: 튜터형 학습 완료 (PostGIS 공간 쿼리, 재귀 CTE, 이벤트/큐 분산 처리, 멱등성 등 5대 핵심 아키텍처 원리 정립)
+
+## 10. W4 구현 진행 현황 (공급망 조회 및 EUDR)
+- [x] Day 1~2: N차 공급망 재귀 트리, 대체 공급망, Geo-Risk 노출 조회 API 확충 완료 (`router.py`)
+- [ ] Day 3: (전원) 프론트 화면 구조 합의 (작업 없음)
+- [x] Day 4: EUDR 검사 로직(산림 훼손지 대조) 추가 및 본인 구간 시연 검증 완료
+- [ ] Day 5: 튜터 학습 (PostGIS, CTE 쿼리 깊은 이해)
+
+## 11. API 엔드포인트 (W4 조회 라우터 확충)
+조회 전용 인터페이스로, 어떠한 이벤트(publish) 발행이나 강제 상태 전이도 발생시키지 않습니다.
+| Method | Path | 파라미터 | 설명 | 응답 데이터 |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/supply-chain/tree` | `product_id` 또는 `bom_version_id` | N차 공급망 재귀 CTE 트리 조회 | 평면 리스트 (hop_level, part, supplier, link_status 포함) |
+| `GET` | `/supply-chain/alternatives` | `part_id` | 특정 부품의 대체 공급사 풀 조회 | 대체 협력사 목록 |
+| `GET` | `/supply-chain/geo-risks` | 없음 | 지정학 공간 리스크(신장, 위장공장) 노출 목록 | xinjiang_adjacent, country_mismatch 목록 |
