@@ -75,16 +75,15 @@ async def get_supplier_detail_endpoint(
 @router.get("", response_model=List[SupplierBrief])
 async def list_suppliers_endpoint(
     status: Optional[str] = None,
-    tier: Optional[int] = None,
     risk_level: Optional[str] = None,
     feoc_status: Optional[str] = None,
     page: int = 1,
     size: int = 20,
     db: AsyncSession = Depends(get_db),
 ):
-    """협력사 목록 필터링 조회 (status / tier / risk_level / feoc_status + 페이지)."""
+    """협력사 목록 필터링 조회 (status / risk_level / feoc_status + 페이지)."""
     return await service.list_suppliers(
-        db, status, tier, risk_level, feoc_status, page, size
+        db, status, risk_level, feoc_status, page, size
     )
  
 @router.get("/{supplier_id}/risk-profile", response_model=RiskProfileResponse)

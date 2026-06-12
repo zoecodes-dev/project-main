@@ -49,13 +49,13 @@ class DataRequestLog(Base):
     )
     due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True) # 데이터 제출 마감일 (SLA 관리 기준점)
     response_status: Mapped[Optional[ResponseStatus]] = mapped_column(                      # 단순 제출 여부 상태 (PENDING / RESPONDED / OVERDUE / ESCALATED)
-        Enum(ResponseStatus, native_enum=False, length=30), default=ResponseStatus.PENDING, server_default="response_pending", nullable=True
+        Enum(ResponseStatus, native_enum=False, length=30, values_callable=lambda e: [m.value for m in e]), default=ResponseStatus.PENDING, server_default="response_pending", nullable=True
     )
     reminder_count: Mapped[Optional[int]] = mapped_column(Integer, default=0, server_default="0", nullable=True)         # 마감 미준수 협력사 독촉장(리마인드) 발송 횟수
     last_reminder_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True) # 가장 최근에 독촉장을 보낸 시각 (미발송 시 Null)
     responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)     # 협력사가 최종 제출 버튼을 누른 시각 (미제출 시 Null)
     submission_status: Mapped[Optional[SubmissionStatus]] = mapped_column(                  # 플랫폼 핵심 9개 상태 머신 프로세스 단계 관리
-        Enum(SubmissionStatus, native_enum=False, length=30), default=SubmissionStatus.REQUESTED, server_default="submission_requested", nullable=True
+        Enum(SubmissionStatus, native_enum=False, length=30, values_callable=lambda e: [m.value for m in e]), default=SubmissionStatus.REQUESTED, server_default="submission_requested", nullable=True
     )
     is_archived: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, server_default="false", nullable=True)
     created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
@@ -75,8 +75,8 @@ class SubmissionStatusHistory(Base):
 
     history_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.uuid_generate_v4(), default=uuid.uuid4)     # 감사 기록 고유 ID (UUID)
     request_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("data_request_log.request_id", ondelete="CASCADE"), nullable=True) # 연결된 데이터 요청서 번호 (외래키)
-    from_status: Mapped[Optional[SubmissionStatus]] = mapped_column(Enum(SubmissionStatus, native_enum=False, length=30), nullable=True) # 변경되기 전의 직전 프로세스 상태
-    to_status: Mapped[SubmissionStatus] = mapped_column(Enum(SubmissionStatus, native_enum=False, length=30), nullable=False)   # 변경된 후의 새로운 프로세스 상태
+    from_status: Mapped[Optional[SubmissionStatus]] = mapped_column(Enum(SubmissionStatus, native_enum=False, length=30, values_callable=lambda e: [m.value for m in e]), nullable=True) # 변경되기 전의 직전 프로세스 상태
+    to_status: Mapped[SubmissionStatus] = mapped_column(Enum(SubmissionStatus, native_enum=False, length=30, values_callable=lambda e: [m.value for m in e]), nullable=False)   # 변경된 후의 새로운 프로세스 상태
     actor_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True) # 상태 전이를 발생시킨 주체 ID (유저 혹은 시스템 ID)
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)                      # 상태 변경 및 반려 사유 설명 (텍스트, 공란 허용)
     changed_at: Mapped[Optional[datetime]] = mapped_column(                                 # 상태 전이가 일어난 정확한 시각 (자동 입력 표준 UTC)
@@ -205,10 +205,10 @@ class DataRequestResponse(BaseModel):
     requested_data_type: Optional[str] = None
     requested_at: Optional[datetime] = None
     due_date: Optional[datetime] = None
-    response_status: Optional[str] = None
-    submission_status: Optional[str] = None
+    response_status: Optional[ResponseStatus] = None
+    submission_status: Optional[SubmissionStatus] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
 class SubmitDataRequest(BaseModel):
     actor_id: uuid.UUID
@@ -229,10 +229,10 @@ class CompletenessResponse(BaseModel):
 class TimelineHistoryResponse(BaseModel):
     history_id: uuid.UUID
     request_id: Optional[uuid.UUID] = None
-    from_status: Optional[str] = None
-    to_status: str
+    from_status: Optional[SubmissionStatus] = None
+    to_status: SubmissionStatus
     actor_id: Optional[uuid.UUID] = None
     reason: Optional[str] = None
     changed_at: Optional[datetime] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)

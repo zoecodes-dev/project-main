@@ -30,8 +30,8 @@ async def geo_audit_node(state: BatchState, db: AsyncSession) -> BatchState:
     
     if detected_risks:
         # 0.84 이하로 깎아서 Supervisor가 hitl_interrupt로 즉시 분기하도록 유도
-        confidence_score = min(float(confidence_score) if confidence_score else 1.0, 0.80)  
-        error_reason = "geo_risk_detected"
+        confidence_score = min(float(confidence_score) if confidence_score else 1.0, 0.84)  
+        error_reason = "geographical_risk"
         hitl_required = True
 
     return {

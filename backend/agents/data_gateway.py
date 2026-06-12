@@ -38,6 +38,7 @@ _IMAGE_MIME = {"image": "image/png"}  # 필요 시 jpg 등 세분화
 
 # 협력사 문서 비공개 버킷 (서울). file_url 컬럼엔 이 버킷 안의 "키"가 저장된다.
 #   예: "submissions/req-001/factory_cert.pdf"   (영구 URL이 아니라 키)
+# [BYPASS:C4]
 S3_BUCKET = "kira-documents-423937245947-ap-northeast-2-an"
 AWS_REGION = "ap-northeast-2"
 
@@ -97,12 +98,14 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     if file_type == "image":
         # 검증된 멀티모달 형식: text + base64 image (mime_type 필수)
         doc_block = {"type": "image", "base64": b64, "mime_type": _IMAGE_MIME["image"]}
+    # [BYPASS:B2]
     elif file_type == "pdf":
         # 주의: ChatBedrockConverse의 base64 PDF(document) 지원이 버전마다 다르다.
         #       Converse document 블록 형식이 확정되면 여기에 넣는다.
         #       당장 안 되면 PDF→이미지 변환(pdf2image) 후 image 블록으로 우회.
         #       (PDF 파싱 라이브러리 검토는 W3 B 과제 — 그 결과로 이 분기를 확정한다.)
         doc_block = {"type": "image", "base64": b64, "mime_type": "image/png"}  # 임시: 변환 전제
+    # [BYPASS:B3]
     else:
         # xlsx/csv/docx 등은 Vision 대상이 아니다. 텍스트 추출 경로가 따로 필요.
         # 추측해서 이미지로 보내면 깨지므로, 일단 미파싱으로 표시해 넘긴다.
@@ -247,15 +250,14 @@ async def data_gateway_node(state: BatchState) -> BatchState:
             "current_stage": "stage_extraction",
             "error_reason": "low_confidence",
             "confidence_score": 0.0,
-            "extraction_result": {"checked": True, "count": 0, "note": "no extraction results"},
+            "extraction_result": {"checked": True, "count": 0, "note": "no extraction results", "supplier_ids": supplier_ids},
         }
  
     lowest = 1.0
     unconfirmed = 0
     has_missing = False
-    for item in results:
-        for r, supplier_type in results:
-            cmap = r.confidence_map or {}
+    for r, supplier_type in results:
+        cmap = r.confidence_map or {}
         if cmap:
             lowest = min(lowest, min(cmap.values()))
         if not r.supplier_confirmed:
@@ -279,6 +281,7 @@ async def data_gateway_node(state: BatchState) -> BatchState:
             "checked": True,
             "count": len(results),
             "supplier_count": len(supplier_ids),
+            "supplier_ids": supplier_ids,
             "lowest_confidence": lowest,
             "unconfirmed": unconfirmed,
             "has_missing": has_missing,

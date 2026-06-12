@@ -7,6 +7,7 @@ domains/supplychain/service.py  (담당: 팀원 D · 영수)
 """
 import json
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,9 +78,9 @@ class SupplyChainService:
         required_docs: list[str]
     ) -> Dict[str, Any]:
         """원청 → 협력사 반려/시정요청 통지. 회사 경계를 넘을 때만 유효함."""
-        is_cross = await self.repository.is_cross_company_boundary(sender_id, target_supplier_id)
-        if not is_cross:
-            raise ValueError("동일 법인 내부이거나 통지 대상이 아닙니다. (회사 경계 의무 없음)")
+        boundary_check = await self.evaluate_cross_entity_boundary(sender_id, target_supplier_id)
+        if not boundary_check.get("is_cross_boundary"):
+            raise ValueError(f"동일 법인 내부이거나 통지 대상이 아닙니다. (사유: {boundary_check.get('reason')})")
 
         payload = {
             "sender_supplier_id": sender_id,
@@ -87,10 +88,21 @@ class SupplyChainService:
             "reason": reason,
             "due_date": due_date,
             "required_documents": required_docs,
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "sent_by": sender_id,
         }
-        # 알림/요청 저장은 Submission 도메인이 수신 후 처리
-        await publish("SupplierCorrectionRequested", payload)
-        return {"status": "success", "message": "협력사 시정 요청 통지 이벤트가 발행되었습니다."}
+        # 알림/요청 저장은 notification_worker 등 수신 후 처리
+        await publish("supplier.notification_sent", payload)
+        
+        return {
+            "status": "success", 
+            "message": "협력사 시정 요청 통지 이벤트가 발행되었습니다.",
+            "delivery_record": {
+                "sent_by": payload["sent_by"],
+                "sent_at": payload["sent_at"],
+                "target_supplier_id": payload["target_supplier_id"]
+            }
+        }
 
     @trace_node("declare_source_change", "agent")
     async def declare_source_change(
@@ -110,9 +122,18 @@ class SupplyChainService:
         )
 
         # 자진신고 발생 시, 상위 BOM 검증을 위해 이벤트 발행 (Compliance/Verification 트리고)
-        payload = {**new_map, "reason": reason}
-        await publish("SourceChangeDeclared", payload)
-        return new_map
+        payload = {
+            **new_map, 
+            "reason": reason,
+            "declared_at": datetime.now(timezone.utc).isoformat(),
+            "requires_full_revalidation": True  # 상위 BOM 영향에 따른 재검증 트리거 신호
+        }
+        await publish("supplier.source_change_declared", payload)
+        return {
+            "status": "success",
+            "message": "공급원 변경 자진신고가 접수되어 상위 파이프라인 재검증이 트리거되었습니다.",
+            "data": payload
+        }
     async def get_geo_risks(self, db: AsyncSession) -> Dict[str, Any]:
         """
         조회 전용 인터페이스: 이벤트를 발행하지 않고 지정학 리스크 결과를 반환합니다.
@@ -137,16 +158,6 @@ class SupplyChainService:
         mismatch_risks = await self.repository.check_coordinate_authenticity(db)
         eudr_risks = await self.repository.check_eudr_deforestation(db)
 
-        def _parse_geojson_to_latlng(geojson_str: str | None) -> List[float] | None:
-            if not geojson_str:
-                return None
-            try:
-                geom = json.loads(geojson_str)
-                lon, lat = geom.get("coordinates", [0.0, 0.0])
-                return [lat, lon]  # 위경도 순서(latitude, longitude)로 반환
-            except Exception:
-                return None
-
         def _format_risk_items(risk_list: List[Dict[str, Any]], risk_type: str) -> List[Dict[str, Any]]:
             formatted = []
             for r in risk_list:
@@ -154,7 +165,8 @@ class SupplyChainService:
                     "factory_id": str(r["factory_id"]),
                     "supplier_id": str(r["supplier_id"]),
                     "company_name": r["company_name"],
-                    "coordinates": _parse_geojson_to_latlng(r.get("coordinates"))
+                    "coordinates": self.parse_geojson_to_latlng(r.get("coordinates")),
+                    "is_gray_zone": False
                 }
                 
                 # 회색지대(Gray Zone) 플래그 및 경고 메시지 세팅
@@ -162,15 +174,18 @@ class SupplyChainService:
                     item["is_in_risk_zone"] = r.get("is_in_risk_zone")
                     item["distance_km"] = float(r["distance_km"]) if r.get("distance_km") is not None else None
                     if item["is_in_risk_zone"]:
+                        item["is_gray_zone"] = True
                         item["gray_zone_warning"] = "신장 지역 50km 이내 인접 (위험구역)"
                 elif risk_type == "country_mismatch":
                     item["country"] = r.get("country")
                     item["country_match"] = r.get("country_match")
                     if not item["country_match"]:
+                        item["is_gray_zone"] = True
                         item["gray_zone_warning"] = f"신고 국가({item.get('country')})와 실제 좌표 불일치"
                 elif risk_type == "eudr":
                     item["is_deforested"] = r.get("is_deforested")
                     if item["is_deforested"]:
+                        item["is_gray_zone"] = True
                         item["gray_zone_warning"] = "EUDR 산림 훼손 의심 지역 내부 위치"
                         
                 formatted.append(item)
@@ -209,13 +224,16 @@ class SupplyChainService:
         }
 
     # ---------- Geo Audit ----------
-    def _format_coords(self, geojson_str: str | None) -> list[float]:
-        """프론트엔드 및 HITL 화면에서 사용하기 쉽도록 [latitude, longitude] 형태로 반환"""
+    def parse_geojson_to_latlng(self, geojson_str: str | None) -> list[float]:
+        """
+        PostGIS 등에서 반환된 GeoJSON 문자열을 파싱하여,
+        프론트엔드 및 HITL 화면에서 즉시 맵에 핀을 꽂기 쉽도록 정형화된 [latitude, longitude] 배열로 반환합니다.
+        """
         if not geojson_str:
             return []
         try:
             geo = json.loads(geojson_str)
-            if geo.get("type") == "Point":
+            if geo.get("type") == "Point" and "coordinates" in geo:
                 lon, lat = geo["coordinates"]
                 return [lat, lon]
         except Exception:
@@ -236,7 +254,7 @@ class SupplyChainService:
         detected_risks: List[Dict[str, Any]] = []
         for result in audit_results:
             if result.get("is_in_risk_zone"):
-                formatted_coords = self._format_coords(result["coordinates"])
+                formatted_coords = self.parse_geojson_to_latlng(result["coordinates"])
                 event = GeoRiskDetectedEvent(
                     batch_id=batch_id,
                     factory_id=result["factory_id"],
@@ -250,7 +268,7 @@ class SupplyChainService:
 
         for result in mismatch_results:
             if not result.get("country_match"):
-                formatted_coords = self._format_coords(result["coordinates"])
+                formatted_coords = self.parse_geojson_to_latlng(result["coordinates"])
                 event = GeoRiskDetectedEvent(
                     batch_id=batch_id,
                     factory_id=result["factory_id"],
@@ -264,13 +282,14 @@ class SupplyChainService:
 
         for result in eudr_results:
             if result.get("is_deforested"):
+                formatted_coords = self.parse_geojson_to_latlng(result.get("coordinates"))
                 event = GeoRiskDetectedEvent(
                     batch_id=batch_id,
                     factory_id=result["factory_id"],
                     risk_type="eudr_deforestation",
                     supplier_id=result["supplier_id"],
                     company_name=result["company_name"],
-                    coordinates=result["coordinates"],
+                    coordinates=formatted_coords,
                 )
                 await self._publish_geo_risk(event)
                 detected_risks.append(asdict(event))
