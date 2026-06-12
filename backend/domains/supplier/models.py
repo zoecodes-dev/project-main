@@ -54,7 +54,6 @@ class Supplier(Base):
     tax_number: Mapped[Optional[str]] = mapped_column(String(50))
     website: Mapped[Optional[str]] = mapped_column(String(255))
     supplier_type: Mapped[str] = mapped_column(String(30), nullable=False)
-    tier: Mapped[Optional[int]] = mapped_column(Integer)
     parent_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("suppliers.supplier_id")
     )
@@ -433,7 +432,6 @@ class SupplierBrief(BaseModel):
     supplier_id: uuid.UUID
     company_name: str
     supplier_type: str
-    tier: Optional[int] = None
     status: str
     risk_level: str
 
@@ -493,7 +491,6 @@ class SupplierDetailResponse(BaseModel):
     supplier_id: uuid.UUID
     company_name: str
     supplier_type: str
-    tier: Optional[int] = None
     status: str
     risk_level: str
     feoc_status: str

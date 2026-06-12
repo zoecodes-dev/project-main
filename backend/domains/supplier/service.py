@@ -123,7 +123,6 @@ async def get_supplier_detail(db: AsyncSession, supplier_id: UUID) -> Optional[S
 async def list_suppliers(
     db: AsyncSession,
     status: Optional[str] = None,
-    tier: Optional[int] = None,
     risk_level: Optional[str] = None,
     feoc_status: Optional[str] = None,
     page: int = 1,
@@ -131,7 +130,7 @@ async def list_suppliers(
 ) -> List[Supplier]:
     """목록 조회(필터 + 페이지네이션)."""
     return await repository.get_suppliers(
-        db, status, tier, risk_level, feoc_status, page, size
+        db, status, risk_level, feoc_status, page, size
     )
 
 
