@@ -6,32 +6,10 @@ from sqlalchemy import Column, Integer, String, Text, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMP
 
 from backend.infrastructure.database import Base
+from backend.domains.users.models import Tenant, User  # users 도메인이 User/Tenant의 SSOT
 
 
 # === ORM (DB 테이블 매핑) ===
-
-class Tenant(Base):
-    """schema.sql 영역 1의 tenants 테이블과 매핑됩니다."""
-    __tablename__ = "tenants"
-    __table_args__ = {'extend_existing': True}
-
-    tenant_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    company_name = Column(String(255), nullable=False)
-
-
-class User(Base):
-    """schema.sql 영역 1의 users 테이블과 매핑됩니다."""
-    __tablename__ = "users"
-    __table_args__ = {'extend_existing': True}
-
-    user_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=True)
-    email = Column(String(255), unique=True, nullable=False)
-    password_hash = Column(String(255), nullable=False)
-    name = Column(String(100), nullable=True)
-    role = Column(String(50), nullable=True)
-    is_active = Column(Boolean, default=True)
-
 
 class AuditTrail(Base):
     __tablename__ = "audit_trail"
