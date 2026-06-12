@@ -58,7 +58,7 @@ async def create_and_request_submission(
         target_supplier_id=target_supplier_id,
         requested_data_type=requested_data_type,
         due_date=due_date,
-        submission_status=SubmissionStatus.REQUESTED
+        submission_status=SubmissionStatus.REQUESTED.value
     )
     
     try:
