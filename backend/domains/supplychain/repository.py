@@ -36,7 +36,7 @@ class SupplyChainRepository:
         query = text("""
             WITH RECURSIVE sc_tree AS (
                 SELECT
-                    scm.map_id, scm.parent_supplier_id, scm.child_supplier_id,
+                    scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
                     scm.part_id, s.company_name, s.supplier_type, scm.hop_level,
                     sf.country,
                     ST_AsGeoJSON(sf.location) AS location_geojson,
@@ -54,7 +54,7 @@ class SupplyChainRepository:
                 UNION ALL
 
                 SELECT
-                    scm.map_id, scm.parent_supplier_id, scm.child_supplier_id,
+                    scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
                     scm.part_id, s.company_name, s.supplier_type, scm.hop_level,
                     sf.country,
                     ST_AsGeoJSON(sf.location) AS location_geojson,
@@ -63,6 +63,7 @@ class SupplyChainRepository:
                     scm.child_supplier_id = ANY(sct.path)
                 FROM supply_chain_map scm
                 JOIN sc_tree sct ON scm.parent_supplier_id = sct.child_supplier_id
+                                AND scm.bom_version_id = sct.bom_version_id
                 JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
                 LEFT JOIN supplier_factories sf
                     ON sf.supplier_id = s.supplier_id AND sf.is_active = TRUE
@@ -114,10 +115,14 @@ class SupplyChainRepository:
         """협력사 자진신고: 공급원 변경 시 새로운 노드를 SUPPLIER_DECLARED 상태로 생성"""
         query = text("""
             INSERT INTO supply_chain_map
-                (bom_version_id, parent_supplier_id, child_supplier_id, part_id, 
-                 link_status, source_system, verification_status)
+                (bom_version_id, parent_supplier_id, child_supplier_id, part_id,
+                 hop_level, link_status, source_system, verification_status)
             VALUES
                 (:bom_version_id, :parent_supplier_id, :child_supplier_id, :part_id,
+                 COALESCE((SELECT hop_level + 1 FROM supply_chain_map
+                           WHERE child_supplier_id = :parent_supplier_id
+                             AND bom_version_id = :bom_version_id
+                           LIMIT 1), 1),
                  'supplychain_declared', 'SUPPLIER_DECLARED', 'unverified')
             RETURNING map_id, parent_supplier_id, child_supplier_id, link_status, verification_status;
         """)
@@ -129,6 +134,43 @@ class SupplyChainRepository:
         })
         await self.session.commit()
         return dict(result.first()._mapping)
+
+    @trace_tool("get_supplier_master_and_gps_dto")
+    async def get_supplier_master_and_gps_dto(self, supplier_id: str) -> dict:
+        """HITL 컨텍스트용 협력사 마스터 및 공장 GPS 정보 조회"""
+        master_query = text("""
+            SELECT supplier_id, company_name, company_name_en, supplier_type,
+                   status, risk_level, feoc_status, completeness_score
+            FROM suppliers
+            WHERE supplier_id = :supplier_id
+        """)
+        master_res = await self.session.execute(master_query, {"supplier_id": supplier_id})
+        master_row = master_res.mappings().first()
+        
+        if not master_row:
+            return {"supplier_master": {}, "factory_gps": []}
+            
+        master_dict = dict(master_row)
+        if master_dict.get("supplier_id"):
+            master_dict["supplier_id"] = str(master_dict["supplier_id"])
+            
+        factory_query = text("""
+            SELECT factory_id, factory_name, address, country, region, factory_role,
+                   ST_Y(location) AS latitude, ST_X(location) AS longitude
+            FROM supplier_factories
+            WHERE supplier_id = :supplier_id AND is_active = TRUE
+        """)
+        factory_res = await self.session.execute(factory_query, {"supplier_id": supplier_id})
+        factory_rows = factory_res.mappings().all()
+        
+        gps_list = []
+        for row in factory_rows:
+            f_dict = dict(row)
+            if f_dict.get("factory_id"):
+                f_dict["factory_id"] = str(f_dict["factory_id"])
+            gps_list.append(f_dict)
+            
+        return {"supplier_master": master_dict, "factory_gps": gps_list}
 
     @trace_tool("check_company_boundary")
     async def is_cross_company_boundary(self, supplier_a_id: str, supplier_b_id: str) -> bool:
@@ -242,6 +284,7 @@ class SupplyChainRepository:
         })
         return [dict(row._mapping) for row in result]
 
+    # [BYPASS:A2] 시연용 4개국 바운딩박스 — 미정의 국가는 ELSE TRUE 통과. 운영 전환 시 국가 폴리곤 테이블 필요
     @trace_tool("coordinate_authenticity")
     async def check_coordinate_authenticity(self, db: AsyncSession) -> List[Dict]:
         """
@@ -280,6 +323,7 @@ class SupplyChainRepository:
         result = await self.session.execute(query)
         return [dict(row._mapping) for row in result]
 
+    # [BYPASS:A3] 시연용 가상 산림훼손지(보르네오 박스 1개) — 운영 전환 시 GFW 등 실데이터 필요
     @trace_tool("check_eudr_deforestation")
     async def check_eudr_deforestation(self, db: AsyncSession) -> List[Dict[str, Any]]:
         """
