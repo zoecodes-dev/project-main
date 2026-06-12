@@ -203,7 +203,6 @@ async def validate_schema(parsed: dict, provider_type: str) -> ValidationResult:
  
     return ValidationResult(ok=(len(missing) == 0), missing_fields=missing, normalized=normalized)
 
-@trace_node("data_gateway", "agent")
 async def data_gateway_node(state: BatchState) -> BatchState:
     """
     batch에 연관된 문서 추출결과(document_extraction_results)를 모아
@@ -255,11 +254,8 @@ async def data_gateway_node(state: BatchState) -> BatchState:
     unconfirmed = 0
     has_missing = False
     for item in results:
-        if isinstance(item, tuple):
-            r, supplier_type = item
-        else:
-            r, supplier_type = item, None
-        cmap = r.confidence_map or {}
+        for r, supplier_type in results:
+            cmap = r.confidence_map or {}
         if cmap:
             lowest = min(lowest, min(cmap.values()))
         if not r.supplier_confirmed:
@@ -282,7 +278,7 @@ async def data_gateway_node(state: BatchState) -> BatchState:
         "extraction_result": {
             "checked": True,
             "count": len(results),
-            "supplier_id": supplier_ids[0] if supplier_ids else None,
+            "supplier_count": len(supplier_ids),
             "lowest_confidence": lowest,
             "unconfirmed": unconfirmed,
             "has_missing": has_missing,

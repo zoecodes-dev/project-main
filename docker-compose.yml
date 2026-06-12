@@ -120,19 +120,18 @@ services:
     container_name: kira-worker-risk
     command: ["arq", "backend.workers.risk_worker.WorkerSettings"]
 
-  # ── 다음주 활성화: 워커 모듈 생성 후 아래 주석 해제 ──
   # hitl_queue 워커
-  # worker-hitl:
-  #   build: *worker-build
-  #   networks:
-  #     - project_net
-  #   env_file:
-  #     - ./.env
-  #   environment: *worker-env
-  #   depends_on: *worker-deps
-  #   restart: always
-  #   container_name: kira-worker-hitl
-  #   command: ["arq", "backend.workers.hitl_worker.WorkerSettings"]
+  worker-hitl:
+    build: *worker-build
+    networks:
+      - project_net
+    env_file:
+      - ./.env
+    environment: *worker-env
+    depends_on: *worker-deps
+    restart: always
+    container_name: kira-worker-hitl
+    command: ["arq", "backend.workers.hitl_worker.WorkerSettings"]
 
   # notification_queue 워커
   # worker-notification:

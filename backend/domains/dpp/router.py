@@ -1,10 +1,13 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.database import get_db
+from backend.infrastructure.auth import get_current_user
 from backend.domains.dpp.service import calculate_readiness, generate_dpp_payload, create_dpp_record
+from backend.domains.dpp.delivery_service import generate_delivery_form, record_delivery_history
 from backend.domains.dpp.state_machine import issue_dpp, revoke_dpp
 from backend.domains.dpp.immutable_guard import ImmutableRecordError
 from backend.domains.dpp.models import DppRecordResponse, ReadinessResponse
@@ -12,6 +15,12 @@ from backend.domains.dpp.repository import list_dpp_records_raw, get_dpp_record
 from backend.infrastructure.trace import trace_tool
 
 router = APIRouter(prefix="/dpp", tags=["DPP"])
+
+
+class DeliveryRecordRequest(BaseModel):
+    recipient_email: str
+    subject: str
+    body_text: str
 
 
 @router.get("/products/{product_id}/readiness", response_model=ReadinessResponse)
@@ -81,3 +90,43 @@ async def get_dpp_record_detail_endpoint(dpp_id: uuid.UUID, db: AsyncSession = D
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DPP 기록을 찾을 수 없습니다.")
     return record
+
+
+@router.get("/{dpp_id}/delivery-form")
+async def get_delivery_form_endpoint(dpp_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """
+    [API] GET /dpp/{dpp_id}/delivery-form
+    DPP 발급 데이터를 바탕으로 고객사에 전송할 이메일 양식을 자동 생성하여 반환합니다.
+    (customers 조회로 수신처 자동 채움)
+    """
+    try:
+        return await generate_delivery_form(db, dpp_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post("/{dpp_id}/deliver")
+async def record_delivery_endpoint(
+    dpp_id: uuid.UUID, 
+    req: DeliveryRecordRequest, 
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    [API] POST /dpp/{dpp_id}/deliver
+    사용자가 메일/메시지 발송을 완료한 후 전송 이력을 기록합니다.
+    """
+    try:
+        result = await record_delivery_history(
+            db=db, 
+            dpp_id=dpp_id, 
+            recipient_email=req.recipient_email, 
+            subject=req.subject, 
+            body_text=req.body_text, 
+            user_id=current_user.user_id
+        )
+        await db.commit()
+        return result
+    except ValueError as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))

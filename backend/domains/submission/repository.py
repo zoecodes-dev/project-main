@@ -9,6 +9,8 @@ Submission 도메인 Data Access 계층 (Repository)
 import uuid
 from typing import Optional
 from sqlalchemy import select, asc
+from sqlalchemy import select, Table, Column, MetaData, String
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
@@ -18,6 +20,14 @@ from backend.domains.submission.models import (
     SubmissionStatusHistory,
     DocumentExtractionResult,
     ProcessedJob,
+)
+# suppliers는 supplier 도메인 소유 테이블이라 ORM 모델을 import(약속 6번 위반)하지 않고,
+# supplier_type만 읽기 위한 최소 Table 매핑을 둔다. (dpp/supplychain repo의 raw 조인과 동일 취지)
+_supplier_meta = MetaData()
+_suppliers_tbl = Table(
+    "suppliers", _supplier_meta,
+    Column("supplier_id", PG_UUID(as_uuid=True), primary_key=True),
+    Column("supplier_type", String(30)),
 )
 
 async def create_data_request(db: AsyncSession, log_record: DataRequestLog) -> DataRequestLog:
@@ -116,26 +126,31 @@ async def create_extraction_result(
 async def list_extraction_results_by_suppliers(
     db: AsyncSession,
     supplier_ids: list[uuid.UUID],
-) -> list[DocumentExtractionResult]:
+) -> list[tuple[DocumentExtractionResult, str]]:   # ← 반환 타입 변경
     """
-    [SELECT] 주어진 협력사들의 모든 문서 추출결과를 모은다.
-    data_request_log(target_supplier_id) → document_extraction_results(request_id) 조인.
- 
-    node는 이 결과로 신뢰도/확인여부를 집계해 저신뢰 분기를 판단한다.
+    [SELECT] 주어진 협력사들의 문서 추출결과를 supplier_type과 함께 모은다.
+    document_extraction_results → data_request_log(target_supplier_id)
+      → suppliers(supplier_type) 3-단 조인.
+    node(data_gateway)는 (추출결과, supplier_type) 튜플로 신뢰도·확인여부와
+    validate_schema 누락 검사(spec 노드 정의 #2단계)를 집계한다.
     """
     if not supplier_ids:
         return []
- 
+
     stmt = (
-        select(DocumentExtractionResult)
+        select(DocumentExtractionResult, _suppliers_tbl.c.supplier_type)   # ← 튜플 select
         .join(
             DataRequestLog,
             DataRequestLog.request_id == DocumentExtractionResult.request_id,
         )
+        .join(
+            _suppliers_tbl,
+            _suppliers_tbl.c.supplier_id == DataRequestLog.target_supplier_id,
+        )
         .where(DataRequestLog.target_supplier_id.in_(supplier_ids))
     )
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return list(result.all())
 
 # ============================================================================
 # [동작] idempotency_key를 PK로 INSERT 시도 →

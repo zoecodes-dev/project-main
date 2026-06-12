@@ -39,6 +39,22 @@ class SupplyRelationCreate(BaseModel):
     part_id: str
 
 
+class SupplierCorrectionRequest(BaseModel):
+    sender_supplier_id: str
+    target_supplier_id: str
+    reason: str
+    due_date: str
+    required_documents: list[str]
+
+
+class SourceChangeDeclaration(BaseModel):
+    bom_version_id: str
+    parent_supplier_id: str
+    new_child_supplier_id: str
+    part_id: str
+    reason: str
+
+
 @router.post("", response_model=Dict[str, Any])
 @trace_tool("create_supply_relation")
 async def create_supply_relation(
@@ -93,3 +109,35 @@ async def get_geo_risks_endpoint(
     """지정학 공간 리스크(신장, 위장공장) 노출 목록."""
     # check_geo_audit_risk_zone(신장) + check_coordinate_authenticity(위장공장) 결과 통합 반환
     return await service.get_geo_risks(session)
+
+
+@router.post("/notifications/correction", response_model=Dict[str, Any])
+@trace_tool("request_supplier_correction")
+async def request_supplier_correction_endpoint(
+    body: SupplierCorrectionRequest,
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """회사 경계를 넘는 반려/시정요청 통지 발송."""
+    return await service.request_supplier_correction(
+        sender_id=body.sender_supplier_id,
+        target_supplier_id=body.target_supplier_id,
+        reason=body.reason,
+        due_date=body.due_date,
+        required_docs=body.required_documents
+    )
+
+
+@router.post("/declarations/source-change", response_model=Dict[str, Any])
+@trace_tool("declare_source_change")
+async def declare_source_change_endpoint(
+    body: SourceChangeDeclaration,
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """협력사의 자진 공급원 변경 신고."""
+    return await service.declare_source_change(
+        bom_version_id=body.bom_version_id,
+        parent_supplier_id=body.parent_supplier_id,
+        new_child_supplier_id=body.new_child_supplier_id,
+        part_id=body.part_id,
+        reason=body.reason
+    )

@@ -103,6 +103,44 @@ class SupplyChainRepository:
         await self.session.commit()
         return dict(result.first()._mapping)
 
+    @trace_tool("supply_chain_declare_source")
+    async def declare_new_source(
+        self,
+        bom_version_id: str,
+        parent_supplier_id: str,
+        child_supplier_id: str,
+        part_id: str,
+    ) -> Dict[str, Any]:
+        """협력사 자진신고: 공급원 변경 시 새로운 노드를 SUPPLIER_DECLARED 상태로 생성"""
+        query = text("""
+            INSERT INTO supply_chain_map
+                (bom_version_id, parent_supplier_id, child_supplier_id, part_id, 
+                 link_status, source_system, verification_status)
+            VALUES
+                (:bom_version_id, :parent_supplier_id, :child_supplier_id, :part_id,
+                 'supplychain_declared', 'SUPPLIER_DECLARED', 'unverified')
+            RETURNING map_id, parent_supplier_id, child_supplier_id, link_status, verification_status;
+        """)
+        result = await self.session.execute(query, {
+            "bom_version_id": bom_version_id,
+            "parent_supplier_id": parent_supplier_id,
+            "child_supplier_id": child_supplier_id,
+            "part_id": part_id,
+        })
+        await self.session.commit()
+        return dict(result.first()._mapping)
+
+    @trace_tool("check_company_boundary")
+    async def is_cross_company_boundary(self, supplier_a_id: str, supplier_b_id: str) -> bool:
+        """회사 경계 확인: corporate_reg_no가 다르거나, 둘 다 없는데 ID가 다르면 다른 법인으로 취급"""
+        query = text("""
+            SELECT COALESCE(s1.corporate_reg_no, s1.supplier_id::text) != COALESCE(s2.corporate_reg_no, s2.supplier_id::text) AS is_cross
+            FROM suppliers s1, suppliers s2
+            WHERE s1.supplier_id = :sup_a AND s2.supplier_id = :sup_b;
+        """)
+        result = await self.session.execute(query, {"sup_a": supplier_a_id, "sup_b": supplier_b_id})
+        return bool(result.scalar())
+
     @trace_tool("cycle_precheck")
     async def would_create_cycle(
         self,

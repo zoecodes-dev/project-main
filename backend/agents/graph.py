@@ -59,12 +59,6 @@ def traced_graph_node(node_name: str, node_func, node_type: str = "agent"):
     return run
 
 
-# geo_audit_node 시그니처가 (state, db)라 LangGraph의 state-only 호출 규약에 맞추는 어댑터.
-# trace는 geo_audit_node 자체 @trace_node가 담당한다.
-async def _geo_audit_with_db(state: BatchState) -> BatchState:
-    async with AsyncSessionLocal() as db:
-        return await geo_audit_node(state, db)
-
 
 def _batch_id(state: BatchState) -> UUID:
     value = state.get("batch_id")
@@ -85,7 +79,6 @@ async def _resume_batch(batch_id: UUID) -> None:
         await db.commit()
 
 
-@trace_node(node_name="hitl_interrupt", node_type="human")
 async def hitl_interrupt_node(state: BatchState) -> BatchState:
     batch_id = _batch_id(state)
     trigger_stage = state["current_stage"]
@@ -133,7 +126,6 @@ async def hitl_interrupt_node(state: BatchState) -> BatchState:
     }
 
 
-@trace_node(node_name="supplier_reverify", node_type="human")
 async def supplier_reverify_node(state: BatchState) -> BatchState:
     batch_id = _batch_id(state)
     trigger_stage = state["current_stage"]
@@ -163,7 +155,7 @@ builder = StateGraph(BatchState)
 builder.add_node("supervisor", supervisor_node)
 builder.add_node("data_gateway", traced_graph_node("data_gateway", data_gateway_node))
 builder.add_node("verification", traced_graph_node("verification", verification_node))
-builder.add_node("geo_audit", _geo_audit_with_db)
+builder.add_node("geo_audit", traced_graph_node("geo_audit", geo_audit_node))
 builder.add_node("compliance", traced_graph_node("compliance", compliance_node))
 builder.add_node("risk_scoring", traced_graph_node("risk_scoring", risk_scoring_node))
 builder.add_node("readiness", traced_graph_node("readiness", readiness_node))
