@@ -32,13 +32,13 @@ VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'KIRA Platform OEM', '123-45-678
 
 -- 원청 관리자 + ESG/구매 담당자 + 협력사 사용자
 INSERT INTO users (user_id, tenant_id, email, password_hash, name, role) VALUES
-('11111111-0000-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'admin@kira.demo',       'hashed_pw', 'Admin User',      'admin'),
-('11111111-0000-4000-8000-000000000002', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@kira.demo',         'hashed_pw', 'ESG Manager',     'owner_esg'),
-('11111111-0000-4000-8000-000000000003', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'buyer@kira.demo',       'hashed_pw', 'Purchasing Lead', 'owner_purchasing'),
-('11111111-0000-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'ceo@hanyang.demo',      'hashed_pw', 'Hanyang CEO',     'supplier_ceo'),
-('11111111-0000-4000-8000-000000000005', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@globalmining.demo', 'hashed_pw', 'GMC ESG',         'supplier_esg'),
-('11111111-0000-4000-8000-000000000006', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@daesung.demo',      'hashed_pw', 'Daesung ESG',     'supplier_esg'),
-('11111111-0000-4000-8000-000000000007', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'ceo@woojin.demo',       'hashed_pw', 'Woojin CEO',      'supplier_ceo');
+('11111111-0000-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'admin@kira.demo',       '$2b$12$XO1O./JYL5VKDkodX2RdpOZSfFA7PSkeViaPqiOSQG4szW7fGVjf.', 'Admin User',      'admin'),
+('11111111-0000-4000-8000-000000000002', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@kira.demo',         '$2b$12$XO1O./JYL5VKDkodX2RdpOZSfFA7PSkeViaPqiOSQG4szW7fGVjf.', 'ESG Manager',     'owner_esg'),
+('11111111-0000-4000-8000-000000000003', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'buyer@kira.demo',       '$2b$12$XO1O./JYL5VKDkodX2RdpOZSfFA7PSkeViaPqiOSQG4szW7fGVjf.', 'Purchasing Lead', 'owner_purchasing'),
+('11111111-0000-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'ceo@hanyang.demo',      '$2b$12$XO1O./JYL5VKDkodX2RdpOZSfFA7PSkeViaPqiOSQG4szW7fGVjf.', 'Hanyang CEO',     'supplier_ceo'),
+('11111111-0000-4000-8000-000000000005', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@globalmining.demo', '$2b$12$XO1O./JYL5VKDkodX2RdpOZSfFA7PSkeViaPqiOSQG4szW7fGVjf.', 'GMC ESG',         'supplier_esg'),
+('11111111-0000-4000-8000-000000000006', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@daesung.demo',      '$2b$12$XO1O./JYL5VKDkodX2RdpOZSfFA7PSkeViaPqiOSQG4szW7fGVjf.', 'Daesung ESG',     'supplier_esg'),
+('11111111-0000-4000-8000-000000000007', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'ceo@woojin.demo',       '$2b$12$XO1O./JYL5VKDkodX2RdpOZSfFA7PSkeViaPqiOSQG4szW7fGVjf.', 'Woojin CEO',      'supplier_ceo');
 
 
 -- ============================================================
@@ -456,9 +456,8 @@ INSERT INTO audit_trail (batch_id, step_number, node_type, node_name, input_hash
 -- ============================================================
 
 -- 1) 다단계 결재선용 조직도(manager_id). 기존 role: admin(0001) / owner_esg(0002) / owner_purchasing(0003)
--- Admin(0001) = 최고 임원. owner_esg(0002) 상급자 → Admin(0001). owner_purchasing(0003) 상급자 → owner_esg(0002).
-UPDATE users SET manager_id = '11111111-0000-4000-8000-000000000001'
-WHERE user_id = '11111111-0000-4000-8000-000000000002';
+-- Admin(0001) = 최고 임원. owner_purchasing(0003) 상급자 → owner_esg(0002).
+-- (002→008 결재선은 아래 SEED DELTA 블록에서 지정한다.)
 UPDATE users SET manager_id = '11111111-0000-4000-8000-000000000002'
 WHERE user_id = '11111111-0000-4000-8000-000000000003';
 
@@ -478,15 +477,11 @@ INSERT INTO due_diligence_policies (policy_id, title, version, status, document_
 -- A 방향: role enum 변경 없음. 직책 계층(담당↔부서장)은 manager_id 로만 표현.
 -- ESG 담당(002)이 컴플라이언스 보고서 기안 → ESG 부서장(008) 결재 → 끝. (2단계)
 
--- 1) 기존 INSERT INTO users 의 컬럼 목록에 manager_id 추가하고, 7행 모두 manager_id 값 명시.
---    (admin/supplier 들은 NULL, ESG Manager 만 008 을 가리킴)
+-- 1) ESG 부서장(008) 단건 INSERT (결재선 최상단, manager_id NULL).
+--    001~007 은 위 라인 34 블록에서 이미 적재됨 — 재INSERT 시 PK 충돌이므로 008만 추가.
 INSERT INTO users (user_id, tenant_id, email, password_hash, name, role, manager_id) VALUES
-('11111111-0000-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'admin@kira.demo',       'hashed_pw', 'Admin User',      'admin',            NULL),
-('11111111-0000-4000-8000-000000000002', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@kira.demo',         'hashed_pw', 'ESG Manager',     'owner_esg',        '11111111-0000-4000-8000-000000000008'),
-('11111111-0000-4000-8000-000000000003', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'buyer@kira.demo',       'hashed_pw', 'Purchasing Lead', 'owner_purchasing', NULL),
-('11111111-0000-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'ceo@hanyang.demo',      'hashed_pw', 'Hanyang CEO',     'supplier_ceo',     NULL),
-('11111111-0000-4000-8000-000000000005', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@globalmining.demo', 'hashed_pw', 'GMC ESG',         'supplier_esg',     NULL),
-('11111111-0000-4000-8000-000000000006', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@daesung.demo',      'hashed_pw', 'Daesung ESG',     'supplier_esg',     NULL),
-('11111111-0000-4000-8000-000000000007', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'ceo@woojin.demo',       'hashed_pw', 'Woojin CEO',      'supplier_ceo',     NULL),
--- ▶추가: ESG 부서장 (결재선 최상단, manager_id NULL)
-('11111111-0000-4000-8000-000000000008', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg.head@kira.demo',    'hashed_pw', 'ESG Head',        'owner_esg',        NULL);
+('11111111-0000-4000-8000-000000000008', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg.head@kira.demo',    '$2b$12$XO1O./JYL5VKDkodX2RdpOZSfFA7PSkeViaPqiOSQG4szW7fGVjf.', 'ESG Head',        'owner_esg',        NULL);
+
+-- 2) ESG 담당(002)의 상급자를 ESG 부서장(008)으로 지정 (기안→부서장 결재 2단계).
+UPDATE users SET manager_id = '11111111-0000-4000-8000-000000000008'
+WHERE user_id = '11111111-0000-4000-8000-000000000002';

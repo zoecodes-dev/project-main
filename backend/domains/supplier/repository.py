@@ -44,7 +44,6 @@ async def get_supplier_by_id(
 async def get_suppliers(
     db: AsyncSession,
     status: Optional[str] = None,
-    tier: Optional[int] = None,
     risk_level: Optional[str] = None,
     feoc_status: Optional[str] = None,
     page: int = 1,
@@ -54,8 +53,6 @@ async def get_suppliers(
     stmt = select(Supplier)
     if status:
         stmt = stmt.where(Supplier.status == status)
-    if tier is not None:          # tier=0도 유효 필터가 되도록 None 체크
-        stmt = stmt.where(Supplier.tier == tier)
     if risk_level:
         stmt = stmt.where(Supplier.risk_level == risk_level)
     if feoc_status:
@@ -138,4 +135,3 @@ async def update_supplier_risk_level(
     )
     await db.execute(stmt)
     await db.flush()
- 
