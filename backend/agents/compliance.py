@@ -307,18 +307,24 @@ def _validate_cited_clauses(result: dict, regulation_code: str) -> dict:
 
 _STUB_REGULATIONS: set[str] = {"CBAM", "CONFLICT_MINERALS", "CRMA"}
 
-
+# [BYPASS:A1] 범위 외 규제 자동 통과 스텁 — 범위 확장 시 실판정 교체
 async def _stub_passed_judge(regulation_code: str) -> dict:
     return {
         "verdict": "compliance_passed",
         "needs_human_review": False,
         "cited_clauses": [
-            {"citation": f"{regulation_code} §stub", "content": "stub — always passed"}
+            {
+                "citation": f"{regulation_code} (범위 외)",
+                "content": "프로젝트 검증 범위(UFLPA·IRA·EU배터리·EUDR·CSDDD) 외 규제 — 자동 통과 처리",
+            }
         ],
         "confidence_score": 1.0,
-        "reasoning_text": f"{regulation_code} is a stub judge — automatically passed.",
+        "reasoning_text": (
+            f"{regulation_code}는 현재 검증 범위 외 규제로 자동 통과 처리되었습니다. "
+            "실판정이 필요한 경우 범위 확장이 필요합니다."
+        ),
+        "is_out_of_scope": True,
     }
-
 
 # ---------------------------------------------------------------------------
 # 5-A. 탄소발자국·재활용 임계치 상수 (Day2)
@@ -680,7 +686,7 @@ async def _insert_compliance_result(
                  confidence_score, reasoning_text, created_at)
             VALUES
                 (:result_id, :batch_id, :regulation_id, :supplier_id,
-                 :verdict, :needs_human_review, :cited_clauses::jsonb,
+                 :verdict, :needs_human_review, CAST(:cited_clauses AS jsonb),
                  :confidence_score, :reasoning_text, :created_at)
         """),
         {
