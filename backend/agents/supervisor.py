@@ -14,7 +14,8 @@ def route(state: "BatchState") -> str:
         try:
             from backend.agents.compliance import REGULATION_BY_DESTINATION
         except ImportError:
-            REGULATION_BY_DESTINATION = {}
+            # 규제 매핑을 못 불러오면 무검사 통과가 되므로 절대 폴백하지 않는다.
+            raise
 
         destination = state.get("destination")
         state["applicable_regulations"] = REGULATION_BY_DESTINATION.get(destination, [])
