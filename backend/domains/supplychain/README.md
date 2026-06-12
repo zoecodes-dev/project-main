@@ -54,6 +54,7 @@
 - [x] Day 3: `geo_audit` 노드 LangGraph 파이프라인 결합 및 `GeoRiskDetected` 발행 통합 적용 완료
 - [x] Day 4: 튜터형 학습 완료 (PostGIS 공간 쿼리, 재귀 CTE, 이벤트/큐 분산 처리, 멱등성 등 5대 핵심 아키텍처 원리 정립)
 
+<<<<<<< Updated upstream
 ## 10. W4 구현 진행 현황 (공급망 조회 및 EUDR)
 - [x] Day 1~2: N차 공급망 재귀 트리, 대체 공급망, Geo-Risk 노출 조회 API 확충 완료 (`router.py`)
 - [ ] Day 3: (전원) 프론트 화면 구조 합의 (작업 없음)
@@ -67,3 +68,12 @@
 | `GET` | `/supply-chain/tree` | `product_id` 또는 `bom_version_id` | N차 공급망 재귀 CTE 트리 조회 | 평면 리스트 (hop_level, part, supplier, link_status 포함) |
 | `GET` | `/supply-chain/alternatives` | `part_id` | 특정 부품의 대체 공급사 풀 조회 | 대체 협력사 목록 |
 | `GET` | `/supply-chain/geo-risks` | 없음 | 지정학 공간 리스크(신장, 위장공장) 노출 목록 | xinjiang_adjacent, country_mismatch 목록 |
+=======
+## 10. W4 구현 진행 현황
+- [x] [BackEnd] 4_1. N차 공급망 재귀 CTE 트리 및 PostGIS 공간 리스크 조회 API 구현
+- [x] [BackEnd] 4_2. EUDR 산림 훼손 검사 안착 및 Sad 시나리오(GLC) 종단 시연 검증 (ST_DWithin 및 ST_Within 기반 분할 검증)
+- [x] 4_3. 튜터형 학습 및 PostGIS·재귀 CTE 공간 시계열 아키텍처 완전 정복
+- [x] [BackEnd] 4_4. HITL 검토 지리 Context 조회 유틸리티 및 좌표 회색지대 판별 로직 구현
+- [x] [BackEnd] 4_5. 회사 경계 기반 협력사 통지 및 공급원 변경 자진신고 시스템 구현
+- [x] [BackEnd] 4_6. 지리 리스크 및 회사 경계 아키텍처 튜터형 학습 및 최종 정합성 검증
+>>>>>>> Stashed changes

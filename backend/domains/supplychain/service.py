@@ -137,16 +137,6 @@ class SupplyChainService:
         mismatch_risks = await self.repository.check_coordinate_authenticity(db)
         eudr_risks = await self.repository.check_eudr_deforestation(db)
 
-        def _parse_geojson_to_latlng(geojson_str: str | None) -> List[float] | None:
-            if not geojson_str:
-                return None
-            try:
-                geom = json.loads(geojson_str)
-                lon, lat = geom.get("coordinates", [0.0, 0.0])
-                return [lat, lon]  # 위경도 순서(latitude, longitude)로 반환
-            except Exception:
-                return None
-
         def _format_risk_items(risk_list: List[Dict[str, Any]], risk_type: str) -> List[Dict[str, Any]]:
             formatted = []
             for r in risk_list:
@@ -154,7 +144,8 @@ class SupplyChainService:
                     "factory_id": str(r["factory_id"]),
                     "supplier_id": str(r["supplier_id"]),
                     "company_name": r["company_name"],
-                    "coordinates": _parse_geojson_to_latlng(r.get("coordinates"))
+                    "coordinates": self.parse_geojson_to_latlng(r.get("coordinates")),
+                    "is_gray_zone": False
                 }
                 
                 # 회색지대(Gray Zone) 플래그 및 경고 메시지 세팅
@@ -162,15 +153,18 @@ class SupplyChainService:
                     item["is_in_risk_zone"] = r.get("is_in_risk_zone")
                     item["distance_km"] = float(r["distance_km"]) if r.get("distance_km") is not None else None
                     if item["is_in_risk_zone"]:
+                        item["is_gray_zone"] = True
                         item["gray_zone_warning"] = "신장 지역 50km 이내 인접 (위험구역)"
                 elif risk_type == "country_mismatch":
                     item["country"] = r.get("country")
                     item["country_match"] = r.get("country_match")
                     if not item["country_match"]:
+                        item["is_gray_zone"] = True
                         item["gray_zone_warning"] = f"신고 국가({item.get('country')})와 실제 좌표 불일치"
                 elif risk_type == "eudr":
                     item["is_deforested"] = r.get("is_deforested")
                     if item["is_deforested"]:
+                        item["is_gray_zone"] = True
                         item["gray_zone_warning"] = "EUDR 산림 훼손 의심 지역 내부 위치"
                         
                 formatted.append(item)
@@ -209,13 +203,16 @@ class SupplyChainService:
         }
 
     # ---------- Geo Audit ----------
-    def _format_coords(self, geojson_str: str | None) -> list[float]:
-        """프론트엔드 및 HITL 화면에서 사용하기 쉽도록 [latitude, longitude] 형태로 반환"""
+    def parse_geojson_to_latlng(self, geojson_str: str | None) -> list[float]:
+        """
+        PostGIS 등에서 반환된 GeoJSON 문자열을 파싱하여,
+        프론트엔드 및 HITL 화면에서 즉시 맵에 핀을 꽂기 쉽도록 정형화된 [latitude, longitude] 배열로 반환합니다.
+        """
         if not geojson_str:
             return []
         try:
             geo = json.loads(geojson_str)
-            if geo.get("type") == "Point":
+            if geo.get("type") == "Point" and "coordinates" in geo:
                 lon, lat = geo["coordinates"]
                 return [lat, lon]
         except Exception:
@@ -236,7 +233,7 @@ class SupplyChainService:
         detected_risks: List[Dict[str, Any]] = []
         for result in audit_results:
             if result.get("is_in_risk_zone"):
-                formatted_coords = self._format_coords(result["coordinates"])
+                formatted_coords = self.parse_geojson_to_latlng(result["coordinates"])
                 event = GeoRiskDetectedEvent(
                     batch_id=batch_id,
                     factory_id=result["factory_id"],
@@ -250,7 +247,7 @@ class SupplyChainService:
 
         for result in mismatch_results:
             if not result.get("country_match"):
-                formatted_coords = self._format_coords(result["coordinates"])
+                formatted_coords = self.parse_geojson_to_latlng(result["coordinates"])
                 event = GeoRiskDetectedEvent(
                     batch_id=batch_id,
                     factory_id=result["factory_id"],
@@ -264,13 +261,14 @@ class SupplyChainService:
 
         for result in eudr_results:
             if result.get("is_deforested"):
+                formatted_coords = self.parse_geojson_to_latlng(result.get("coordinates"))
                 event = GeoRiskDetectedEvent(
                     batch_id=batch_id,
                     factory_id=result["factory_id"],
                     risk_type="eudr_deforestation",
                     supplier_id=result["supplier_id"],
                     company_name=result["company_name"],
-                    coordinates=result["coordinates"],
+                    coordinates=formatted_coords,
                 )
                 await self._publish_geo_risk(event)
                 detected_risks.append(asdict(event))
