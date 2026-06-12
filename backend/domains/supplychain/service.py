@@ -7,6 +7,7 @@ domains/supplychain/service.py  (담당: 팀원 D · 영수)
 """
 import json
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,9 +78,9 @@ class SupplyChainService:
         required_docs: list[str]
     ) -> Dict[str, Any]:
         """원청 → 협력사 반려/시정요청 통지. 회사 경계를 넘을 때만 유효함."""
-        is_cross = await self.repository.is_cross_company_boundary(sender_id, target_supplier_id)
-        if not is_cross:
-            raise ValueError("동일 법인 내부이거나 통지 대상이 아닙니다. (회사 경계 의무 없음)")
+        boundary_check = await self.evaluate_cross_entity_boundary(sender_id, target_supplier_id)
+        if not boundary_check.get("is_cross_boundary"):
+            raise ValueError(f"동일 법인 내부이거나 통지 대상이 아닙니다. (사유: {boundary_check.get('reason')})")
 
         payload = {
             "sender_supplier_id": sender_id,
@@ -87,10 +88,21 @@ class SupplyChainService:
             "reason": reason,
             "due_date": due_date,
             "required_documents": required_docs,
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "sent_by": sender_id,
         }
-        # 알림/요청 저장은 Submission 도메인이 수신 후 처리
-        await publish("SupplierCorrectionRequested", payload)
-        return {"status": "success", "message": "협력사 시정 요청 통지 이벤트가 발행되었습니다."}
+        # 알림/요청 저장은 notification_worker 등 수신 후 처리
+        await publish("supplier.notification_sent", payload)
+        
+        return {
+            "status": "success", 
+            "message": "협력사 시정 요청 통지 이벤트가 발행되었습니다.",
+            "delivery_record": {
+                "sent_by": payload["sent_by"],
+                "sent_at": payload["sent_at"],
+                "target_supplier_id": payload["target_supplier_id"]
+            }
+        }
 
     @trace_node("declare_source_change", "agent")
     async def declare_source_change(
@@ -110,9 +122,18 @@ class SupplyChainService:
         )
 
         # 자진신고 발생 시, 상위 BOM 검증을 위해 이벤트 발행 (Compliance/Verification 트리고)
-        payload = {**new_map, "reason": reason}
-        await publish("SourceChangeDeclared", payload)
-        return new_map
+        payload = {
+            **new_map, 
+            "reason": reason,
+            "declared_at": datetime.now(timezone.utc).isoformat(),
+            "requires_full_revalidation": True  # 상위 BOM 영향에 따른 재검증 트리거 신호
+        }
+        await publish("supplier.source_change_declared", payload)
+        return {
+            "status": "success",
+            "message": "공급원 변경 자진신고가 접수되어 상위 파이프라인 재검증이 트리거되었습니다.",
+            "data": payload
+        }
     async def get_geo_risks(self, db: AsyncSession) -> Dict[str, Any]:
         """
         조회 전용 인터페이스: 이벤트를 발행하지 않고 지정학 리스크 결과를 반환합니다.
