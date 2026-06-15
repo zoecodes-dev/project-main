@@ -1233,13 +1233,13 @@ CREATE INDEX idx_audit_snapshots_batch ON audit_data_snapshots(batch_id);
 
 INSERT INTO regulations (name, regulation_code, region, version, effective_from, description, embedding_status)
 VALUES
-  ('EU Deforestation Regulation',          'EUDR',              'EU', '2023/1115', '2024-12-30', 'EU 산림파괴방지법 (FSC 인증서 하위 검증 포함)', 'pending'),
-  ('Corporate Sustainability Due Diligence','CSDDD',            'EU', '2024/1760', '2027-01-01', 'EU 공급망 실사지침', 'pending'),
-  ('Uyghur Forced Labor Prevention Act',   'UFLPA',             'US', '2021',      '2022-06-21', '미국 위구르 강제노동방지법', 'pending'),
-  ('Inflation Reduction Act (FEOC)',        'IRA',               'US', '2022',      '2023-01-01', '미국 인플레이션감축법 FEOC', 'pending'),
-  ('EU Battery Regulation',                'EU_BATTERY',        'EU', '2023/1542', '2025-02-18', 'EU 배터리법 전체', 'pending'),
-  ('EU Battery Regulation Art.7',          'EU_BATTERY_ART7',   'EU', '2023/1542', '2025-02-18', '탄소발자국 신고 의무', 'pending'),
-  ('EU Battery Regulation Art.47',         'EU_BATTERY_ART47',  'EU', '2023/1542', '2027-08-18', '공급망 실사 DDP 수립', 'pending'),
-  ('Carbon Border Adjustment Mechanism',   'CBAM',              'EU', '2023/956',  '2026-01-01', 'EU 탄소국경조정제도', 'pending'),
-  ('EU Conflict Minerals Regulation',      'CONFLICT_MINERALS', 'EU', '2017/821',  '2021-01-01', 'EU 분쟁광물 규정', 'pending'),
-  ('Critical Raw Materials Act',           'CRMA',              'EU', '2024/1252', '2024-05-23', 'EU 핵심원자재법', 'pending');
+('EU Deforestation Regulation',           'EUDR',             'EU', '2023/1115', '2024-12-30', 'EU 산림파괴방지법(EUDR). 소고기·코코아·커피·팜유·대두·목재·고무 등 7대 원자재 및 관련 제품의 EU 수출입 시, 2020년 12월 31일 이후 산림파괴 지역에서 생산되지 않았음을 증명하는 GPS 좌표 기반 실사 자료를 제출해야 한다. FSC 인증 등 제3자 인증도 보조 증빙으로 활용 가능. 위반 시 매출액의 4% 또는 최소 €150만 과징금.', 'pending'),
+('Corporate Sustainability Due Diligence', 'CSDDD',           'EU', '2024/1760', '2027-01-01', 'EU 기업 지속가능성 실사 지침(CSDDD). 종업원 1,000명 이상·매출 €4.5억 초과 기업은 자사 및 공급망 전반에 걸쳐 아동노동·강제노동·환경훼손 등 인권·환경 리스크를 식별·예방·완화해야 한다. 실사 계획 수립, 고충처리 절차 운영, 연간 공시 의무 포함. 위반 시 매출액의 5% 과징금.', 'pending'),
+('Uyghur Forced Labor Prevention Act',    'UFLPA',            'US', '2021',      '2022-06-21', '미국 위구르강제노동방지법(UFLPA). Section 3(a)(1)에 따라 신장위구르자치구(Xinjiang)에서 생산·제조·채굴된 모든 물품은 강제노동으로 생산된 것으로 간주(rebuttable presumption)하며 수입이 금지된다. 수입자가 강제노동 미사용을 명확하고 설득력 있는 증거로 반증하지 못하면 CBP가 통관을 거부한다. 공급망 내 신장 원산지 원자재 포함 여부 추적 의무.', 'pending'),
+('Inflation Reduction Act (FEOC)',         'IRA',              'US', '2022',      '2023-01-01', '미국 인플레이션감축법(IRA) FEOC 조항. Section 30D에 따라 전기차 세액공제(최대 $7,500) 적용 시, 배터리 핵심광물 및 부품이 우려외국기업(FEOC: 중국·러시아·북한·이란 정부가 직간접 지분 25% 이상 보유한 기업)으로부터 조달되어서는 안 된다. 2024년부터 핵심광물, 2025년부터 배터리 부품에 순차 적용. FEOC 간접 지분 구조는 별도 법률 검토 필요.', 'pending'),
+('EU Battery Regulation',                 'EU_BATTERY',       'EU', '2023/1542', '2025-02-18', 'EU 배터리법(2023/1542) Annex XII 재활용 함량 기준. 2031년부터 산업용·EV 배터리에 코발트(Co) 16%, 납(Pb) 85%, 리튬(Li) 6%, 니켈(Ni) 6% 이상의 재활용 원료 함량 의무화. 제조사는 배터리 여권(Battery Passport)에 재활용 함량 비율 및 원산지를 기재해야 하며, 제3자 검증을 거쳐야 한다. 미달 시 EU 시장 출시 금지.', 'pending'),
+('EU Battery Regulation Art.7',           'EU_BATTERY_ART7',  'EU', '2023/1542', '2025-02-18', 'EU 배터리법 Article 7 탄소발자국 선언 의무. LMT·EV·산업용 배터리는 전 생명주기(원료 채굴~제조~운송) 탄소발자국을 kgCO2eq/kWh 단위로 산출해 신고해야 한다. Annex II 기준: 100 kgCO2eq/kWh 초과 시 최고 등급(A) 취득 불가, 75 kgCO2eq/kWh 초과 시 경고 등급. 선언 누락 또는 허위 신고 시 EU 시장 출시 금지 및 과징금 부과.', 'pending'),
+('EU Battery Regulation Art.47',          'EU_BATTERY_ART47', 'EU', '2023/1542', '2023-07-28', 'EU 배터리법 Article 47 공급망 실사 의무. 연간 배터리 생산량 일정 규모 이상 사업자는 코발트·천연흑연·리튬·니켈 등 핵심 원자재의 공급망 리스크를 식별·관리·공시해야 한다. OECD 다국적기업 가이드라인 및 UN 기업과 인권 이행원칙 준수 요구. 실사 정책 수립, 공급업체 감사, 연간 보고서 제출 의무.', 'pending'),
+('Carbon Border Adjustment Mechanism',    'CBAM',             'EU', '2023/956',  '2026-01-01', 'EU 탄소국경조정제도(CBAM). 철강·알루미늄·시멘트·비료·전력·수소 6개 섹터 수입품에 대해 EU ETS 탄소가격과 원산지국 탄소가격의 차액을 CBAM 인증서로 납부해야 한다. 2024~2025년 전환기(보고 의무만), 2026년부터 인증서 구매 의무 본격 시행. 내재 탄소배출량 산정·보고·검증(MRV) 체계 구축 필요.', 'pending'),
+('EU Conflict Minerals Regulation',       'CONFLICT_MINERALS','EU', '2017/821',  '2021-01-01', 'EU 분쟁광물 규정(2017/821). 주석(Sn)·탄탈럼(Ta)·텅스텐(W)·금(Au) 4대 광물 및 관련 금속을 분쟁·고위험 지역에서 연간 일정량 이상 수입하는 EU 내 제련소·정제소는 OECD 실사 가이드라인에 따라 공급망 실사를 수행하고 제3자 감사를 받아야 한다. 감사 결과 및 공급망 정보 연간 공시 의무.', 'pending'),
+('Critical Raw Materials Act',            'CRMA',             'EU', '2024/1252', '2024-05-23', 'EU 핵심원자재법(CRMA). 리튬·코발트·니켈·망간 등 34종 핵심원자재의 공급망 다변화·자급률 제고를 위해 2030년까지 EU 역내 채굴 10%, 가공 40%, 재활용 15% 목표를 설정한다. 대기업은 전략적 핵심원자재 공급망 취약성 감사 의무. 인·허가 절차 간소화 및 전략 프로젝트 지정 제도 포함.', 'pending');
