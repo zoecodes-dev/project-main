@@ -73,15 +73,14 @@ async def create_supply_relation(
 @router.get("/tree")
 @trace_tool("get_supply_tree")
 async def get_supply_chain_tree_endpoint(
-    product_id: Optional[UUID] = None,
-    bom_version_id: Optional[UUID] = None,
+    product_id: UUID,
     service: SupplyChainService = Depends(get_supply_chain_service),
 ):
     """N차 공급망 트리 (재귀 CTE)."""
     # 프론트 트리 렌더용 평면 리스트(hop_level, parent-child 포함) 반환
     # service.get_supply_tree는 product_id(str)만 인자로 받음
     return await service.get_supply_tree(
-        product_id=str(product_id) if product_id else ""
+        product_id=str(product_id)
     )
 
 

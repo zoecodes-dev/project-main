@@ -214,13 +214,15 @@ class SupplyChainService:
                 "requires_self_declaration": False,
                 "reason": "동일 협력사 내부 요청 (의무 없음)"
             }
-            
-        # TODO: 실제 운영 환경에서는 business_reg_no(사업자번호)나 corporate_reg_no(법인등록번호)를 대조.
-        # 시연을 위해 서로 다른 ID일 경우 법인 경계를 넘은 외부 거래로 취급하여 통지/자진신고 의무 부여.
+
+        is_cross = await self.repository.is_cross_company_boundary(
+            requester_supplier_id, target_supplier_id
+        )
+
         return {
-            "is_cross_boundary": True,
-            "requires_self_declaration": True,
-            "reason": "외부 법인 경계 횡단 (통지 및 자진신고 의무 발생)"
+            "is_cross_boundary": is_cross,
+            "requires_self_declaration": is_cross,
+            "reason": "외부 법인 경계 횡단 (통지 및 자진신고 의무 발생)" if is_cross else "동일 법인 내부 이동 (회사 경계 의무 없음)"
         }
 
     # ---------- Geo Audit ----------
