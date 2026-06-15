@@ -798,7 +798,8 @@ CREATE TABLE processed_jobs (
     queue_name       VARCHAR(50)
         CONSTRAINT chk_processed_queue CHECK (queue_name IN (
             'document_parse_queue', 'verification_queue', 'risk_queue',
-            'hitl_queue', 'notification_queue', 'dpp_publish_queue', 'dead_letter_queue'
+            'hitl_queue', 'notification_queue', 'dpp_publish_queue',
+            'batch_pipeline_queue', 'dead_letter_queue'
         )),
     job_id           VARCHAR(100), -- ARQ가 반환한 job_id
     status           VARCHAR(20) DEFAULT 'processing'
