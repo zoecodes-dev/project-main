@@ -1,18 +1,35 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.auth import CurrentUser, get_current_user
 from backend.infrastructure.database import get_db
+from backend.infrastructure.security import create_access_token, verify_password
 from backend.domains.users.repository import UserRepository
 from backend.domains.users.service import UserService
 
 router = APIRouter(tags=["Users"])
 
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 def _get_service(db: AsyncSession = Depends(get_db)) -> UserService:
     return UserService(UserRepository(db))
+
+
+@router.post("/auth/login")
+async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+    repo = UserRepository(db)
+    user = await repo.get_by_email(body.email)
+    if user is None or not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다.")
+    token = create_access_token({"sub": str(user.user_id), "role": user.role})
+    return {"access_token": token, "token_type": "bearer"}
 
 
 @router.get("/users/{user_id}")
