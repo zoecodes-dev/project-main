@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import text
 
 from backend.infrastructure.database import get_db
+from backend.infrastructure.auth import CurrentUser, get_current_user
 from backend.domains.verification.service import verify_feoc_rule
 from backend.infrastructure.trace import trace_tool
 
@@ -20,13 +21,20 @@ class FEOCDummyRequest(BaseModel):
     direct_ownership: float
     indirect_ownership: float = 0.0
 
+# [BYPASS:B7] 테스트 전용 엔드포인트 — 인증 보호됨, 데모 후 제거 검토
 @router.post("/feoc-test", status_code=status.HTTP_200_OK)
-async def trigger_dummy_feoc_rule(req: FEOCDummyRequest, db: AsyncSession = Depends(get_db)):
+async def trigger_dummy_feoc_rule(
+    req: FEOCDummyRequest,
+    db: AsyncSession = Depends(get_db),
+    _: CurrentUser = Depends(get_current_user)
+):
     """
     [API] POST /verification/feoc-test
     더미 지분율 데이터를 주입하여 FEOC 25% 초과 규제 룰을 테스트합니다.
     - 25% 초과 시: VerificationFailed 발행 및 Queue 적재
     - 25% 이하 시: VerificationCompleted 발행
+
+    [테스트 전용] 운영 데모 후 제거 후보
     """
     try:
         is_passed = await verify_feoc_rule(

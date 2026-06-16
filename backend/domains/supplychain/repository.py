@@ -140,36 +140,45 @@ class SupplyChainRepository:
         """HITL 컨텍스트용 협력사 마스터 및 공장 GPS 정보 조회"""
         master_query = text("""
             SELECT supplier_id, company_name, company_name_en, supplier_type,
-                   status, risk_level, feoc_status, completeness_score
+                   status, risk_level, feoc_status, completeness_score,
+                   (SELECT sf.country FROM supplier_factories sf
+                    WHERE sf.supplier_id = suppliers.supplier_id AND sf.is_active = TRUE
+                    ORDER BY (sf.factory_role = 'headquarters') DESC, sf.factory_id
+                    LIMIT 1) AS country,
+                   NULL::INT AS tier
             FROM suppliers
             WHERE supplier_id = :supplier_id
         """)
         master_res = await self.session.execute(master_query, {"supplier_id": supplier_id})
         master_row = master_res.mappings().first()
-        
+
         if not master_row:
             return {"supplier_master": {}, "factory_gps": []}
-            
+
         master_dict = dict(master_row)
         if master_dict.get("supplier_id"):
             master_dict["supplier_id"] = str(master_dict["supplier_id"])
-            
+
         factory_query = text("""
             SELECT factory_id, factory_name, address, country, region, factory_role,
-                   ST_Y(location) AS latitude, ST_X(location) AS longitude
+                   ST_Y(location) AS lat, ST_X(location) AS lng,
+                   COALESCE(ST_Within(location, ST_GeomFromText(:xinjiang_wkt, 4326)), FALSE) AS in_xinjiang
             FROM supplier_factories
             WHERE supplier_id = :supplier_id AND is_active = TRUE
         """)
-        factory_res = await self.session.execute(factory_query, {"supplier_id": supplier_id})
+        factory_res = await self.session.execute(factory_query, {
+            "supplier_id": supplier_id,
+            "xinjiang_wkt": XINJIANG_REGION_WKT,
+        })
         factory_rows = factory_res.mappings().all()
-        
+
         gps_list = []
         for row in factory_rows:
             f_dict = dict(row)
             if f_dict.get("factory_id"):
                 f_dict["factory_id"] = str(f_dict["factory_id"])
             gps_list.append(f_dict)
-            
+
         return {"supplier_master": master_dict, "factory_gps": gps_list}
 
     @trace_tool("check_company_boundary")
