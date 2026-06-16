@@ -56,20 +56,32 @@ class DppRecord(Base):
     approved_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
 
 
-class DppDeliveryHistory(Base):
+class TransmissionLog(Base):
     """
-    최종 발급된 DPP의 대외 전송(이메일 등) 이력을 기록하는 모델입니다.
+    대외 전송 로그 + 도달확인(Ack) 모델이에요.
+    schema.sql의 transmission_logs 테이블과 1:1로 매핑됩니다.
+    (구 DppDeliveryHistory가 가리키던 dpp_delivery_history 테이블은 schema.sql에 없어 즉사하던 버그였어요.
+     SSOT 원칙에 따라 동일 역할의 transmission_logs로 재배선했습니다.
+     recipient_id는 customer/supplier/authority polymorphic — FK 없음(스키마 의도).
+     다른 도메인(공급망/당국 대응 등)도 같은 테이블을 함께 쓸 수 있어 extend_existing 처리해요.)
     """
-    __tablename__ = "dpp_delivery_history"
+    __tablename__ = "transmission_logs"
+    __table_args__ = {'extend_existing': True}
 
-    delivery_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("uuid_generate_v4()"), default=uuid.uuid4)
-    dpp_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("dpp_records.dpp_id"), nullable=False)
-    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=True)  # 도메인 격리 원칙으로 문자열(UUID)만 저장
+    transmission_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("uuid_generate_v4()"), default=uuid.uuid4)
+    batch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("batches.batch_id"), nullable=True)
+    sender_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    recipient_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'customer' | 'supplier' | 'authority'
+    recipient_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=True)  # polymorphic, FK 없음(의도)
     recipient_email: Mapped[str] = mapped_column(String(255), nullable=False)
-    subject: Mapped[str] = mapped_column(String(255), nullable=False)
-    body_text: Mapped[str] = mapped_column(Text, nullable=False)
-    sent_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    transmission_type: Mapped[str] = mapped_column(String(30), nullable=False)  # 'dpp_report' 등
+    status: Mapped[str] = mapped_column(String(20), default="sent", server_default="sent", nullable=True)
+    payload_summary: Mapped[str] = mapped_column(Text, nullable=True)
+    attachment_urls: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    ack_token: Mapped[str] = mapped_column(String(64), unique=True, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=True)
+    delivered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # ==============================================================================
