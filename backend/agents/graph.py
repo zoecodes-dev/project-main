@@ -5,6 +5,7 @@ from uuid import UUID
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
+from sqlalchemy import select
 
 from backend.agents.compliance import compliance_node
 from backend.agents.data_gateway import data_gateway_node
@@ -26,6 +27,7 @@ from backend.agents.automation import (
     readiness_node,
     issuance_node,
 )
+from backend.domains.dpp.models import Batch
 
 
 def supervisor_node(state: BatchState) -> BatchState:
@@ -34,13 +36,6 @@ def supervisor_node(state: BatchState) -> BatchState:
 
 def route_batch(state: BatchState) -> str:
     return route(state)
-
-
-def placeholder_node(next_stage: str):
-    def advance_stage(state: BatchState) -> BatchState:
-        return {**state, "current_stage": next_stage}
-
-    return advance_stage
 
 
 def traced_graph_node(node_name: str, node_func, node_type: str = "agent"):
@@ -210,12 +205,43 @@ graph = builder.compile(checkpointer=InMemorySaver())
 #
 # reject 시에는 재개하지 않는다 — batch 상태 처리는 차윤 쪽 hitl.service 가 담당.
 
+async def _load_state_from_db(batch_id: str) -> BatchState:
+    async with AsyncSessionLocal() as db:
+        row = await db.scalar(select(Batch).where(Batch.batch_id == UUID(batch_id)))
+        if row is None:
+            raise ValueError(f"batch not found: {batch_id}")
+        return BatchState(
+            batch_id=str(row.batch_id),
+            product_id=str(row.product_id) if row.product_id else None,
+            destination=row.destination,
+            current_stage=row.current_stage,
+            batch_status=row.status,
+            confidence_score=float(row.confidence_score) if row.confidence_score else None,
+        )
+
+
 async def resume_graph(batch_id: str, resolution: str) -> None:
-    """approve 결정 후 interrupt() 로 멈춘 graph 를 재개한다."""
+    """approve 결정 후 interrupt() 로 멈춘 graph 를 재개한다.
+
+    체크포인트가 없으면 DB state 로 graph 를 새로 invoke 한다.
+    """
     if resolution != "approve":
         return
     config = {"configurable": {"thread_id": batch_id}}
-    await graph.ainvoke(
-        Command(resume={"event_name": "HITLApproved"}),
-        config=config,
-    )
+    snapshot = await graph.aget_state(config)
+    if not snapshot.values:
+        state = await _load_state_from_db(batch_id)
+        await _resume_batch(UUID(batch_id))
+        state = {
+            **state,
+            "batch_status": "batch_processing",
+            "confidence_score": max(float(state.get("confidence_score") or 0.0), 0.85),
+            "hitl_required": False,
+            "error_reason": None,
+        }
+        await graph.ainvoke(state, config=config)
+    else:
+        await graph.ainvoke(
+            Command(resume={"event_name": "HITLApproved"}),
+            config=config,
+        )
