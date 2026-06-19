@@ -13,7 +13,16 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
  
-from backend.domains.supplier.models import Supplier, SupplierRiskProfile
+from backend.domains.supplier.models import (
+    Supplier,
+    SupplierRiskProfile,
+    SupplierCertification,
+    SupplierHumanRightsIssue,
+    SupplierIndustrialAccident,
+    SupplierAuditRecord,
+    SupplierOnboarding,
+    TrainingRecord,
+)
 
 async def create_supplier(db: AsyncSession, supplier_data: dict) -> Supplier:
     """협력사 INSERT. flush까지만(커밋은 service)."""
@@ -135,3 +144,83 @@ async def update_supplier_risk_level(
     )
     await db.execute(stmt)
     await db.flush()
+
+
+# ============================================================
+# BE-3: 7탭 모달 조회 (기존 테이블 SELECT 전용 · 커밋/변경 없음)
+# ============================================================
+async def get_certifications(
+    db: AsyncSession, supplier_id: UUID
+) -> List[SupplierCertification]:
+    """ESG 탭 — 일반 인증서(ISO 14001 등) 목록. 발급일 최신순."""
+    stmt = (
+        select(SupplierCertification)
+        .where(SupplierCertification.supplier_id == supplier_id)
+        .order_by(SupplierCertification.issued_at.desc().nullslast())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def get_human_rights_issues(
+    db: AsyncSession, supplier_id: UUID
+) -> List[SupplierHumanRightsIssue]:
+    """ESG 탭 — 인권 이슈 목록. 탐지 시각 최신순."""
+    stmt = (
+        select(SupplierHumanRightsIssue)
+        .where(SupplierHumanRightsIssue.supplier_id == supplier_id)
+        .order_by(SupplierHumanRightsIssue.detected_at.desc().nullslast())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def get_industrial_accidents(
+    db: AsyncSession, supplier_id: UUID
+) -> List[SupplierIndustrialAccident]:
+    """ESG 탭 — 산업재해 목록. 발생일 최신순."""
+    stmt = (
+        select(SupplierIndustrialAccident)
+        .where(SupplierIndustrialAccident.supplier_id == supplier_id)
+        .order_by(SupplierIndustrialAccident.accident_date.desc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def get_audit_records(
+    db: AsyncSession, supplier_id: UUID
+) -> List[SupplierAuditRecord]:
+    """ESG·Reliability 탭 — 실사(Due Diligence) 기록. 실사일 최신순."""
+    stmt = (
+        select(SupplierAuditRecord)
+        .where(SupplierAuditRecord.supplier_id == supplier_id)
+        .order_by(SupplierAuditRecord.audit_date.desc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def get_training_records(
+    db: AsyncSession, supplier_id: UUID
+) -> List[TrainingRecord]:
+    """Training 탭 — 교육 이수 기록 + 교육 자료 메타(selectinload). 마감일 최신순."""
+    stmt = (
+        select(TrainingRecord)
+        .where(TrainingRecord.supplier_id == supplier_id)
+        .options(selectinload(TrainingRecord.material))
+        .order_by(TrainingRecord.due_date.desc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def get_onboarding_by_supplier(
+    db: AsyncSession, supplier_id: UUID
+) -> Optional[SupplierOnboarding]:
+    """Reliability 탭 — 온보딩/SLA 성실도 단건(supplier당 1개)."""
+    stmt = select(SupplierOnboarding).where(
+        SupplierOnboarding.supplier_id == supplier_id
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()

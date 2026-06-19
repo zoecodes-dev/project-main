@@ -21,7 +21,10 @@ from backend.domains.supplier.models import (
     SupplierBrief,
     SupplierDetailResponse,
     RiskProfileResponse,
-    RiskScoreUpdateRequest
+    RiskScoreUpdateRequest,
+    SupplierEsgResponse,
+    SupplierTrainingResponse,
+    SupplierReliabilityResponse,
 )
 
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
@@ -119,3 +122,42 @@ async def update_risk_score_endpoint(
 
     profile = await service.upsert_risk_score(supplier_id, request.score, db)
     return profile
+
+
+# ============================================================
+# BE-3: 7탭 모달 조회 엔드포인트 (기존 테이블 SELECT 전용)
+# ============================================================
+@router.get("/{supplier_id}/esg", response_model=SupplierEsgResponse)
+async def get_supplier_esg_endpoint(
+    supplier_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """ESG 탭 — 인증서(E) + 인권 이슈/산업재해(S) + 실사 기록(G) 조회."""
+    data = await service.get_esg(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
+
+
+@router.get("/{supplier_id}/training", response_model=SupplierTrainingResponse)
+async def get_supplier_training_endpoint(
+    supplier_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Training 탭 — 교육 이수 기록(교육 자료 메타 포함) 조회."""
+    data = await service.get_training(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
+
+
+@router.get("/{supplier_id}/reliability", response_model=SupplierReliabilityResponse)
+async def get_supplier_reliability_endpoint(
+    supplier_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약 조회."""
+    data = await service.get_reliability(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data

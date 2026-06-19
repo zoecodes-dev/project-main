@@ -416,6 +416,9 @@ class TrainingRecord(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    # material_id FK 기반 단방향 관계(교육 자료 제목/카테고리 노출용). ORM 매핑만 — 스키마 무변경.
+    material = relationship("TrainingMaterial")
+
 
 # ============================================================
 # Pydantic 입출력 스키마(DTO)
@@ -499,3 +502,114 @@ class SupplierDetailResponse(BaseModel):
     trader_detail: Optional[TraderDetailDTO] = None
     miner_detail: Optional[MinerDetailDTO] = None
     model_config = {"from_attributes": True}
+
+
+# ----- BE-3: 7탭 모달 조회 DTO (기존 테이블 SELECT 전용) -----
+# ESG 탭: 인증서(E) + 인권 이슈/산업재해(S) + 실사 기록(G)을 한 번에 노출.
+class CertificationDTO(BaseModel):
+    cert_id: uuid.UUID
+    certification_type: Optional[str] = None
+    certification_no: Optional[str] = None
+    issued_at: Optional[date] = None
+    expires_at: Optional[date] = None
+    issuing_body: Optional[str] = None
+    document_url: Optional[str] = None
+    model_config = {"from_attributes": True}
+
+
+class HumanRightsIssueDTO(BaseModel):
+    issue_id: uuid.UUID
+    factory_id: Optional[uuid.UUID] = None
+    issue_type: Optional[str] = None
+    severity: Optional[str] = None
+    description: Optional[str] = None
+    detected_at: Optional[datetime] = None
+    status: Optional[str] = None
+    source: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    model_config = {"from_attributes": True}
+
+
+class IndustrialAccidentDTO(BaseModel):
+    accident_id: uuid.UUID
+    factory_id: Optional[uuid.UUID] = None
+    accident_date: date
+    accident_type: Optional[str] = None
+    description: Optional[str] = None
+    casualties: int = 0
+    ltifr: Optional[float] = None
+    status: Optional[str] = None
+    corrective_action: Optional[str] = None
+    model_config = {"from_attributes": True}
+
+
+class AuditRecordDTO(BaseModel):
+    audit_record_id: uuid.UUID
+    audit_date: date
+    audit_type: Optional[str] = None
+    auditor: Optional[str] = None
+    audit_status: Optional[str] = None
+    result: Optional[str] = None
+    next_audit_due: Optional[date] = None
+    report_url: Optional[str] = None
+    model_config = {"from_attributes": True}
+
+
+class SupplierEsgResponse(BaseModel):
+    supplier_id: uuid.UUID
+    certifications: list[CertificationDTO] = []
+    human_rights_issues: list[HumanRightsIssueDTO] = []
+    industrial_accidents: list[IndustrialAccidentDTO] = []
+    audit_records: list[AuditRecordDTO] = []
+
+
+# Training 탭: training_records + training_materials(자료 메타) 조인.
+class TrainingMaterialDTO(BaseModel):
+    material_id: uuid.UUID
+    title: str
+    category: Optional[str] = None
+    format: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    model_config = {"from_attributes": True}
+
+
+class TrainingRecordDTO(BaseModel):
+    record_id: uuid.UUID
+    factory_id: Optional[uuid.UUID] = None
+    trainee_count: int = 0
+    total_eligible: int = 0
+    completion_rate: Optional[float] = None
+    completed_at: Optional[datetime] = None
+    due_date: date
+    status: str
+    instructor: Optional[str] = None
+    notes: Optional[str] = None
+    material: Optional[TrainingMaterialDTO] = None
+    model_config = {"from_attributes": True}
+
+
+class SupplierTrainingResponse(BaseModel):
+    supplier_id: uuid.UUID
+    records: list[TrainingRecordDTO] = []
+
+
+# Reliability(신뢰도) 탭: 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.
+class SupplierReliabilityResponse(BaseModel):
+    supplier_id: uuid.UUID
+    completeness_score: int = 0
+    # 리스크 프로필 (없으면 None)
+    overall_risk_score: Optional[int] = None
+    risk_level: Optional[str] = None
+    feoc_status: Optional[str] = None
+    is_high_risk_flag: Optional[bool] = None
+    last_risk_review_at: Optional[datetime] = None
+    # 온보딩/SLA 성실도
+    consent_status: Optional[str] = None
+    agreement_status: Optional[str] = None
+    sla_due_date: Optional[datetime] = None
+    reminder_count: Optional[int] = None
+    last_reminded_at: Optional[datetime] = None
+    # 실사 요약
+    total_audits: int = 0
+    last_audit_date: Optional[date] = None
+    last_audit_result: Optional[str] = None

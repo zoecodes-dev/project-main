@@ -188,3 +188,64 @@ async def upsert_risk_score(
 async def get_risk_profile(supplier_id: UUID, db: AsyncSession) -> SupplierRiskProfile | None:
     """supplier_risk_profiles 단건 조회 (하위 3개 JOIN은 W4 종합 스코어링에서 확장)."""
     return await repository.get_risk_profile_by_supplier(db, supplier_id)
+
+
+# ============================================================
+# BE-3: 7탭 모달 조회 (기존 테이블 SELECT 전용)
+#   존재하지 않는 협력사면 None을 반환 → router가 404로 매핑.
+# ============================================================
+async def get_esg(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """ESG 탭 — 인증서(E) + 인권 이슈/산업재해(S) + 실사 기록(G)을 묶어 반환."""
+    if await repository.get_supplier_by_id(db, supplier_id) is None:
+        return None
+    return {
+        "supplier_id": supplier_id,
+        "certifications": await repository.get_certifications(db, supplier_id),
+        "human_rights_issues": await repository.get_human_rights_issues(db, supplier_id),
+        "industrial_accidents": await repository.get_industrial_accidents(db, supplier_id),
+        "audit_records": await repository.get_audit_records(db, supplier_id),
+    }
+
+
+async def get_training(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """Training 탭 — 교육 이수 기록(교육 자료 메타 포함)."""
+    if await repository.get_supplier_by_id(db, supplier_id) is None:
+        return None
+    return {
+        "supplier_id": supplier_id,
+        "records": await repository.get_training_records(db, supplier_id),
+    }
+
+
+async def get_reliability(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """
+    Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.
+    리스크 프로필/온보딩이 아직 없을 수 있으므로 각 필드는 안전하게 None fallback.
+    """
+    supplier = await repository.get_supplier_by_id(db, supplier_id)
+    if supplier is None:
+        return None
+
+    profile = await repository.get_risk_profile_by_supplier(db, supplier_id)
+    onboarding = await repository.get_onboarding_by_supplier(db, supplier_id)
+    audits = await repository.get_audit_records(db, supplier_id)
+    # 실사 기록은 audit_date 내림차순 → 첫 행이 최신.
+    latest_audit = audits[0] if audits else None
+
+    return {
+        "supplier_id": supplier_id,
+        "completeness_score": supplier.completeness_score,
+        "overall_risk_score": profile.overall_risk_score if profile else None,
+        "risk_level": profile.risk_level if profile else None,
+        "feoc_status": profile.feoc_status if profile else None,
+        "is_high_risk_flag": profile.is_high_risk_flag if profile else None,
+        "last_risk_review_at": profile.last_risk_review_at if profile else None,
+        "consent_status": onboarding.consent_status if onboarding else None,
+        "agreement_status": onboarding.agreement_status if onboarding else None,
+        "sla_due_date": onboarding.sla_due_date if onboarding else None,
+        "reminder_count": onboarding.reminder_count if onboarding else None,
+        "last_reminded_at": onboarding.last_reminded_at if onboarding else None,
+        "total_audits": len(audits),
+        "last_audit_date": latest_audit.audit_date if latest_audit else None,
+        "last_audit_result": latest_audit.result if latest_audit else None,
+    }
