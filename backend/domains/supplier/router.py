@@ -25,6 +25,7 @@ from backend.domains.supplier.models import (
     SupplierEsgResponse,
     SupplierTrainingResponse,
     SupplierReliabilityResponse,
+    SupplierFactoriesResponse,
 )
 
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
@@ -158,6 +159,18 @@ async def get_supplier_reliability_endpoint(
 ):
     """Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약 조회."""
     data = await service.get_reliability(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
+
+
+@router.get("/{supplier_id}/factories", response_model=SupplierFactoriesResponse)
+async def get_supplier_factories_endpoint(
+    supplier_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """사업장 탭 — 공장/광산 목록(PostGIS 좌표 lat/lng 포함) 조회."""
+    data = await service.get_factories(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return data

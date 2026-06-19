@@ -220,6 +220,16 @@ async def get_training(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
     }
 
 
+async def get_factories(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """사업장 탭 — 공장/광산 목록(좌표 lat/lng 포함)."""
+    if await repository.get_supplier_by_id(db, supplier_id) is None:
+        return None
+    return {
+        "supplier_id": supplier_id,
+        "factories": await repository.get_factories(db, supplier_id),
+    }
+
+
 async def get_reliability(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
     """
     Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.

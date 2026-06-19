@@ -593,6 +593,33 @@ class SupplierTrainingResponse(BaseModel):
     records: list[TrainingRecordDTO] = []
 
 
+# 사업장(공장/광산) 탭: supplier_factories. location(PostGIS POINT)은 lat/lng로 분해해 노출.
+class FactoryDTO(BaseModel):
+    factory_id: uuid.UUID
+    factory_name: Optional[str] = None
+    factory_name_en: Optional[str] = None
+    address: Optional[str] = None
+    country: Optional[str] = None
+    region: Optional[str] = None
+    factory_role: Optional[str] = None
+    is_active: Optional[bool] = None
+    operating_period_from: Optional[date] = None
+    operating_period_to: Optional[date] = None
+    monthly_capacity: Optional[str] = None
+    destination: Optional[str] = None
+    destination_detail: Optional[str] = None
+    supply_ratio_percent: Optional[float] = None
+    supply_quantity: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    model_config = {"from_attributes": True}
+
+
+class SupplierFactoriesResponse(BaseModel):
+    supplier_id: uuid.UUID
+    factories: list[FactoryDTO] = []
+
+
 # Reliability(신뢰도) 탭: 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.
 class SupplierReliabilityResponse(BaseModel):
     supplier_id: uuid.UUID

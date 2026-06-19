@@ -8,7 +8,7 @@ Supplier 도메인 DB 접근 계층.
 from typing import List, Optional
 from uuid import UUID
  
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -21,6 +21,7 @@ from backend.domains.supplier.models import (
     SupplierIndustrialAccident,
     SupplierAuditRecord,
     SupplierOnboarding,
+    SupplierFactory,
     TrainingRecord,
 )
 
@@ -224,3 +225,36 @@ async def get_onboarding_by_supplier(
     )
     result = await db.execute(stmt)
     return result.scalars().first()
+
+
+async def get_factories(db: AsyncSession, supplier_id: UUID) -> List[dict]:
+    """
+    사업장 탭 — supplier_factories 목록.
+    location(PostGIS POINT)은 직렬화 불가 → ST_Y/ST_X 로 latitude/longitude 분해해 반환.
+    등록순(created_at) 정렬.
+    """
+    stmt = (
+        select(
+            SupplierFactory.factory_id,
+            SupplierFactory.factory_name,
+            SupplierFactory.factory_name_en,
+            SupplierFactory.address,
+            SupplierFactory.country,
+            SupplierFactory.region,
+            SupplierFactory.factory_role,
+            SupplierFactory.is_active,
+            SupplierFactory.operating_period_from,
+            SupplierFactory.operating_period_to,
+            SupplierFactory.monthly_capacity,
+            SupplierFactory.destination,
+            SupplierFactory.destination_detail,
+            SupplierFactory.supply_ratio_percent,
+            SupplierFactory.supply_quantity,
+            func.ST_Y(SupplierFactory.location).label("latitude"),
+            func.ST_X(SupplierFactory.location).label("longitude"),
+        )
+        .where(SupplierFactory.supplier_id == supplier_id)
+        .order_by(SupplierFactory.created_at.asc())
+    )
+    result = await db.execute(stmt)
+    return [dict(row._mapping) for row in result]
