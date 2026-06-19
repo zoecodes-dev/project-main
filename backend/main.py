@@ -24,6 +24,7 @@ from backend.domains.audit.router import actions_router, router as audit_router
 from backend.domains.risk.router import router as risk_router
 from backend.domains.dpp.router import router as dpp_router
 from backend.hitl.router import router as hitl_router
+from backend.domains.batches.router import batches_router, dashboard_router
 
 async def _on_hitl_resolved(payload: dict) -> None:
     batch_id = payload.get("batch_id", "")
@@ -65,6 +66,8 @@ app.include_router(actions_router)
 app.include_router(risk_router)
 app.include_router(dpp_router)
 app.include_router(hitl_router)
+app.include_router(batches_router)
+app.include_router(dashboard_router)
 
 @app.get("/health")
 async def health_check():
