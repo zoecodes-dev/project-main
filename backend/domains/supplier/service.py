@@ -35,10 +35,17 @@ async def create_supplier_and_invite(
     db: AsyncSession,
     supplier_data: dict,
     email: str,
+    inviter_supplier_id: Optional[UUID] = None,
 ) -> Supplier:
     """
     협력사를 생성하고 초대 이벤트를 발행한다. (B-9 완료기준: CTI/onboarding/SLA/발행을
     단일 트랜잭션으로)
+
+    [G1 협력사→협력사 초대 — contract-first 착수]
+      inviter_supplier_id: 이 협력사를 '초대한' 상위 협력사(이동 주체). 원청 직접
+      등록이면 None. 값이 있으면 SupplierInvited 이벤트에 실어 발행하고, D(supplychain)
+      가 이를 수신해 supply_chain_map.discovered_via 에 기록한다(빈 상태→pool 구축).
+      ※ 도메인 경계: B는 supply_chain_map에 직접 쓰지 않는다(D 도메인). 이벤트로만 전달.
 
     ★ 이벤트 발행 순서 (다른 도메인이 그대로 따른다):
       1) repository로 DB 변경  2) await db.commit()  3) 커밋 성공 후에만 publish()
@@ -75,11 +82,12 @@ async def create_supplier_and_invite(
     await db.commit()
     await db.refresh(supplier)
 
-    # 3) 커밋 성공 후 이벤트 발행
+    # 3) 커밋 성공 후 이벤트 발행 (G1: inviter 동봉 → D가 discovered_via 기록)
     event = SupplierInvitedEvent(
         supplier_id=supplier.supplier_id,
         email=email,
         sla_due_date=sla_due_date,
+        inviter_supplier_id=inviter_supplier_id,
     )
     await publish("SupplierInvited", dataclasses.asdict(event))
 

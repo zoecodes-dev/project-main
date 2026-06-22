@@ -42,7 +42,7 @@ async def create_supplier_endpoint(
         "supplier_type": request.supplier_type,
     }
     supplier = await service.create_supplier_and_invite(
-        db, supplier_data, request.email
+        db, supplier_data, request.email, request.inviter_supplier_id
     )
     # ★ 여기서 db.commit() 하지 않는다 — service가 이미 커밋
     return {"supplier_id": supplier.supplier_id, "status": supplier.status}

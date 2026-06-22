@@ -81,6 +81,9 @@ class SupplierInvitedEvent:
     supplier_id: Optional[UUID] = None
     email: Optional[str] = None
     sla_due_date: Optional[datetime] = None
+    # [G1] 협력사→협력사 초대 시 '이동 주체'(초대한 협력사). 직접 등록이면 None.
+    #   수신: D(supplychain)가 supply_chain_map.discovered_via 에 기록 → pool 구축.
+    inviter_supplier_id: Optional[UUID] = None
     event_name: str = "SupplierInvited"
     occurred_at: datetime = field(default_factory=_now_utc)
 

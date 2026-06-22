@@ -6,10 +6,27 @@ from typing import Dict, Any, List
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.domains.dpp.models import DppRecord
+from backend.domains.dpp.models import Batch, DppRecord
 from backend.infrastructure.trace import trace_tool
 
 from sqlalchemy import text
+
+
+async def create_batch(
+    db: AsyncSession,
+    product_id: str,
+    destination: str,
+) -> str:
+    """배치 행을 삽입하고 batch_id(str)를 반환한다.
+
+    repository 계층이므로 flush만 수행. commit은 호출 service가 담당한다.
+    A1 핸들러(batch_trigger.py)는 이 함수에 대고 구현한다:
+        from backend.domains.dpp.repository import create_batch
+    """
+    batch = Batch(product_id=uuid.UUID(product_id), destination=destination)
+    db.add(batch)
+    await db.flush()
+    return str(batch.batch_id)
 
 
 @trace_tool("get_dpp_record")
