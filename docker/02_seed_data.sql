@@ -10,8 +10,8 @@
 -- [제품 3축] customer_id(고객사) + model_name(차종) + amperage_ah(Ah)
 --   bom_versions.production_from/to 로 생산 Lot 기간 추적.
 --
--- [7계층 트리] 1 Pack / 2 Module / 3 Cell / 4 활물질(CAM·ANO)
---             / 5 전구체 / 6 제련·정제 / 7 광산
+-- [7계층 트리] 0 Pack / 1 Module / 2 Cell / 3 활물질(CAM·ANO)
+--             / 4 전구체 / 5 제련·정제 / 6 광산
 --
 -- [4대 시나리오]
 --   ① BMW iX3 (108Ah 원통 NCM811) ── Happy: 한양셀→동성CAM→호주리튬, FEOC 통과 → DPP 발행
@@ -239,30 +239,30 @@ INSERT INTO training_records (supplier_id, factory_id, material_id, trainee_coun
 -- ============================================================
 -- 10. 부품 7계층 트리 (영역 7) — NCM811 공유 마스터
 -- ============================================================
--- T1 Pack → T2 Module → T3 Cell → T4 활물질(CAM·ANO)
---   → T5 전구체(PRE)·정제리튬(LiOH) → T6 제련(Ni·Co·Mn) → T7 광산 원광(Ni·Co·Mn·Li)
+-- T0 Pack → T1 Module → T2 Cell → T3 활물질(CAM·ANO)
+--   → T4 전구체(PRE)·정제리튬(LiOH) → T5 제련(Ni·Co·Mn) → T6 광산 원광(Ni·Co·Mn·Li)
 INSERT INTO parts (part_id, part_code, part_name, tier_level, parent_part_id, hs_code, material_type, unit_price, source_system, external_id) VALUES
 -- T1
-('b1111111-0000-4000-8000-000000000001', 'PACK-NCM811',  'Battery Pack',            1, NULL,                                     '850760', 'assembly',        1000.0000, 'ERP_PLM', 'ERP-PART-PACK'),
+('b1111111-0000-4000-8000-000000000001', 'PACK-NCM811',  'Battery Pack',            0, NULL,                                     '850760', 'assembly',        1000.0000, 'ERP_PLM', 'ERP-PART-PACK'),
 -- T2
-('b1111111-0000-4000-8000-000000000002', 'MOD-NCM811',   'Module',                  2, 'b1111111-0000-4000-8000-000000000001', '850760', 'assembly',         400.0000, 'ERP_PLM', 'ERP-PART-MOD'),
+('b1111111-0000-4000-8000-000000000002', 'MOD-NCM811',   'Module',                  1, 'b1111111-0000-4000-8000-000000000001', '850760', 'assembly',         400.0000, 'ERP_PLM', 'ERP-PART-MOD'),
 -- T3
-('b1111111-0000-4000-8000-000000000003', 'CELL-NCM811',  'Battery Cell',            3, 'b1111111-0000-4000-8000-000000000002', '850760', 'cell',             150.0000, 'ERP_PLM', 'ERP-PART-CELL'),
+('b1111111-0000-4000-8000-000000000003', 'CELL-NCM811',  'Battery Cell',            2, 'b1111111-0000-4000-8000-000000000002', '850760', 'cell',             150.0000, 'ERP_PLM', 'ERP-PART-CELL'),
 -- T4 활물질
-('b1111111-0000-4000-8000-000000000006', 'CAM-NCM811',   'Cathode Active Material', 4, 'b1111111-0000-4000-8000-000000000003', '284190', 'active_material',    90.0000, 'ERP_PLM', 'ERP-PART-CAM'),
-('b1111111-0000-4000-8000-000000000007', 'ANO-GRAPHITE', 'Anode Active Material',   4, 'b1111111-0000-4000-8000-000000000003', '380110', 'active_material',    30.0000, 'ERP_PLM', 'ERP-PART-ANO'),
+('b1111111-0000-4000-8000-000000000006', 'CAM-NCM811',   'Cathode Active Material', 3, 'b1111111-0000-4000-8000-000000000003', '284190', 'active_material',    90.0000, 'ERP_PLM', 'ERP-PART-CAM'),
+('b1111111-0000-4000-8000-000000000007', 'ANO-GRAPHITE', 'Anode Active Material',   3, 'b1111111-0000-4000-8000-000000000003', '380110', 'active_material',    30.0000, 'ERP_PLM', 'ERP-PART-ANO'),
 -- T5 전구체·정제리튬
-('b1111111-0000-4000-8000-000000000004', 'PRE-NCM',      'NCM Precursor',           5, 'b1111111-0000-4000-8000-000000000006', '382490', 'precursor',          40.0000, 'ERP_PLM', 'ERP-PART-PRE'),
-('b1111111-0000-4000-8000-000000000005', 'LIOH-REFINED', 'Lithium Hydroxide',       5, 'b1111111-0000-4000-8000-000000000006', '282520', 'refined_metal',      84.0000, 'ERP_PLM', 'ERP-PART-LIOH'),
+('b1111111-0000-4000-8000-000000000004', 'PRE-NCM',      'NCM Precursor',           4, 'b1111111-0000-4000-8000-000000000006', '382490', 'precursor',          40.0000, 'ERP_PLM', 'ERP-PART-PRE'),
+('b1111111-0000-4000-8000-000000000005', 'LIOH-REFINED', 'Lithium Hydroxide',       4, 'b1111111-0000-4000-8000-000000000006', '282520', 'refined_metal',      84.0000, 'ERP_PLM', 'ERP-PART-LIOH'),
 -- T6 제련 (전구체의 상위 = Ni·Co·Mn 황산염/정제금속)
-('b1111111-0000-4000-8000-000000000011', 'REF-NI',       'Refined Nickel Sulfate',  6, 'b1111111-0000-4000-8000-000000000004', '283324', 'refined_metal',      22.0000, 'ERP_PLM', 'ERP-PART-REFNI'),
-('b1111111-0000-4000-8000-000000000012', 'REF-CO',       'Refined Cobalt Sulfate',  6, 'b1111111-0000-4000-8000-000000000004', '283329', 'refined_metal',      36.0000, 'ERP_PLM', 'ERP-PART-REFCO'),
-('b1111111-0000-4000-8000-000000000013', 'REF-MN',       'Refined Manganese Sulfate',6,'b1111111-0000-4000-8000-000000000004', '283339', 'refined_metal',       6.0000, 'ERP_PLM', 'ERP-PART-REFMN'),
+('b1111111-0000-4000-8000-000000000011', 'REF-NI',       'Refined Nickel Sulfate',  5, 'b1111111-0000-4000-8000-000000000004', '283324', 'refined_metal',      22.0000, 'ERP_PLM', 'ERP-PART-REFNI'),
+('b1111111-0000-4000-8000-000000000012', 'REF-CO',       'Refined Cobalt Sulfate',  5, 'b1111111-0000-4000-8000-000000000004', '283329', 'refined_metal',      36.0000, 'ERP_PLM', 'ERP-PART-REFCO'),
+('b1111111-0000-4000-8000-000000000013', 'REF-MN',       'Refined Manganese Sulfate',5,'b1111111-0000-4000-8000-000000000004', '283339', 'refined_metal',       6.0000, 'ERP_PLM', 'ERP-PART-REFMN'),
 -- T7 광산 원광 (제련의 상위)
-('b1111111-0000-4000-8000-000000000008', 'MIN-NI',       'Nickel Ore',              7, 'b1111111-0000-4000-8000-000000000011', '260400', 'mineral',            18.0000, 'ERP_PLM', 'ERP-PART-NI'),
-('b1111111-0000-4000-8000-000000000009', 'MIN-CO',       'Cobalt Ore',              7, 'b1111111-0000-4000-8000-000000000012', '260500', 'mineral',            32.0000, 'ERP_PLM', 'ERP-PART-CO'),
-('b1111111-0000-4000-8000-00000000000a', 'MIN-MN',       'Manganese Ore',           7, 'b1111111-0000-4000-8000-000000000013', '260200', 'mineral',             4.0000, 'ERP_PLM', 'ERP-PART-MN'),
-('b1111111-0000-4000-8000-00000000000b', 'MIN-LI',       'Lithium Ore (Spodumene)', 7, 'b1111111-0000-4000-8000-000000000005', '253090', 'mineral',            12.0000, 'ERP_PLM', 'ERP-PART-LI');
+('b1111111-0000-4000-8000-000000000008', 'MIN-NI',       'Nickel Ore',              6, 'b1111111-0000-4000-8000-000000000011', '260400', 'mineral',            18.0000, 'ERP_PLM', 'ERP-PART-NI'),
+('b1111111-0000-4000-8000-000000000009', 'MIN-CO',       'Cobalt Ore',              6, 'b1111111-0000-4000-8000-000000000012', '260500', 'mineral',            32.0000, 'ERP_PLM', 'ERP-PART-CO'),
+('b1111111-0000-4000-8000-00000000000a', 'MIN-MN',       'Manganese Ore',           6, 'b1111111-0000-4000-8000-000000000013', '260200', 'mineral',             4.0000, 'ERP_PLM', 'ERP-PART-MN'),
+('b1111111-0000-4000-8000-00000000000b', 'MIN-LI',       'Lithium Ore (Spodumene)', 6, 'b1111111-0000-4000-8000-000000000005', '253090', 'mineral',            12.0000, 'ERP_PLM', 'ERP-PART-LI');
 
 -- ------------------------------------------------------------
 -- bom_items: 5개 BOM 버전에 동일 부품 트리 연결 (조성비 NCM811: Ni80/Co10/Mn10)

@@ -446,7 +446,7 @@ CREATE TABLE parts (
     part_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     part_code        VARCHAR(50) UNIQUE NOT NULL,
     part_name        VARCHAR(255),
-    tier_level       INT, -- 1(Pack) 2(Module) 3(Cell) 4(활물질/CAM) 5(전구체) 6(제련·정제) 7(광산). 분리막/전해질은 material_type
+    tier_level       INT, -- 0(Pack) 1(Module) 2(Cell) 3(활물질/CAM) 4(전구체) 5(제련·정제) 6(광산) 분리막/전해질은 material_type
     parent_part_id   UUID REFERENCES parts(part_id),
     
     -- [위상 조정] 세번변경 FTA 계산용이 아닌, 단순 통관 및 특정 HS코드 규제 필터링용으로 용도 변경
