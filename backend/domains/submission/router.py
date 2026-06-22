@@ -166,7 +166,7 @@ async def approve_data_request_endpoint(request_id: uuid.UUID, req: ActionDataRe
         reason=req.reason
     )
 
-@router.post("/{request_id}/reject", response_model=DataRequestResponse)
+@router.post("/{request_id}/reject", response_model=DataRequestResponse, include_in_schema=False)
 async def reject_data_request_endpoint(request_id: uuid.UUID, req: ActionDataRequest, db: AsyncSession = Depends(get_db)):
     """
     [API] POST /data-requests/{request_id}/reject
@@ -179,7 +179,7 @@ async def reject_data_request_endpoint(request_id: uuid.UUID, req: ActionDataReq
         reason=req.reason
     )
 
-@router.post("/{request_id}/rework", response_model=DataRequestResponse)
+@router.post("/{request_id}/rework", response_model=DataRequestResponse, include_in_schema=False)
 async def rework_data_request_endpoint(request_id: uuid.UUID, req: ActionDataRequest, db: AsyncSession = Depends(get_db)):
     """
     [API] POST /data-requests/{request_id}/rework
@@ -193,7 +193,7 @@ async def rework_data_request_endpoint(request_id: uuid.UUID, req: ActionDataReq
         reason=req.reason
     )
 
-@router.get("/{request_id}/completeness", response_model=CompletenessResponse)
+@router.get("/{request_id}/completeness", response_model=CompletenessResponse, include_in_schema=False)
 async def get_data_request_completeness_endpoint(request_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """
     [API] GET /data-requests/{request_id}/completeness
@@ -204,7 +204,7 @@ async def get_data_request_completeness_endpoint(request_id: uuid.UUID, db: Asyn
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="해당 요청에 대한 완성도 정보가 존재하지 않습니다.")
     return comp_status
 
-@router.get("/suppliers/{supplier_id}/submission-timeline", response_model=List[TimelineHistoryResponse])
+@router.get("/suppliers/{supplier_id}/submission-timeline", response_model=List[TimelineHistoryResponse], include_in_schema=False)
 async def get_supplier_timeline_endpoint(supplier_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """
     [API] GET /data-requests/suppliers/{supplier_id}/submission-timeline
