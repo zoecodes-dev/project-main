@@ -8,7 +8,7 @@ Supplier 도메인 DB 접근 계층.
 from typing import List, Optional
 from uuid import UUID
  
-from sqlalchemy import select, text, update
+from sqlalchemy import select, update, delete, text, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -22,7 +22,17 @@ from backend.domains.supplier.models import (
     SupplierIndustrialAccident,
     SupplierAuditRecord,
     SupplierOnboarding,
+    SupplierFactory,
+    SupplierContact,
+    SupplierManufacturerDetail,
+    SupplierRecyclerDetail,
+    FactoryCarbonDeclaration,
     TrainingRecord,
+    MasterFormCompany,
+    MasterFormFactory,
+    MasterFormContact,
+    MasterFormManufacturing,
+    MasterFormRecycling,
 )
 
 async def create_supplier(db: AsyncSession, supplier_data: dict) -> Supplier:
@@ -227,6 +237,198 @@ async def get_onboarding_by_supplier(
     return result.scalars().first()
 
 
+async def get_factories(db: AsyncSession, supplier_id: UUID) -> List[dict]:
+    """
+    사업장 탭 — supplier_factories 목록.
+    location(PostGIS POINT)은 직렬화 불가 → ST_Y/ST_X 로 latitude/longitude 분해해 반환.
+    등록순(created_at) 정렬.
+    """
+    stmt = (
+        select(
+            SupplierFactory.factory_id,
+            SupplierFactory.factory_name,
+            SupplierFactory.factory_name_en,
+            SupplierFactory.address,
+            SupplierFactory.country,
+            SupplierFactory.region,
+            SupplierFactory.factory_role,
+            SupplierFactory.is_active,
+            SupplierFactory.operating_period_from,
+            SupplierFactory.operating_period_to,
+            SupplierFactory.monthly_capacity,
+            SupplierFactory.destination,
+            SupplierFactory.destination_detail,
+            SupplierFactory.supply_ratio_percent,
+            SupplierFactory.supply_quantity,
+            func.ST_Y(SupplierFactory.location).label("latitude"),
+            func.ST_X(SupplierFactory.location).label("longitude"),
+        )
+        .where(SupplierFactory.supplier_id == supplier_id)
+        .order_by(SupplierFactory.created_at.asc())
+    )
+    result = await db.execute(stmt)
+    return [dict(row._mapping) for row in result]
+
+
+# ============================================================
+# 마스터폼 섹션 0~2 write (담당: 팀원 B / KIRA W5 §4)
+#
+# B(service.py)의 submit_master_form이 단일 트랜잭션 내에서 호출한다.
+# ★ 여기서 commit/rollback 하지 않는다(flush까지만). 커밋은 service가 단 한 번.
+# 1-per-supplier 상세 테이블(manufacturer/recycler)과 다건 테이블(factories/
+# contacts/carbon)은 모두 'replace-all'(기존 삭제 후 재입력) — E의 섹션 4~6과 동일 패턴.
+# 마스터폼은 협력사가 보는 단일 양식의 '현재 상태'를 통째로 반영하기 때문이다.
+# ============================================================
+def _factory_id_at(idx: Optional[int], factory_ids: List[UUID]) -> Optional[UUID]:
+    """factory_index(폼 factories 리스트 내 순서) → 실제 factory_id. 범위 밖이면 None."""
+    if idx is None or not factory_ids:
+        return None
+    return factory_ids[idx] if 0 <= idx < len(factory_ids) else None
+
+
+# ── 섹션 0: 회사 (suppliers UPDATE) ───────────────────────────────────────
+async def write_master_form_company(
+    db: AsyncSession, supplier_id: UUID, data: MasterFormCompany
+) -> None:
+    """
+    섹션 0 회사 — suppliers 갱신.
+    협력사 row는 초대 시점(create_supplier_and_invite)에 이미 존재하므로 INSERT가
+    아니라 UPDATE다. 폼에 담긴 회사 식별·기본정보 전체를 권위값으로 덮어쓴다.
+    """
+    await db.execute(
+        update(Supplier)
+        .where(Supplier.supplier_id == supplier_id)
+        .values(**data.model_dump())
+    )
+    await db.flush()
+
+
+# ── 섹션 0: 공장 (supplier_factories replace-all) ─────────────────────────
+async def write_master_form_factories(
+    db: AsyncSession, supplier_id: UUID, factories: List[MasterFormFactory]
+) -> List[UUID]:
+    """
+    섹션 0 공장 — supplier_factories replace-all. 입력 순서를 보존한 factory_id
+    리스트를 반환한다(섹션 1 탄소선언·섹션 5 교육의 factory_index 연결에 사용).
+    좌표는 GeoPoint(lat/lng) → EWKT 'SRID=4326;POINT(lng lat)'로 변환(PostGIS=lng/lat).
+    """
+    await db.execute(delete(SupplierFactory).where(SupplierFactory.supplier_id == supplier_id))
+    factory_ids: List[UUID] = []
+    for f in factories:
+        location = None
+        if f.coordinates is not None:
+            # PostGIS POINT 순서는 lng/lat. 입력이 lat/lng 명시 필드라 혼선 차단됨.
+            location = f"SRID=4326;POINT({f.coordinates.longitude} {f.coordinates.latitude})"
+        obj = SupplierFactory(
+            supplier_id=supplier_id,
+            factory_name=f.factory_name,
+            factory_name_en=f.factory_name_en,
+            address=f.address,
+            country=f.country,
+            region=f.region,
+            location=location,
+            factory_role=f.factory_role,
+            operating_period_from=f.operating_period_from,
+            operating_period_to=f.operating_period_to,
+            monthly_capacity=f.monthly_capacity,
+            destination=f.destination,
+            destination_detail=f.destination_detail,
+            applicable_regulations=f.applicable_regulations,
+            supply_ratio_percent=f.supply_ratio_percent,
+            supply_quantity=f.supply_quantity,
+        )
+        db.add(obj)
+        await db.flush()   # factory_id 확보(이후 섹션에서 FK로 참조)
+        factory_ids.append(obj.factory_id)
+    return factory_ids
+
+
+# ── 섹션 0: PIC (supplier_contacts replace-all) ───────────────────────────
+async def write_master_form_contacts(
+    db: AsyncSession, supplier_id: UUID, contacts: List[MasterFormContact]
+) -> None:
+    """섹션 0 담당자 — supplier_contacts replace-all."""
+    await db.execute(delete(SupplierContact).where(SupplierContact.supplier_id == supplier_id))
+    for c in contacts:
+        db.add(SupplierContact(supplier_id=supplier_id, **c.model_dump()))
+    await db.flush()
+
+
+# ── 섹션 1: 탄소발자국 (manufacturer_details + factory_carbon_declarations) ─
+async def write_master_form_manufacturing(
+    db: AsyncSession,
+    supplier_id: UUID,
+    factory_ids: List[UUID],
+    data: MasterFormManufacturing,
+) -> None:
+    """
+    섹션 1 — supplier_manufacturer_details(1-per-supplier, replace) +
+    factory_carbon_declarations(공장별 다건, replace). 탄소선언은 factory_index로
+    공장을 가리키며 factory_ids[idx]로 FK를 연결한다. 가리키는 공장이 없으면 스킵
+    (추측 저장 금지).
+    """
+    # manufacturer_details replace
+    await db.execute(
+        delete(SupplierManufacturerDetail).where(SupplierManufacturerDetail.supplier_id == supplier_id)
+    )
+    db.add(SupplierManufacturerDetail(
+        supplier_id=supplier_id,
+        manufacturing_process=data.manufacturing_process,
+        energy_source=data.energy_source,
+        capacity=data.capacity,
+        carbon_intensity=data.carbon_intensity,
+    ))
+
+    # factory_carbon_declarations replace (이 협력사 공장들에 한해)
+    if factory_ids:
+        await db.execute(
+            delete(FactoryCarbonDeclaration).where(FactoryCarbonDeclaration.factory_id.in_(factory_ids))
+        )
+    for decl in data.factory_declarations:
+        fid = _factory_id_at(decl.factory_index, factory_ids)
+        if fid is None:
+            continue
+        db.add(FactoryCarbonDeclaration(
+            factory_id=fid,
+            carbon_intensity=decl.carbon_intensity,
+            methodology=decl.methodology,
+            declared_at=decl.declared_at,
+            valid_from=decl.valid_from,
+            valid_to=decl.valid_to,
+            source=decl.source,
+        ))
+    await db.flush()
+
+
+# ── 섹션 2: 재활용 (supplier_recycler_details replace) ─────────────────────
+async def write_master_form_recycling(
+    db: AsyncSession, supplier_id: UUID, data: MasterFormRecycling
+) -> None:
+    """
+    섹션 2 — supplier_recycler_details(1-per-supplier, replace).
+    recycled_materials는 RecycledMaterialsSchema(B·C 공유 계약)를 dict로 직렬화해 저장.
+
+    recycling_efficiency(소재별 회수율 {"Li":80,"Co":90,...})는 D팀 Wave 0 DDL이
+    develop에 머지되어(supplier_recycler_details 컬럼) 함께 저장한다.
+    recycled_content_ratio(완성품 내 재활용 패널 비율)와는 별개 축이다.
+    """
+    await db.execute(
+        delete(SupplierRecyclerDetail).where(SupplierRecyclerDetail.supplier_id == supplier_id)
+    )
+    recycled = (
+        data.recycled_materials.model_dump(exclude_none=True)
+        if data.recycled_materials is not None else None
+    )
+    db.add(SupplierRecyclerDetail(
+        supplier_id=supplier_id,
+        recycled_materials=recycled,
+        recycling_certification=data.recycling_certification,
+        input_source=data.input_source,
+        recycled_content_ratio=data.recycled_content_ratio,
+        recycling_efficiency=data.recycling_efficiency,  # 소재별 회수율(D DDL 머지됨)
+    ))
+
+
 async def upsert_miner_details(
     db: AsyncSession,
     supplier_id: UUID,
@@ -317,5 +519,4 @@ async def upsert_miner_details(
             "active_period_to": active_period_to,
             **coords_params,
         })
-
     await db.flush()
