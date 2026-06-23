@@ -195,6 +195,27 @@ class SupplierManufacturerDetail(Base):
     supplier = relationship("Supplier", back_populates="manufacturer_detail")
 
 
+class FactoryCarbonDeclaration(Base):
+    """
+    공장 단위 1차 탄소 선언(EU 배터리법 Art.7 PEF). schema.sql:555 전수 정합.
+    배치 판정 시 supply_ratio 가중평균의 입력. supplier_factories에 종속.
+    선언 누락 공장이 있으면 compliance에서 needs_human_review 처리.
+    """
+    __tablename__ = "factory_carbon_declarations"
+    declaration_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    factory_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="CASCADE"), nullable=False
+    )
+    carbon_intensity: Mapped[float] = mapped_column(NUMERIC(10, 4), nullable=False)  # kg CO2e/kWh (PEF)
+    methodology: Mapped[Optional[str]] = mapped_column(String(50))
+    declared_at: Mapped[date] = mapped_column(Date, nullable=False)
+    valid_from: Mapped[Optional[date]] = mapped_column(Date)
+    valid_to: Mapped[Optional[date]] = mapped_column(Date)
+    source: Mapped[str] = mapped_column(String(30), default="supplier_declared")  # supplier_declared/third_party_verified/estimated
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SupplierRecyclerDetail(Base):
     __tablename__ = "supplier_recycler_details"
     detail_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
