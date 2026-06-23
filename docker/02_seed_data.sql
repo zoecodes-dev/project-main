@@ -431,6 +431,55 @@ FROM regulations WHERE regulation_code = 'IRA';
 
 
 -- ============================================================
+-- 13-B. W5 C1 — 규제별 필수 필드 명세 시드 (regulation_required_fields)
+-- ============================================================
+-- EU_BATTERY (Annex XII — 재활용 함량)
+INSERT INTO regulation_required_fields (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT regulation_id, 'recycled_content_ratio', 'numeric', '["recycler","manufacturer"]'::jsonb, TRUE
+FROM regulations WHERE regulation_code = 'EU_BATTERY';
+
+INSERT INTO regulation_required_fields (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT regulation_id, 'recycled_materials', 'jsonb', '["recycler"]'::jsonb, TRUE
+FROM regulations WHERE regulation_code = 'EU_BATTERY';
+
+-- EU_BATTERY_ART7 (Art.7 / Annex II — 탄소발자국)
+INSERT INTO regulation_required_fields (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT regulation_id, 'carbon_intensity', 'numeric', '["manufacturer"]'::jsonb, TRUE
+FROM regulations WHERE regulation_code = 'EU_BATTERY_ART7';
+
+INSERT INTO regulation_required_fields (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT regulation_id, 'factory_carbon_declarations', 'jsonb', '["manufacturer"]'::jsonb, TRUE
+FROM regulations WHERE regulation_code = 'EU_BATTERY_ART7';
+
+-- EUDR (삼림벌채 — GPS + 원산지)
+INSERT INTO regulation_required_fields (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT regulation_id, 'mine_coordinates', 'geojson', '["miner"]'::jsonb, TRUE
+FROM regulations WHERE regulation_code = 'EUDR';
+
+INSERT INTO regulation_required_fields (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT regulation_id, 'origin_country', 'text', '["miner","trader"]'::jsonb, TRUE
+FROM regulations WHERE regulation_code = 'EUDR';
+
+-- UFLPA (원산지 + 강제노동 위험 플래그)
+INSERT INTO regulation_required_fields (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT regulation_id, 'origin_country', 'text', '["miner","trader"]'::jsonb, TRUE
+FROM regulations WHERE regulation_code = 'UFLPA';
+
+INSERT INTO regulation_required_fields (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT regulation_id, 'geo_risk_flags', 'jsonb', '["miner"]'::jsonb, FALSE
+FROM regulations WHERE regulation_code = 'UFLPA';
+
+-- IRA (FEOC 지분)
+INSERT INTO regulation_required_fields (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT regulation_id, 'feoc_direct_ownership', 'numeric', '["trader","manufacturer"]'::jsonb, TRUE
+FROM regulations WHERE regulation_code = 'IRA';
+
+INSERT INTO regulation_required_fields (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT regulation_id, 'feoc_indirect_ownership', 'numeric', '["trader","manufacturer"]'::jsonb, FALSE
+FROM regulations WHERE regulation_code = 'IRA';
+
+
+-- ============================================================
 -- 14. 데이터 흐름 / Submission (영역 11)
 -- ============================================================
 INSERT INTO data_request_log (request_id, requester_user_id, target_supplier_id, requested_data_type, requested_at, due_date, response_status, submission_status) VALUES

@@ -205,6 +205,8 @@ class SupplierRecyclerDetail(Base):
     recycling_certification: Mapped[Optional[str]] = mapped_column(String(255))
     input_source: Mapped[Optional[str]] = mapped_column(String(50))
     recycled_content_ratio: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
+    # W5 DDL 신규 컬럼: 소재별 회수율. {"Li":80,"Co":90,"Ni":85}
+    recycling_efficiency: Mapped[Optional[dict]] = mapped_column(JSONB)
     supplier = relationship("Supplier", back_populates="recycler_detail")
 
 
