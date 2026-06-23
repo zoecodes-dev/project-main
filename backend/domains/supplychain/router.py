@@ -13,7 +13,8 @@ import 경로를 package 기준으로 수정 (flat → backend.* 패키지).
   - GET /supply-chain/by-bom-depth/{n} : 부품 tier(bom_depth, 0-base) 기준 필터
   - GET /supply-chain/by-hop/{n}       : 공급망 차수(hop_level, 경로 순번) 기준 필터
 """
-from typing import Any, Dict, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -22,7 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.supplychain.repository import SupplyChainRepository
 from backend.domains.supplychain.service import SupplyChainService
-from backend.infrastructure.database import get_db
+from backend.domains.submission.service import create_and_request_submission
+from backend.infrastructure.database import get_db, AsyncSessionLocal
 from backend.infrastructure.trace import trace_tool
 
 router = APIRouter(prefix="/supply-chain", tags=["Supply Chain Domain"])
@@ -114,6 +116,35 @@ async def get_by_hop_endpoint(
     return await service.get_by_hop(n)
 
 
+@router.get("/gaps")
+@trace_tool("get_supply_chain_gaps")
+async def get_supply_chain_gaps_endpoint(
+    product_id: UUID,
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """
+    C2 맵 gap 계산 API.
+
+    제품 공급망 내 각 협력사 노드별로 적용 규제 대비 미보유 필수 필드 목록 반환.
+    응답 예시:
+      {
+        "product_id": "...",
+        "nodes": [
+          {
+            "supplier_id": "...",
+            "supplier_type": "manufacturer",
+            "depth": 0,
+            "missing_fields": [
+              {"field_name": "carbon_intensity", "regulation_code": "EU_BATTERY_ART7", ...}
+            ],
+            "gap_count": 1
+          }
+        ]
+      }
+    """
+    return await service.get_gaps(product_id=str(product_id))
+
+
 @router.get("/alternatives")
 @trace_tool("get_alternatives")
 async def get_supply_chain_alternatives_endpoint(
@@ -170,3 +201,62 @@ async def declare_source_change_endpoint(
         part_id=body.part_id,
         reason=body.reason
     )
+
+
+class TriggerDataRequestsBody(BaseModel):
+    product_id: UUID
+    supplier_ids: Optional[List[UUID]] = None  # None = gap 있는 노드 전체
+    requester_user_id: UUID
+    actor_id: UUID
+    due_date: Optional[datetime] = None
+
+
+@router.post("/trigger-data-requests", response_model=Dict[str, Any])
+@trace_tool("trigger_data_requests_for_gaps")
+async def trigger_data_requests_for_gaps_endpoint(
+    body: TriggerDataRequestsBody,
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """
+    C3 맵 gap→데이터요청 트리거.
+
+    공급망 맵에서 규제 필수 필드 gap이 있는 노드(협력사)를 대상으로
+    submission 도메인의 POST /data-requests를 일괄 호출한다.
+    supplier_ids 미지정 시 gap_count > 0인 모든 노드에 요청 생성.
+    """
+    gaps = await service.get_gaps(product_id=str(body.product_id))
+    nodes = gaps.get("nodes", [])
+
+    target_ids = {str(sid) for sid in body.supplier_ids} if body.supplier_ids else None
+
+    created = []
+    for node in nodes:
+        if node["gap_count"] == 0:
+            continue
+        if target_ids and node["supplier_id"] not in target_ids:
+            continue
+
+        missing_types = ",".join(f["field_name"] for f in node["missing_fields"])
+        # gap 조회 세션(service)과 분리된 독립 세션으로 write — 세션 충돌 방지
+        async with AsyncSessionLocal() as db:
+            data_request = await create_and_request_submission(
+                db=db,
+                requester_user_id=body.requester_user_id,
+                target_supplier_id=UUID(node["supplier_id"]),
+                requested_data_type=missing_types,
+                due_date=body.due_date,
+                actor_id=body.actor_id,
+            )
+        created.append({
+            "request_id":           str(data_request.request_id),
+            "supplier_id":          node["supplier_id"],
+            "requested_data_type":  missing_types,
+            "gap_count":            node["gap_count"],
+            "is_root_anchor":       node.get("is_root_anchor", False),
+        })
+
+    return {
+        "product_id":    str(body.product_id),
+        "created_count": len(created),
+        "requests":      created,
+    }

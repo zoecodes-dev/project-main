@@ -25,6 +25,10 @@ from backend.domains.supplier.models import (
     SupplierEsgResponse,
     SupplierTrainingResponse,
     SupplierReliabilityResponse,
+    SupplierFactoriesResponse,
+    MasterFormRequest,
+    MasterFormResponse,
+    MasterFormPrefillResponse,
 )
 
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
@@ -46,6 +50,39 @@ async def create_supplier_endpoint(
     )
     # ★ 여기서 db.commit() 하지 않는다 — service가 이미 커밋
     return {"supplier_id": supplier.supplier_id, "status": supplier.status}
+
+
+@router.post("/{supplier_id}/master-form", response_model=MasterFormResponse)
+async def submit_master_form_endpoint(
+    supplier_id: UUID,
+    form: MasterFormRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    마스터폼(표준화된 단일 입력양식) 제출 — 섹션 0~6을 한 번에 받아 도메인별로 분배
+    저장한다. service가 단일 트랜잭션으로 atomic commit(한 섹션 실패 시 전체 롤백).
+    ★ router에서 db.commit() 하지 않는다 — service가 일원화.
+    """
+    result = await service.submit_master_form(db, supplier_id, form)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return result
+
+
+@router.get("/{supplier_id}/master-form/prefill", response_model=MasterFormPrefillResponse)
+async def get_master_form_prefill_endpoint(
+    supplier_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    AP(AI 자동 채움): 협력사가 업로드한 보완 문서의 AI 추출결과를 마스터폼 섹션 구조로
+    모아 prefill 초안을 반환한다. 협력사는 이를 검토·정정 후 master-form으로 제출한다.
+    추출결과가 없으면 빈 prefill(document_count=0)로 정상 반환(업로드 전 상태).
+    """
+    data = await service.get_master_form_prefill(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
 
 
 @router.get("/{supplier_id}", response_model=SupplierBrief)
@@ -158,6 +195,18 @@ async def get_supplier_reliability_endpoint(
 ):
     """Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약 조회."""
     data = await service.get_reliability(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
+
+
+@router.get("/{supplier_id}/factories", response_model=SupplierFactoriesResponse)
+async def get_supplier_factories_endpoint(
+    supplier_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """사업장 탭 — 공장/광산 목록(PostGIS 좌표 lat/lng 포함) 조회."""
+    data = await service.get_factories(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return data

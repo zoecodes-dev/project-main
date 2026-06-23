@@ -57,6 +57,9 @@ class DataRequestLog(Base):
     submission_status: Mapped[Optional[SubmissionStatus]] = mapped_column(                  # 플랫폼 핵심 9개 상태 머신 프로세스 단계 관리
         Enum(SubmissionStatus, native_enum=False, length=30, values_callable=lambda e: [m.value for m in e]), default=SubmissionStatus.REQUESTED, server_default="submission_requested", nullable=True
     )
+    # submit 시 생성된 batch_id 보관 — approve 시 파이프라인 enqueue에 사용.
+    # DDL: ALTER TABLE data_request_log ADD COLUMN batch_id UUID; (D 영수 담당)
+    batch_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     is_archived: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, server_default="false", nullable=True)
     created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
 

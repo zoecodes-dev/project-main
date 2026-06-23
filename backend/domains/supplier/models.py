@@ -195,6 +195,27 @@ class SupplierManufacturerDetail(Base):
     supplier = relationship("Supplier", back_populates="manufacturer_detail")
 
 
+class FactoryCarbonDeclaration(Base):
+    """
+    공장 단위 1차 탄소 선언(EU 배터리법 Art.7 PEF). schema.sql:555 전수 정합.
+    배치 판정 시 supply_ratio 가중평균의 입력. supplier_factories에 종속.
+    선언 누락 공장이 있으면 compliance에서 needs_human_review 처리.
+    """
+    __tablename__ = "factory_carbon_declarations"
+    declaration_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    factory_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="CASCADE"), nullable=False
+    )
+    carbon_intensity: Mapped[float] = mapped_column(NUMERIC(10, 4), nullable=False)  # kg CO2e/kWh (PEF)
+    methodology: Mapped[Optional[str]] = mapped_column(String(50))
+    declared_at: Mapped[date] = mapped_column(Date, nullable=False)
+    valid_from: Mapped[Optional[date]] = mapped_column(Date)
+    valid_to: Mapped[Optional[date]] = mapped_column(Date)
+    source: Mapped[str] = mapped_column(String(30), default="supplier_declared")  # supplier_declared/third_party_verified/estimated
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SupplierRecyclerDetail(Base):
     __tablename__ = "supplier_recycler_details"
     detail_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -205,6 +226,8 @@ class SupplierRecyclerDetail(Base):
     recycling_certification: Mapped[Optional[str]] = mapped_column(String(255))
     input_source: Mapped[Optional[str]] = mapped_column(String(50))
     recycled_content_ratio: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
+    # W5 DDL 신규 컬럼: 소재별 회수율. {"Li":80,"Co":90,"Ni":85}
+    recycling_efficiency: Mapped[Optional[dict]] = mapped_column(JSONB)
     supplier = relationship("Supplier", back_populates="recycler_detail")
 
 
@@ -597,6 +620,33 @@ class SupplierTrainingResponse(BaseModel):
     records: list[TrainingRecordDTO] = []
 
 
+# 사업장(공장/광산) 탭: supplier_factories. location(PostGIS POINT)은 lat/lng로 분해해 노출.
+class FactoryDTO(BaseModel):
+    factory_id: uuid.UUID
+    factory_name: Optional[str] = None
+    factory_name_en: Optional[str] = None
+    address: Optional[str] = None
+    country: Optional[str] = None
+    region: Optional[str] = None
+    factory_role: Optional[str] = None
+    is_active: Optional[bool] = None
+    operating_period_from: Optional[date] = None
+    operating_period_to: Optional[date] = None
+    monthly_capacity: Optional[str] = None
+    destination: Optional[str] = None
+    destination_detail: Optional[str] = None
+    supply_ratio_percent: Optional[float] = None
+    supply_quantity: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    model_config = {"from_attributes": True}
+
+
+class SupplierFactoriesResponse(BaseModel):
+    supplier_id: uuid.UUID
+    factories: list[FactoryDTO] = []
+
+
 # Reliability(신뢰도) 탭: 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.
 class SupplierReliabilityResponse(BaseModel):
     supplier_id: uuid.UUID
@@ -862,3 +912,17 @@ class MasterFormResponse(BaseModel):
     supplier_id: uuid.UUID
     status: str
     sections_saved: list[str] = []   # 예: ["company", "factories", "recycling"]
+
+
+# ----- AP: 마스터폼 AI 자동 채움(prefill) 응답 -----
+class MasterFormPrefillResponse(BaseModel):
+    """
+    GET /suppliers/{id}/master-form/prefill — 협력사 보완 문서 추출결과를 마스터폼
+    섹션 구조로 모은 초안. 협력사는 prefill을 검토·정정 후 master-form으로 제출한다.
+    low_confidence_fields는 신뢰도 임계치 미만이라 '확인 요청'이 필요한 항목 목록.
+    """
+    supplier_id: uuid.UUID
+    document_count: int = 0          # 추출결과가 모인 문서 수(0이면 업로드 전)
+    unconfirmed_documents: int = 0   # 협력사 미확인(confirm 전) 문서 수
+    prefill: dict = {}               # {"company": {...}, "manufacturing": {...}, ...}
+    low_confidence_fields: list[dict] = []

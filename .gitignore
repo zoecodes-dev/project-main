@@ -32,3 +32,10 @@ scripts/
 backend/scripts/
 .claude/
 CLAUDE.md
+# 개인 학습용 상세 설명서 (공유 안 함)
+ci/GUIDE.md
+# CI 생성 아티팩트 (리포트/테스트 결과)
+ci/report.md
+ci/pytest-results.xml
+kira-architecture.html
+interaction.html
