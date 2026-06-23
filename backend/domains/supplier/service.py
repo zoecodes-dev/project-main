@@ -38,6 +38,10 @@ from backend.domains.submission import masterform as e_masterform
 #   masterform_prefill. 둘 다 무거운 LLM 스택을 끌어오지 않는 가벼운 호출이다.
 from backend.domains.submission import repository as submission_repo
 from backend.domains.supplier import masterform_prefill
+# NOTE: 섹션 3 원산지 증명서 write(C: regulation.save_origin_certificates)는 의도적으로
+#   module-level import하지 않는다 — 현재 regulation 도메인이 미완이라(models.py/
+#   repository.py 비어 import 자체가 ImportError) 끌어오면 supplier.service가 통째로
+#   import 불가가 된다. C가 regulation을 완성하면 섹션 3 블록에 배선한다(아래 참조).
 
 # ── 정책 상수 ───────────────────────────────────────────────
 # 협력사 온보딩 SLA. PROJECT_CORE: 14일 미응답 → Reminder, 21일 → Escalation.
@@ -126,7 +130,7 @@ async def submit_master_form(
       0 회사·공장·PIC      B (repository.write_master_form_*)
       1 탄소발자국         B (manufacturer_details + factory_carbon_declarations)
       2 재활용             B (recycler_details · recycling_efficiency 포함)
-      3 원산지·GPS         D GPS(miner_details) 배선 / C 원산지 증명서는 아직 슬롯
+      3 원산지·GPS         D GPS(miner_details) 배선 / C 원산지 증명서는 regulation 미완으로 슬롯
       4 지분·FEOC          E (e_masterform.write_supplier_trader_details)
       5 인권·중대·교육     E (e_masterform.write_supplier_social)
       6 EoL·인증서         E (e_masterform.write_supplier_certifications)
@@ -165,7 +169,8 @@ async def submit_master_form(
 
         # ── 섹션 3: 원산지·GPS ────────────────────────────────────────────────
         #   GPS(supplier_miner_details) = D 제공(repository.upsert_miner_details) → 배선.
-        #   원산지 증명서(origin_certificates) = C 미제공 → 아직 슬롯(보류).
+        #   원산지 증명서(origin_certificates) = C가 함수 골격은 작성(save_origin_certificates)
+        #     했으나 regulation 도메인 미완(models.py/repository.py 비어 import 불가) → 슬롯 보류.
         #   PostGIS 좌표 변환(lng/lat swap)은 upsert_miner_details 내부가 담당한다.
         if form.origin is not None:
             origin = form.origin
@@ -182,11 +187,15 @@ async def submit_master_form(
                 active_period_to=origin.active_period_to,
             )
             sections_saved.append("origin")
-            # 원산지 증명서(C origin_certificates write)는 미제공 — 수신돼도 보류.
+            # 원산지 증명서(C) — regulation 도메인 완성 후 아래로 배선(같은 db, commit은 B):
+            #   from backend.domains.regulation.service import save_origin_certificates
+            #   await save_origin_certificates(db=db, supplier_id=str(supplier_id),
+            #       certificates=[c.model_dump() for c in origin.origin_certificates])
+            #   sections_saved.append("origin_certificates")
             if origin.origin_certificates:
                 print(
                     f"[MasterForm] 섹션 3 origin_certificates {len(origin.origin_certificates)}건 "
-                    f"수신됐으나 C write 미제공 — 보류: supplier={supplier_id}"
+                    f"수신됐으나 regulation 도메인 미완 — 보류: supplier={supplier_id}"
                 )
 
         # ── 섹션 4~6: E 제공 write 함수 호출 (동일 트랜잭션) ──────────────────
