@@ -145,26 +145,49 @@ async def submit_data_request_endpoint(request_id: uuid.UUID, req: SubmitDataReq
         db, request_id, SubmissionStatus.SUBMITTED, req,
         batch_id=uuid.UUID(batch_id_str), file_urls=req.file_urls, confirmed_fields=req.confirmed_fields
     )
-    await enqueue(
-        BATCH_PIPELINE_QUEUE,
-        "start_batch_pipeline",
-        job_id=f"pipeline:{batch_id_str}",
-        batch_id=batch_id_str,
-        product_id=str(req.product_id),
-        destination=req.destination,
-    )
+    # 파이프라인은 승인(approve) 후에 시작 — 여기서는 배치 생성만 하고 enqueue 하지 않음
     return req_log
 
 @router.post("/{request_id}/approve", response_model=DataRequestResponse)
 async def approve_data_request_endpoint(request_id: uuid.UUID, req: ActionDataRequest, db: AsyncSession = Depends(get_db)):
     """
     [API] POST /data-requests/{request_id}/approve
-    원청사 담당자가 제출 내역을 승인합니다.
+    원청사 담당자가 제출 내역을 승인하고, 파이프라인을 시작합니다.
+
+    submit 시 생성·저장된 batch_id를 조회해 enqueue한다.
+    job_id=f"pipeline:{batch_id}" 멱등성 키로 중복 invoke를 방어한다.
     """
-    return await _handle_status_update(
+    # submit 때 저장된 batch_id 조회
+    req_log = await get_submission_detail(db, request_id)
+    if not req_log:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data request not found")
+
+    batch_id = req_log.batch_id
+
+    approved = await _handle_status_update(
         db, request_id, SubmissionStatus.APPROVED, req,
-        reason=req.reason
+        reason=req.reason,
+        batch_id=batch_id,  # SubmissionApproved 이벤트에 batch_id가 실림
     )
+
+    # 파이프라인 시작 — batch_id가 있을 때만 (재제출 등 예외 케이스 방어)
+    if batch_id:
+        from sqlalchemy import text as _text
+        row = (await db.execute(
+            _text("SELECT product_id, destination FROM batches WHERE batch_id = :bid"),
+            {"bid": batch_id},
+        )).one_or_none()
+        if row:
+            await enqueue(
+                BATCH_PIPELINE_QUEUE,
+                "start_batch_pipeline",
+                job_id=f"pipeline:{batch_id}",   # 멱등성 키 — 중복 approve 방어
+                batch_id=str(batch_id),
+                product_id=str(row.product_id),
+                destination=row.destination,
+            )
+
+    return approved
 
 @router.post("/{request_id}/reject", response_model=DataRequestResponse, include_in_schema=False)
 async def reject_data_request_endpoint(request_id: uuid.UUID, req: ActionDataRequest, db: AsyncSession = Depends(get_db)):
