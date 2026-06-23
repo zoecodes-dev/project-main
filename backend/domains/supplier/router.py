@@ -26,6 +26,8 @@ from backend.domains.supplier.models import (
     SupplierTrainingResponse,
     SupplierReliabilityResponse,
     SupplierFactoriesResponse,
+    MasterFormRequest,
+    MasterFormResponse,
 )
 
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
@@ -47,6 +49,23 @@ async def create_supplier_endpoint(
     )
     # ★ 여기서 db.commit() 하지 않는다 — service가 이미 커밋
     return {"supplier_id": supplier.supplier_id, "status": supplier.status}
+
+
+@router.post("/{supplier_id}/master-form", response_model=MasterFormResponse)
+async def submit_master_form_endpoint(
+    supplier_id: UUID,
+    form: MasterFormRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    마스터폼(표준화된 단일 입력양식) 제출 — 섹션 0~6을 한 번에 받아 도메인별로 분배
+    저장한다. service가 단일 트랜잭션으로 atomic commit(한 섹션 실패 시 전체 롤백).
+    ★ router에서 db.commit() 하지 않는다 — service가 일원화.
+    """
+    result = await service.submit_master_form(db, supplier_id, form)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return result
 
 
 @router.get("/{supplier_id}", response_model=SupplierBrief)

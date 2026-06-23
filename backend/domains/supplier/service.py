@@ -21,10 +21,19 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.supplier import repository
-from backend.domains.supplier.models import Supplier, SupplierOnboarding, SupplierRiskProfile
+from backend.domains.supplier.models import (
+    MasterFormRequest,
+    Supplier,
+    SupplierOnboarding,
+    SupplierRiskProfile,
+)
 from backend.events.types import RiskProfileUpdatedEvent, SupplierInvitedEvent
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
+# 마스터폼 섹션 4~6 write는 E가 제공(submission/masterform.py). B의 오케스트레이터가
+# '동일 db 세션'으로 호출해 단일 트랜잭션 atomic 묶음으로 commit한다(§4). 도메인 코드를
+# 대신 구현하는 게 아니라 제공된 계약 함수를 호출만 한다.
+from backend.domains.submission import masterform as e_masterform
 
 # ── 정책 상수 ───────────────────────────────────────────────
 # 협력사 온보딩 SLA. PROJECT_CORE: 14일 미응답 → Reminder, 21일 → Escalation.
@@ -97,6 +106,92 @@ async def create_supplier_and_invite(
 async def get_supplier(db: AsyncSession, supplier_id: UUID) -> Optional[Supplier]:
     """단건 조회. 비즈니스 로직 없이 repository에 위임."""
     return await repository.get_supplier_by_id(db, supplier_id)
+
+
+async def submit_master_form(
+    db: AsyncSession, supplier_id: UUID, form: MasterFormRequest
+) -> Optional[dict]:
+    """
+    마스터폼(표준화된 단일 입력양식) 제출 진입점 — POST /suppliers/{id}/master-form. (§4)
+
+    협력사가 보는 '하나의 양식'을 통째로 받아, service가 섹션별로 쪼개 각 도메인의
+    write 함수를 호출하고 ★단일 트랜잭션으로 commit(atomic)★ 한다. 한 섹션이라도
+    실패하면 commit에 도달하지 않고 전체 롤백된다(부분 저장 금지).
+
+    섹션 → 저장 책임:
+      0 회사·공장·PIC      B (repository.write_master_form_*)
+      1 탄소발자국         B (manufacturer_details + factory_carbon_declarations)
+      2 재활용             B (recycler_details · recycling_efficiency는 D DDL 대기)
+      3 원산지·GPS         C(원산지)·D(GPS) — write 함수 미제공 → 현재 슬롯(저장 보류)
+      4 지분·FEOC          E (e_masterform.write_supplier_trader_details)
+      5 인권·중대·교육     E (e_masterform.write_supplier_social)
+      6 EoL·인증서         E (e_masterform.write_supplier_certifications)
+
+    반환: 저장된 섹션 키 목록을 담은 dict. 없는 supplier_id면 None(→ router 404).
+    """
+    # 존재 확인 — 없는 supplier_id로 분배 저장(FK 위반 직전까지 진행) 방지.
+    if await repository.get_supplier_by_id(db, supplier_id) is None:
+        return None
+
+    sections_saved: List[str] = []
+    try:
+        # ── 섹션 0: 회사·공장·PIC (B) — 공장 먼저 생성해 factory_ids 확보 ──────
+        await repository.write_master_form_company(db, supplier_id, form.company)
+        sections_saved.append("company")
+
+        factory_ids = await repository.write_master_form_factories(db, supplier_id, form.factories)
+        if form.factories:
+            sections_saved.append("factories")
+
+        await repository.write_master_form_contacts(db, supplier_id, form.contacts)
+        if form.contacts:
+            sections_saved.append("contacts")
+
+        # ── 섹션 1: 탄소발자국 (B) — 탄소선언이 factory_ids를 FK로 참조 ────────
+        if form.manufacturing is not None:
+            await repository.write_master_form_manufacturing(
+                db, supplier_id, factory_ids, form.manufacturing
+            )
+            sections_saved.append("manufacturing")
+
+        # ── 섹션 2: 재활용 (B) ────────────────────────────────────────────────
+        if form.recycling is not None:
+            await repository.write_master_form_recycling(db, supplier_id, form.recycling)
+            sections_saved.append("recycling")
+
+        # ── 섹션 3: 원산지·GPS (C/D) — write 함수 미제공. 슬롯(저장 보류) ──────
+        # C/D 머지 후 같은 db로 호출해 atomic 묶음에 합류시킨다:
+        #   await c_masterform.write_origin_certificates(db, supplier_id, form.origin)
+        #   await d_masterform.write_miner_gps(db, supplier_id, form.origin)
+        if form.origin is not None:
+            print(
+                f"[MasterForm] 섹션 3(origin) 수신됐으나 C/D write 미제공 — 저장 보류: "
+                f"supplier={supplier_id}"
+            )
+
+        # ── 섹션 4~6: E 제공 write 함수 호출 (동일 트랜잭션) ──────────────────
+        if form.ownership is not None:
+            await e_masterform.write_supplier_trader_details(db, supplier_id, form.ownership)
+            sections_saved.append("ownership")
+        if form.social is not None:
+            await e_masterform.write_supplier_social(db, supplier_id, factory_ids, form.social)
+            sections_saved.append("social")
+        if form.certifications is not None:
+            await e_masterform.write_supplier_certifications(db, supplier_id, form.certifications)
+            sections_saved.append("certifications")
+
+        # ── 단일 커밋 (atomic) — 여기 도달해야만 영속화 ───────────────────────
+        await db.commit()
+    except Exception:
+        # 한 섹션이라도 실패하면 전체 롤백(부분 저장 방지). 원인은 그대로 올린다.
+        await db.rollback()
+        raise
+
+    return {
+        "supplier_id": supplier_id,
+        "status": "submitted",
+        "sections_saved": sections_saved,
+    }
 
 
 # 원청(OEM, tier0) 노드 — manufacturer지만 CTI 수집 대상 아님 → 점검 예외.
