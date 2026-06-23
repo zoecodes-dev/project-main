@@ -910,3 +910,17 @@ class MasterFormResponse(BaseModel):
     supplier_id: uuid.UUID
     status: str
     sections_saved: list[str] = []   # 예: ["company", "factories", "recycling"]
+
+
+# ----- AP: 마스터폼 AI 자동 채움(prefill) 응답 -----
+class MasterFormPrefillResponse(BaseModel):
+    """
+    GET /suppliers/{id}/master-form/prefill — 협력사 보완 문서 추출결과를 마스터폼
+    섹션 구조로 모은 초안. 협력사는 prefill을 검토·정정 후 master-form으로 제출한다.
+    low_confidence_fields는 신뢰도 임계치 미만이라 '확인 요청'이 필요한 항목 목록.
+    """
+    supplier_id: uuid.UUID
+    document_count: int = 0          # 추출결과가 모인 문서 수(0이면 업로드 전)
+    unconfirmed_documents: int = 0   # 협력사 미확인(confirm 전) 문서 수
+    prefill: dict = {}               # {"company": {...}, "manufacturing": {...}, ...}
+    low_confidence_fields: list[dict] = []

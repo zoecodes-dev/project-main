@@ -28,6 +28,7 @@ from backend.domains.supplier.models import (
     SupplierFactoriesResponse,
     MasterFormRequest,
     MasterFormResponse,
+    MasterFormPrefillResponse,
 )
 
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
@@ -66,6 +67,22 @@ async def submit_master_form_endpoint(
     if result is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return result
+
+
+@router.get("/{supplier_id}/master-form/prefill", response_model=MasterFormPrefillResponse)
+async def get_master_form_prefill_endpoint(
+    supplier_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    AP(AI 자동 채움): 협력사가 업로드한 보완 문서의 AI 추출결과를 마스터폼 섹션 구조로
+    모아 prefill 초안을 반환한다. 협력사는 이를 검토·정정 후 master-form으로 제출한다.
+    추출결과가 없으면 빈 prefill(document_count=0)로 정상 반환(업로드 전 상태).
+    """
+    data = await service.get_master_form_prefill(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
 
 
 @router.get("/{supplier_id}", response_model=SupplierBrief)
