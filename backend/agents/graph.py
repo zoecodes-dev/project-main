@@ -10,7 +10,6 @@ from sqlalchemy import select
 
 from backend.agents.compliance import compliance_node
 from backend.agents.data_gateway import data_gateway_node
-from backend.agents.geo_audit import geo_audit_node
 from backend.agents.state import BatchState
 from backend.agents.supervisor import route
 from backend.domains.audit import repository
@@ -22,12 +21,6 @@ from backend.events.types import HITLRequestedEvent
 from backend.infrastructure.database import AsyncSessionLocal
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
-from backend.agents.automation import (
-    verification_node,
-    risk_scoring_node,
-    readiness_node,
-    issuance_node,
-)
 from backend.core.config import config
 from backend.domains.dpp.models import Batch
 
@@ -62,12 +55,6 @@ def _batch_id(state: BatchState) -> UUID:
     if value is None:
         raise ValueError("batch_id is required")
     return UUID(value)
-
-
-async def _pause_batch(batch_id: UUID) -> None:
-    async with AsyncSessionLocal() as db:
-        await pause_batch_for_review(db, batch_id)
-        await db.commit()
 
 
 async def _resume_batch(batch_id: UUID) -> None:
@@ -123,41 +110,10 @@ async def hitl_interrupt_node(state: BatchState) -> BatchState:
     }
 
 
-async def supplier_reverify_node(state: BatchState) -> BatchState:
-    batch_id = _batch_id(state)
-    trigger_stage = state["current_stage"]
-    paused_state: BatchState = {**state, "batch_status": "batch_hitl_wait"}
-
-    await _pause_batch(batch_id)
-    interrupt(
-        {
-            "type": "supplier_reverify",
-            "batch_id": str(batch_id),
-            "reason": "low_confidence",
-            "trigger_stage": trigger_stage,
-            "batch_status": "batch_hitl_wait",
-        }
-    )
-
-    await _resume_batch(batch_id)
-    return {
-        **paused_state,
-        "batch_status": "batch_processing",
-        "confidence_score": max(float(state.get("confidence_score") or 0.0), 0.85),
-        "error_reason": None,
-    }
-
-
 builder = StateGraph(BatchState)
 builder.add_node("supervisor", supervisor_node)
 builder.add_node("data_gateway", traced_graph_node("data_gateway", data_gateway_node))
-builder.add_node("verification", traced_graph_node("verification", verification_node))
-builder.add_node("geo_audit", traced_graph_node("geo_audit", geo_audit_node))
 builder.add_node("compliance", traced_graph_node("compliance", compliance_node))
-builder.add_node("risk_scoring", traced_graph_node("risk_scoring", risk_scoring_node))
-builder.add_node("readiness", traced_graph_node("readiness", readiness_node))
-builder.add_node("issuance", traced_graph_node("issuance", issuance_node))
-builder.add_node("supplier_reverify", traced_graph_node("supplier_reverify", supplier_reverify_node, "human"))
 builder.add_node("hitl_interrupt", traced_graph_node("hitl_interrupt", hitl_interrupt_node, "human"))
 builder.add_node("completed", supervisor_node)
 
@@ -167,30 +123,15 @@ builder.add_conditional_edges(
     route_batch,
     {
         "data_gateway": "data_gateway",
-        "verification": "verification",
-        "geo_audit": "geo_audit",
         "compliance": "compliance",
-        "risk_scoring": "risk_scoring",
-        "readiness": "readiness",
-        "issuance": "issuance",
-        "supplier_reverify": "supplier_reverify",
         "hitl_interrupt": "hitl_interrupt",
         "completed": "completed",
     },
 )
 
-for node_name in (
-    "data_gateway",
-    "verification",
-    "geo_audit",
-    "compliance",
-    "risk_scoring",
-    "readiness",
-    "issuance",
-):
+for node_name in ("data_gateway", "compliance"):
     builder.add_edge(node_name, "supervisor")
 
-builder.add_edge("supplier_reverify", "supervisor")
 builder.add_edge("hitl_interrupt", "supervisor")
 builder.add_edge("completed", END)
 

@@ -49,12 +49,10 @@ async def _register_subscriptions() -> None:
     # HITL 재개 (A) — interrupt 해소 시 그래프 resume
     await subscribe("hitl.resolved", _on_hitl_resolved)
 
-    # ── A1 슬롯: 배치 생성 + graph 트리거 ────────────────────────────
-    # A가 handlers/batch_trigger.py 완성 후 아래 두 줄을 배선한다.
-    # SubmissionApproved / SubmissionCompleted → repo.create_batch() → graph.ainvoke()
-    #   from backend.handlers.batch_trigger import on_submission_approved
-    #   await subscribe("SubmissionApproved", on_submission_approved)
-    #   await subscribe("SubmissionCompleted", on_submission_approved)
+    # ── A1: 배치 생성 + graph 트리거 ─────────────────────────────────
+    from backend.handlers.batch_trigger import on_submission_approved
+    await subscribe("SubmissionApproved", on_submission_approved)
+    await subscribe("SubmissionCompleted", on_submission_approved)
 
     # ── 그 외 도메인 핸들러 슬롯 (D: discovered_via 기록 / E: 알림 등) ──
     # 예) await subscribe("SupplierInvited", supplychain_record_discovered_via)
