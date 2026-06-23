@@ -408,9 +408,9 @@ async def write_master_form_recycling(
     섹션 2 — supplier_recycler_details(1-per-supplier, replace).
     recycled_materials는 RecycledMaterialsSchema(B·C 공유 계약)를 dict로 직렬화해 저장.
 
-    ※ recycling_efficiency(소재별 회수율)는 D팀 Wave 0 DDL(supplier_recycler_details
-       컬럼 추가) 적용 전이라 보류한다. 컬럼/ORM 생기면 아래 add()에 한 줄 추가:
-           recycling_efficiency=data.recycling_efficiency,
+    recycling_efficiency(소재별 회수율 {"Li":80,"Co":90,...})는 D팀 Wave 0 DDL이
+    develop에 머지되어(supplier_recycler_details 컬럼) 함께 저장한다.
+    recycled_content_ratio(완성품 내 재활용 패널 비율)와는 별개 축이다.
     """
     await db.execute(
         delete(SupplierRecyclerDetail).where(SupplierRecyclerDetail.supplier_id == supplier_id)
@@ -425,7 +425,7 @@ async def write_master_form_recycling(
         recycling_certification=data.recycling_certification,
         input_source=data.input_source,
         recycled_content_ratio=data.recycled_content_ratio,
-        # recycling_efficiency=...,  # ← D DDL 적용 후 활성화 (위 docstring 참조)
+        recycling_efficiency=data.recycling_efficiency,  # 소재별 회수율(D DDL 머지됨)
     ))
 
 

@@ -125,8 +125,8 @@ async def submit_master_form(
     섹션 → 저장 책임:
       0 회사·공장·PIC      B (repository.write_master_form_*)
       1 탄소발자국         B (manufacturer_details + factory_carbon_declarations)
-      2 재활용             B (recycler_details · recycling_efficiency는 D DDL 대기)
-      3 원산지·GPS         C(원산지)·D(GPS) — write 함수 미제공 → 현재 슬롯(저장 보류)
+      2 재활용             B (recycler_details · recycling_efficiency 포함)
+      3 원산지·GPS         D GPS(miner_details) 배선 / C 원산지 증명서는 아직 슬롯
       4 지분·FEOC          E (e_masterform.write_supplier_trader_details)
       5 인권·중대·교육     E (e_masterform.write_supplier_social)
       6 EoL·인증서         E (e_masterform.write_supplier_certifications)
@@ -163,15 +163,31 @@ async def submit_master_form(
             await repository.write_master_form_recycling(db, supplier_id, form.recycling)
             sections_saved.append("recycling")
 
-        # ── 섹션 3: 원산지·GPS (C/D) — write 함수 미제공. 슬롯(저장 보류) ──────
-        # C/D 머지 후 같은 db로 호출해 atomic 묶음에 합류시킨다:
-        #   await c_masterform.write_origin_certificates(db, supplier_id, form.origin)
-        #   await d_masterform.write_miner_gps(db, supplier_id, form.origin)
+        # ── 섹션 3: 원산지·GPS ────────────────────────────────────────────────
+        #   GPS(supplier_miner_details) = D 제공(repository.upsert_miner_details) → 배선.
+        #   원산지 증명서(origin_certificates) = C 미제공 → 아직 슬롯(보류).
+        #   PostGIS 좌표 변환(lng/lat swap)은 upsert_miner_details 내부가 담당한다.
         if form.origin is not None:
-            print(
-                f"[MasterForm] 섹션 3(origin) 수신됐으나 C/D write 미제공 — 저장 보류: "
-                f"supplier={supplier_id}"
+            origin = form.origin
+            coords = origin.mine_coordinates
+            await repository.upsert_miner_details(
+                db,
+                supplier_id,
+                mine_name=origin.mine_name,
+                mining_method=origin.mining_method,
+                extraction_volume=origin.extraction_volume,
+                lat=coords.latitude if coords else None,
+                lng=coords.longitude if coords else None,
+                active_period_from=origin.active_period_from,
+                active_period_to=origin.active_period_to,
             )
+            sections_saved.append("origin")
+            # 원산지 증명서(C origin_certificates write)는 미제공 — 수신돼도 보류.
+            if origin.origin_certificates:
+                print(
+                    f"[MasterForm] 섹션 3 origin_certificates {len(origin.origin_certificates)}건 "
+                    f"수신됐으나 C write 미제공 — 보류: supplier={supplier_id}"
+                )
 
         # ── 섹션 4~6: E 제공 write 함수 호출 (동일 트랜잭션) ──────────────────
         if form.ownership is not None:

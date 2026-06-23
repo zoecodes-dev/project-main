@@ -17,7 +17,8 @@ AP(AI 파싱 강화)의 목표: 협력사가 양식을 직접 못 채워도, 보
 스코프: '한 문서에서 단일값으로 신뢰성 있게 뽑히는' 스칼라 필드만 자동 채움 대상이다.
 다건/구조화 섹션(공장 목록·연락처·인증서·인권/실사/교육·소재별 재활용 함량·탄소
 선언 다건)은 AI 단일 추출로 안전하게 못 채우므로 협력사가 직접 입력한다.
-recycling_efficiency(소재별 회수율)는 D팀 Wave0 DDL 대기로 카탈로그에서 제외.
+recycling_efficiency·recycled_materials(소재별 회수율/함량 dict)도 단일 스칼라가
+아니라 구조화 값이라 카탈로그에서 제외(협력사가 직접 입력).
 """
 from typing import Any, Dict, List, Optional, Tuple
 
