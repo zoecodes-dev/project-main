@@ -1,0 +1,23 @@
+#!/bin/sh
+# .githooks/pre-push — KIRA 정적 게이트 (경고 모드 · 비차단)
+#
+# push 직전 빠른 정적 검사를 돌려 '정합성 회귀'를 푸시 전에 눈에 띄게 한다.
+# 팀 컨벤션(ci.yml)과 동일하게 '경고 모드'다 — 위반이 있어도 push를 막지 않는다.
+# 무거운 스택 검증(smoke/e2e)은 여기 넣지 않는다(느림). 그건 ci/verify.ps1.
+#
+# 활성화(1회): git config core.hooksPath .githooks
+# 차단형으로 바꾸려면 아래 STRICT 블록의 주석을 풀어라.
+
+echo "── pre-push: KIRA 정적 검사 (경고 모드) ──"
+
+# Windows(Git Bash)는 python, 리눅스/CI는 python3 — 있는 쪽을 쓴다.
+if command -v python >/dev/null 2>&1; then PY=python; else PY=python3; fi
+
+"$PY" ci/check_conventions.py
+ruff check backend || true
+
+# ── 차단형(STRICT)으로 운영하려면 위 호출을 아래로 교체:
+#   STRICT=1 "$PY" ci/check_conventions.py || { echo "정합성 위반 — push 중단"; exit 1; }
+
+echo "(경고 모드: 위반이 있어도 push는 진행됩니다.)"
+exit 0

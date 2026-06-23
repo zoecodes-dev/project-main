@@ -32,3 +32,6 @@ scripts/
 backend/scripts/
 .claude/
 CLAUDE.md
+# CI 생성 아티팩트 (리포트/테스트 결과)
+ci/report.md
+ci/pytest-results.xml
