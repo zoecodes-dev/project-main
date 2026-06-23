@@ -13,6 +13,13 @@ document_extraction_results에 적재한다. (spec 3-5 라이프사이클 1~2단
   - data_gateway_node: 적재된 결과를 batch 파이프라인에서 조회+검증 (별개)
 
   한 워커 = 한 Queue (spec 5-3).
+
+[AP — 마스터폼 자동 채움 경로]
+  parse_document는 이제 '마스터폼 필드 인식형'으로 추출한다(키 = 마스터폼 필드명).
+  그 결과가 document_extraction_results에 쌓이면, 협력사는
+  GET /suppliers/{id}/master-form/prefill 로 섹션별 prefill 초안을 받아
+  검토·정정 후 제출한다. 즉 '문서 업로드만으로 마스터폼 필드가 채워지는' 경로의
+  적재 단계가 이 워커다(변환·노출은 supplier.service.get_master_form_prefill).
 """
 from arq.connections import RedisSettings
 

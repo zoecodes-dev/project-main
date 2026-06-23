@@ -34,6 +34,10 @@ from backend.infrastructure.trace import trace_node
 # '동일 db 세션'으로 호출해 단일 트랜잭션 atomic 묶음으로 commit한다(§4). 도메인 코드를
 # 대신 구현하는 게 아니라 제공된 계약 함수를 호출만 한다.
 from backend.domains.submission import masterform as e_masterform
+# AP: 추출결과 read는 E 제공(submission repository), 마스터폼 prefill 변환은 B(supplier)
+#   masterform_prefill. 둘 다 무거운 LLM 스택을 끌어오지 않는 가벼운 호출이다.
+from backend.domains.submission import repository as submission_repo
+from backend.domains.supplier import masterform_prefill
 
 # ── 정책 상수 ───────────────────────────────────────────────
 # 협력사 온보딩 SLA. PROJECT_CORE: 14일 미응답 → Reminder, 21일 → Escalation.
@@ -191,6 +195,53 @@ async def submit_master_form(
         "supplier_id": supplier_id,
         "status": "submitted",
         "sections_saved": sections_saved,
+    }
+
+
+async def get_master_form_prefill(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """
+    AP(AI 자동 채움): 협력사 보완 문서의 추출결과를 모아 마스터폼 prefill 초안을 만든다.
+
+    경로: 협력사 문서 업로드 → (E enqueue) document_parse_worker → parse_document
+      (마스터폼 필드 인식형 추출) → document_extraction_results 적재 → 이 함수가
+      supplier의 추출결과를 모아 마스터폼 섹션 구조로 되돌린다.
+
+    여러 문서에 같은 필드가 있으면 '신뢰도 높은 값'을 채택한다. 신뢰도 임계치 미만
+    필드는 prefill에 채우되 low_confidence_fields로 함께 반환해 협력사 확인을 유도한다.
+
+    반환: prefill 초안 dict. 없는 supplier_id면 None(→ router 404).
+          추출결과가 0건이면 prefill은 비고 document_count=0(업로드 전 정상 상태).
+    """
+    if await repository.get_supplier_by_id(db, supplier_id) is None:
+        return None
+
+    results = await submission_repo.list_extraction_results_by_suppliers(db, [supplier_id])
+
+    merged_fields: dict = {}
+    merged_conf: dict = {}
+    unconfirmed = 0
+    for record, _supplier_type in results:
+        parsed = record.parsed_fields or {}
+        cmap = record.confidence_map or {}
+        for key, value in parsed.items():
+            try:
+                conf = float(cmap.get(key, 0.0))
+            except (TypeError, ValueError):
+                conf = 0.0
+            # 같은 필드가 여러 문서에 → 더 높은 신뢰도 값으로 갱신(최선값 채택).
+            if key not in merged_conf or conf > merged_conf[key]:
+                merged_fields[key] = value
+                merged_conf[key] = conf
+        if not record.supplier_confirmed:
+            unconfirmed += 1
+
+    assembled = masterform_prefill.to_master_form_prefill(merged_fields, merged_conf)
+    return {
+        "supplier_id": supplier_id,
+        "document_count": len(results),
+        "unconfirmed_documents": unconfirmed,
+        "prefill": assembled["prefill"],
+        "low_confidence_fields": assembled["low_confidence_fields"],
     }
 
 
