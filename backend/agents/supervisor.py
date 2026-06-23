@@ -22,26 +22,14 @@ def route(state: "BatchState") -> str:
 
     confidence = state.get("confidence_score")
     if confidence is not None and confidence < 0.85:
-        if state.get("error_reason") == "low_confidence":
-            return "supplier_reverify"
         return "hitl_interrupt"
 
     current_stage = state.get("current_stage")
     if current_stage == "stage_queued":
         return "data_gateway"
     if current_stage == "stage_extraction":
-        return "verification"
-    if current_stage == "stage_verification":
-        return "geo_audit"
-    if current_stage == "stage_geo":
         return "compliance"
     if current_stage == "stage_compliance":
-        return "risk_scoring"
-    if current_stage == "stage_risk":
-        return "readiness"
-    if current_stage == "stage_readiness":
-        return "issuance"
-    if current_stage == "stage_issuance":
         return "completed"
 
     return "completed"
