@@ -198,7 +198,10 @@ CREATE TABLE supplier_recycler_details (
     recycled_materials      JSONB,
     recycling_certification VARCHAR(255),
     input_source            VARCHAR(50),
-    recycled_content_ratio  NUMERIC(5,2)
+    recycled_content_ratio  NUMERIC(5,2),
+    -- [MF 섹션 2 · W5] 소재별 회수율(%). recycled_content_ratio(완제품 내 함량)와 독립축.
+    -- 예: {"Li":80,"Co":90,"Ni":85}
+    recycling_efficiency    JSONB
 );
 
 -- [테이블 역할] 중개 트레이더 및 상위 공급망 원산지 자율 공개율.
@@ -668,6 +671,17 @@ CREATE TABLE regulation_applicability (
     applicable_provider_type VARCHAR(30),
     applicable_tier          INT,
     severity                 VARCHAR(20) CONSTRAINT chk_app_severity CHECK (severity IN ('mandatory', 'recommended'))
+);
+
+-- [테이블 역할 · W5 C1] 규제별 협력사 필수 제출 필드 명세. C2 gap 계산의 기준 데이터.
+-- regulation_id FK + field_name + field_type + provider_type_applicable(해당 업종 필터).
+CREATE TABLE regulation_required_fields (
+    field_id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    regulation_id              UUID NOT NULL REFERENCES regulations(regulation_id) ON DELETE CASCADE,
+    field_name                 VARCHAR(100) NOT NULL,  -- 예: 'carbon_intensity', 'mine_coordinates'
+    field_type                 VARCHAR(50)  NOT NULL,  -- 예: 'numeric', 'geojson', 'jsonb', 'text'
+    provider_type_applicable   JSONB,                  -- 예: ["manufacturer","miner"] — NULL이면 전업종
+    is_mandatory               BOOLEAN DEFAULT TRUE
 );
 
 -- [테이블 역할] 업종 마스터별 필수 제출 서류 및 필수 키-값 쌍 스키마 사양서.
