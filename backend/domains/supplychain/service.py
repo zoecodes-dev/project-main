@@ -142,6 +142,78 @@ class SupplyChainService:
             "message": "공급원 변경 자진신고가 접수되어 상위 파이프라인 재검증이 트리거되었습니다.",
             "data": payload
         }
+    async def get_gaps(self, product_id: str) -> Dict[str, Any]:
+        """
+        C2 맵 gap 계산: 제품 공급망 노드별로 규제 필수 필드 중 미보유 항목 목록 반환.
+
+        흐름:
+          1. repository에서 공급망 협력사 + 필드 보유 현황 조회
+          2. regulation service 스텁에서 적용 규제 + 규제별 필수 필드 조회
+          3. 협력사 supplier_type × provider_type_applicable 교차 → missing 계산
+          4. 노드별 gap 목록 반환
+        """
+        from backend.domains.regulation.service import (
+            get_applicable_regulations,
+            get_required_fields,
+        )
+
+        # 필드명 → 보유 여부 컬럼 매핑 (repository 반환 컬럼명과 1:1 대응)
+        FIELD_HAS_MAP: Dict[str, str] = {
+            "carbon_intensity":          "has_carbon_intensity",
+            "factory_carbon_declarations": "has_factory_carbon_decl",
+            "recycled_content_ratio":    "has_recycled_content_ratio",
+            "recycled_materials":        "has_recycled_materials",
+            "mine_coordinates":          "has_mine_coordinates",
+            "origin_country":            "has_origin_country",
+            "feoc_direct_ownership":     "has_feoc_direct_ownership",
+            "feoc_indirect_ownership":   "has_feoc_indirect_ownership",
+            # geo_risk_flags: 지오 감사에서 실시간 계산 — 항상 보유로 간주
+        }
+
+        supplier_rows = await self.repository.get_supplier_field_data(product_id)
+        if not supplier_rows:
+            return {"product_id": product_id, "nodes": []}
+
+        regulations = await get_applicable_regulations(product_id)
+        # 규제별 필수 필드 미리 로드
+        reg_fields: Dict[str, List[Dict]] = {}
+        for reg in regulations:
+            reg_fields[reg["regulation_id"]] = await get_required_fields(reg["regulation_id"])
+
+        nodes = []
+        for row in supplier_rows:
+            supplier_type = row["supplier_type"]
+            missing: List[Dict[str, str]] = []
+
+            for reg in regulations:
+                for field in reg_fields.get(reg["regulation_id"], []):
+                    applicable_types = field.get("provider_type_applicable") or []
+                    if applicable_types and supplier_type not in applicable_types:
+                        continue  # 이 협력사 유형에 해당 없는 필드
+                    if not field.get("is_mandatory"):
+                        continue  # 선택 필드는 gap으로 집계하지 않음
+
+                    has_col = FIELD_HAS_MAP.get(field["field_name"])
+                    if has_col is None:
+                        continue  # 매핑 없는 필드(geo_risk_flags 등) 스킵
+                    if not row.get(has_col):
+                        missing.append({
+                            "field_name":       field["field_name"],
+                            "field_label":      field.get("field_label", ""),
+                            "regulation_code":  reg["regulation_code"],
+                            "regulation_name":  reg["name"],
+                        })
+
+            nodes.append({
+                "supplier_id":   str(row["supplier_id"]),
+                "supplier_type": supplier_type,
+                "depth":         row["depth"],
+                "missing_fields": missing,
+                "gap_count":     len(missing),
+            })
+
+        return {"product_id": product_id, "nodes": nodes}
+
     async def get_geo_risks(self, db: AsyncSession) -> Dict[str, Any]:
         """
         조회 전용 인터페이스: 이벤트를 발행하지 않고 지정학 리스크 결과를 반환합니다.

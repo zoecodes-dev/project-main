@@ -114,6 +114,35 @@ async def get_by_hop_endpoint(
     return await service.get_by_hop(n)
 
 
+@router.get("/gaps")
+@trace_tool("get_supply_chain_gaps")
+async def get_supply_chain_gaps_endpoint(
+    product_id: UUID,
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """
+    C2 맵 gap 계산 API.
+
+    제품 공급망 내 각 협력사 노드별로 적용 규제 대비 미보유 필수 필드 목록 반환.
+    응답 예시:
+      {
+        "product_id": "...",
+        "nodes": [
+          {
+            "supplier_id": "...",
+            "supplier_type": "manufacturer",
+            "depth": 0,
+            "missing_fields": [
+              {"field_name": "carbon_intensity", "regulation_code": "EU_BATTERY_ART7", ...}
+            ],
+            "gap_count": 1
+          }
+        ]
+      }
+    """
+    return await service.get_gaps(product_id=str(product_id))
+
+
 @router.get("/alternatives")
 @trace_tool("get_alternatives")
 async def get_supply_chain_alternatives_endpoint(
