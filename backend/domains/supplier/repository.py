@@ -8,13 +8,14 @@ Supplier 도메인 DB 접근 계층.
 from typing import List, Optional
 from uuid import UUID
  
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
- 
+
 from backend.domains.supplier.models import (
     Supplier,
+    SupplierMinerDetail,
     SupplierRiskProfile,
     SupplierCertification,
     SupplierHumanRightsIssue,
@@ -224,3 +225,97 @@ async def get_onboarding_by_supplier(
     )
     result = await db.execute(stmt)
     return result.scalars().first()
+
+
+async def upsert_miner_details(
+    db: AsyncSession,
+    supplier_id: UUID,
+    mine_name: Optional[str] = None,
+    mining_method: Optional[str] = None,
+    extraction_volume: Optional[float] = None,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    active_period_from=None,
+    active_period_to=None,
+) -> None:
+    """
+    MF 섹션 3 — supplier_miner_details UPSERT. flush까지만(커밋은 service).
+
+    PostGIS 좌표 순서: ST_MakePoint(lng, lat) — PostGIS는 X(경도) 먼저.
+    입력 lat/lng는 Leaflet 표기법(lat 먼저)이므로 여기서 swap한다.
+    lat=None이거나 lng=None이면 mine_coordinates를 NULL로 유지.
+    """
+    existing = await db.execute(
+        select(SupplierMinerDetail).where(SupplierMinerDetail.supplier_id == supplier_id)
+    )
+    row = existing.scalars().first()
+
+    # PostGIS: X=경도(lng), Y=위도(lat) — ST_MakePoint(lng, lat)
+    coords_sql: Optional[str] = None
+    coords_params: dict = {}
+    if lat is not None and lng is not None:
+        coords_sql = "ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)"
+        coords_params = {"lng": lng, "lat": lat}
+
+    if row is None:
+        if coords_sql:
+            stmt = text(f"""
+                INSERT INTO supplier_miner_details
+                    (supplier_id, mine_name, mining_method, extraction_volume,
+                     mine_coordinates, active_period_from, active_period_to)
+                VALUES
+                    (:supplier_id, :mine_name, :mining_method, :extraction_volume,
+                     {coords_sql}, :active_period_from, :active_period_to)
+            """)
+        else:
+            stmt = text("""
+                INSERT INTO supplier_miner_details
+                    (supplier_id, mine_name, mining_method, extraction_volume,
+                     mine_coordinates, active_period_from, active_period_to)
+                VALUES
+                    (:supplier_id, :mine_name, :mining_method, :extraction_volume,
+                     NULL, :active_period_from, :active_period_to)
+            """)
+        await db.execute(stmt, {
+            "supplier_id": str(supplier_id),
+            "mine_name": mine_name,
+            "mining_method": mining_method,
+            "extraction_volume": extraction_volume,
+            "active_period_from": active_period_from,
+            "active_period_to": active_period_to,
+            **coords_params,
+        })
+    else:
+        if coords_sql:
+            stmt = text(f"""
+                UPDATE supplier_miner_details SET
+                    mine_name          = :mine_name,
+                    mining_method      = :mining_method,
+                    extraction_volume  = :extraction_volume,
+                    mine_coordinates   = {coords_sql},
+                    active_period_from = :active_period_from,
+                    active_period_to   = :active_period_to
+                WHERE supplier_id = :supplier_id
+            """)
+        else:
+            stmt = text("""
+                UPDATE supplier_miner_details SET
+                    mine_name          = :mine_name,
+                    mining_method      = :mining_method,
+                    extraction_volume  = :extraction_volume,
+                    mine_coordinates   = NULL,
+                    active_period_from = :active_period_from,
+                    active_period_to   = :active_period_to
+                WHERE supplier_id = :supplier_id
+            """)
+        await db.execute(stmt, {
+            "supplier_id": str(supplier_id),
+            "mine_name": mine_name,
+            "mining_method": mining_method,
+            "extraction_volume": extraction_volume,
+            "active_period_from": active_period_from,
+            "active_period_to": active_period_to,
+            **coords_params,
+        })
+
+    await db.flush()
