@@ -715,6 +715,22 @@ async def _insert_compliance_result(
 #    없는 키는 빈값으로 채워요(KeyError 방지).
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 9. judge context 빌더 (Day3 + Day2 키 추가 + D4 기본값화)
+#
+#    [D4 수정 — 은지]
+#    geo_audit·verification 노드가 그래프에서 제거될 예정(D2+D3).
+#    → state에 geo_result / verification_result 키 자체가 없을 수 있다.
+#    → 명시적 기본값(None / [] )을 선제 적용하여
+#      KeyError·NoneType 에러를 방어한다.
+#
+#    변경점:
+#      - mine_coordinates  : geo.get(...) → 명시적 None 기본값
+#      - geo_risk_flags    : geo.get(...) → 명시적 [] 기본값
+#      - verification_flags: verification.get(...) → 명시적 [] 기본값
+#      - 주석에 D4 적용 근거 명시
+# ---------------------------------------------------------------------------
+
 def _build_judge_context(state) -> dict:
     """
     앞 단계(extraction, verification, geo) 결과를 합쳐
