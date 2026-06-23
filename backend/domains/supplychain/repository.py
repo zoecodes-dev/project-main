@@ -31,12 +31,11 @@ class SupplyChainRepository:
         스펙 5-1 SUPPLY_CHAIN_TREE_QUERY 기준: bom_versions JOIN으로 product_id 진입,
         트리 루트 = 원청(tier0/hop0, parent_supplier_id IS NULL → child=원청 Pack)부터 하향 탐색.
 
-        [hop_level = 경로 순번(원청 0 기준 +1 연속)]
-          - 재귀 진행 시 hop_level = 부모 hop + 1 을 JOIN 조건으로 강제한다.
-            · 겸업(한양셀 = Module hop1 + Cell hop2 등) self-edge(parent=child)를 결정적으로 탐색
-              (같은 회사의 다음 hop 만 매칭 → 형제 엣지 중복 부착/무한루프 방지).
-          - 순환 판정 path 키를 (child_supplier_id, part_id) 복합키로 변경.
-            · 단일 child_supplier_id 키는 같은 회사의 연속 hop 등장(겸업)을 사이클로 오판함.
+        [F1 표시 기준 — depth 단일화]
+          - depth = CTE 재귀 깊이(0=원청). 프론트 트리 렌더링·레이어 표시 기준축.
+          - hop_level = supply_chain_map 엣지 보조 메타(경로 순번). 재귀 JOIN 조건·겸업 탐색용.
+            겸업(한양셀 Module→Cell)처럼 depth ≠ hop_level 이 될 수 있다 → 표시는 depth만 사용.
+          - 순환 판정: path 키 = (child_supplier_id, part_id) 복합키(겸업 오판 방지).
         공장 좌표는 GeoJSON으로 반환 (스펙 완료 기준).
         """
         query = text("""
@@ -79,8 +78,10 @@ class SupplyChainRepository:
             )
             SELECT
                 map_id, parent_supplier_id, child_supplier_id, part_id,
-                company_name, supplier_type, hop_level, country,
-                location_geojson, depth, is_cycle
+                company_name, supplier_type,
+                depth,       -- [F1 주축] 프론트 트리 표시 기준
+                hop_level,   -- [F1 보조] 엣지 메타 — 겸업 탐색·JOIN 조건용
+                country, location_geojson, is_cycle
             FROM sc_tree
             ORDER BY depth, hop_level;
         """)
