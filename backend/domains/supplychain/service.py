@@ -205,11 +205,12 @@ class SupplyChainService:
                         })
 
             nodes.append({
-                "supplier_id":   str(row["supplier_id"]),
-                "supplier_type": supplier_type,
-                "depth":         row["depth"],
+                "supplier_id":    str(row["supplier_id"]),
+                "supplier_type":  supplier_type,
+                "depth":          row["depth"],
+                "is_root_anchor": bool(row.get("is_root_anchor", False)),
                 "missing_fields": missing,
-                "gap_count":     len(missing),
+                "gap_count":      len(missing),
             })
 
         return {"product_id": product_id, "nodes": nodes}

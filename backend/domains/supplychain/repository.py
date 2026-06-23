@@ -48,7 +48,8 @@ class SupplyChainRepository:
                     ST_AsGeoJSON(sf.location) AS location_geojson,
                     0 AS depth,
                     ARRAY[scm.child_supplier_id::text || ':' || scm.part_id::text] AS path,
-                    FALSE AS is_cycle
+                    FALSE AS is_cycle,
+                    TRUE AS is_root_anchor
                 FROM supply_chain_map scm
                 JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
                 JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
@@ -66,7 +67,8 @@ class SupplyChainRepository:
                     ST_AsGeoJSON(sf.location) AS location_geojson,
                     sct.depth + 1,
                     sct.path || (scm.child_supplier_id::text || ':' || scm.part_id::text),
-                    (scm.child_supplier_id::text || ':' || scm.part_id::text) = ANY(sct.path)
+                    (scm.child_supplier_id::text || ':' || scm.part_id::text) = ANY(sct.path),
+                    FALSE AS is_root_anchor
                 FROM supply_chain_map scm
                 JOIN sc_tree sct ON scm.parent_supplier_id = sct.child_supplier_id
                                 AND scm.bom_version_id = sct.bom_version_id
@@ -79,8 +81,9 @@ class SupplyChainRepository:
             SELECT
                 map_id, parent_supplier_id, child_supplier_id, part_id,
                 company_name, supplier_type,
-                depth,       -- [F1 주축] 프론트 트리 표시 기준
-                hop_level,   -- [F1 보조] 엣지 메타 — 겸업 탐색·JOIN 조건용
+                depth,           -- [F1 주축] 프론트 트리 표시 기준
+                hop_level,       -- [F1 보조] 엣지 메타 — 겸업 탐색·JOIN 조건용
+                is_root_anchor,  -- [F2] parent_supplier_id IS NULL 파생 — OEM/tier0 동적 판정
                 country, location_geojson, is_cycle
             FROM sc_tree
             ORDER BY depth, hop_level;
@@ -352,11 +355,18 @@ class SupplyChainRepository:
                     supplier_type,
                     MIN(depth) OVER (PARTITION BY child_supplier_id) AS depth
                 FROM sc_tree
+                ORDER BY child_supplier_id, depth
+            ),
+            root_suppliers AS (
+                SELECT DISTINCT child_supplier_id
+                FROM sc_tree
+                WHERE depth = 0
             )
             SELECT
                 us.supplier_id,
                 us.supplier_type,
                 us.depth,
+                (rs.child_supplier_id IS NOT NULL) AS is_root_anchor,
                 -- Manufacturer: carbon_intensity
                 (smd.carbon_intensity IS NOT NULL)                           AS has_carbon_intensity,
                 -- Manufacturer: factory_carbon_declarations (공장 단위 1차 선언)
@@ -382,6 +392,7 @@ class SupplyChainRepository:
                 -- Trader/Manufacturer: FEOC 간접 지분 (risk_profiles)
                 (srp.feoc_indirect_ownership IS NOT NULL)                    AS has_feoc_indirect_ownership
             FROM unique_suppliers us
+            LEFT JOIN root_suppliers rs                  ON rs.child_supplier_id = us.supplier_id
             LEFT JOIN supplier_manufacturer_details smd ON smd.supplier_id = us.supplier_id
             LEFT JOIN supplier_recycler_details srd      ON srd.supplier_id = us.supplier_id
             LEFT JOIN supplier_miner_details smind       ON smind.supplier_id = us.supplier_id
