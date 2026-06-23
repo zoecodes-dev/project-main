@@ -67,6 +67,14 @@ class SupplyChainService:
     ) -> List[Dict[str, Any]]:
         return await self.repository.get_alternatives(product_id, part_id)
 
+    async def get_by_bom_depth(self, bom_depth: int) -> List[Dict[str, Any]]:
+        """부품 tier(bom_depth, 0-base) 기준 공급망 노드 횡단 조회."""
+        return await self.repository.get_by_bom_depth(bom_depth)
+
+    async def get_by_hop(self, hop_level: int) -> List[Dict[str, Any]]:
+        """공급망 차수(hop_level, 원청 0 기준 경로 순번) 기준 노드 횡단 조회."""
+        return await self.repository.get_by_hop(hop_level)
+
     # ---------- 협력사 통지 및 자진신고 (회사 경계 의무) ----------
     @trace_node("notify_supplier_correction", "agent")
     async def request_supplier_correction(

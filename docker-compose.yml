@@ -136,6 +136,19 @@ services:
     command: ["arq", "backend.workers.hitl_worker.WorkerSettings"]
 
   # notification_queue 워커
+  # batch_pipeline_queue worker
+  worker-pipeline:
+    build: *worker-build
+    networks:
+      - project_net
+    env_file:
+      - ./.env
+    environment: *worker-env
+    depends_on: *worker-deps
+    restart: always
+    container_name: kira-worker-pipeline
+    command: ["arq", "backend.workers.pipeline_worker.WorkerSettings"]
+
   # worker-notification:
   #   build: *worker-build
   #   networks:

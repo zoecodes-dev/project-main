@@ -24,9 +24,11 @@ from backend.domains.submission.service import (
     get_supplier_submission_timeline
 )
 
+from backend.agents.graph import create_batch
 from backend.infrastructure.queue import (
-    enqueue, 
-    DOCUMENT_PARSE_QUEUE
+    enqueue,
+    DOCUMENT_PARSE_QUEUE,
+    BATCH_PIPELINE_QUEUE,
 )
 
 router = APIRouter(prefix="/data-requests", tags=["Submission"])
@@ -131,24 +133,63 @@ async def submit_data_request_endpoint(request_id: uuid.UUID, req: SubmitDataReq
     """
     [API] POST /data-requests/{request_id}/submit
     협력사가 작성을 마치고 최종 제출을 확정합니다.
+    batch를 자동 생성하고 파이프라인 큐에 적재합니다.
     """
-    return await _handle_status_update(
+    try:
+        batch_id_str = await create_batch(db, str(req.product_id), req.destination)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"배치 생성 실패: {e}")
+
+    req_log = await _handle_status_update(
         db, request_id, SubmissionStatus.SUBMITTED, req,
-        batch_id=req.batch_id, file_urls=req.file_urls, confirmed_fields=req.confirmed_fields
+        batch_id=uuid.UUID(batch_id_str), file_urls=req.file_urls, confirmed_fields=req.confirmed_fields
     )
+    # 파이프라인은 승인(approve) 후에 시작 — 여기서는 배치 생성만 하고 enqueue 하지 않음
+    return req_log
 
 @router.post("/{request_id}/approve", response_model=DataRequestResponse)
 async def approve_data_request_endpoint(request_id: uuid.UUID, req: ActionDataRequest, db: AsyncSession = Depends(get_db)):
     """
     [API] POST /data-requests/{request_id}/approve
-    원청사 담당자가 제출 내역을 승인합니다.
+    원청사 담당자가 제출 내역을 승인하고, 파이프라인을 시작합니다.
+
+    submit 시 생성·저장된 batch_id를 조회해 enqueue한다.
+    job_id=f"pipeline:{batch_id}" 멱등성 키로 중복 invoke를 방어한다.
     """
-    return await _handle_status_update(
+    # submit 때 저장된 batch_id 조회
+    req_log = await get_submission_detail(db, request_id)
+    if not req_log:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data request not found")
+
+    batch_id = req_log.batch_id
+
+    approved = await _handle_status_update(
         db, request_id, SubmissionStatus.APPROVED, req,
-        reason=req.reason
+        reason=req.reason,
+        batch_id=batch_id,  # SubmissionApproved 이벤트에 batch_id가 실림
     )
 
-@router.post("/{request_id}/reject", response_model=DataRequestResponse)
+    # 파이프라인 시작 — batch_id가 있을 때만 (재제출 등 예외 케이스 방어)
+    if batch_id:
+        from sqlalchemy import text as _text
+        row = (await db.execute(
+            _text("SELECT product_id, destination FROM batches WHERE batch_id = :bid"),
+            {"bid": batch_id},
+        )).one_or_none()
+        if row:
+            await enqueue(
+                BATCH_PIPELINE_QUEUE,
+                "start_batch_pipeline",
+                job_id=f"pipeline:{batch_id}",   # 멱등성 키 — 중복 approve 방어
+                batch_id=str(batch_id),
+                product_id=str(row.product_id),
+                destination=row.destination,
+            )
+
+    return approved
+
+@router.post("/{request_id}/reject", response_model=DataRequestResponse, include_in_schema=False)
 async def reject_data_request_endpoint(request_id: uuid.UUID, req: ActionDataRequest, db: AsyncSession = Depends(get_db)):
     """
     [API] POST /data-requests/{request_id}/reject
@@ -161,7 +202,7 @@ async def reject_data_request_endpoint(request_id: uuid.UUID, req: ActionDataReq
         reason=req.reason
     )
 
-@router.post("/{request_id}/rework", response_model=DataRequestResponse)
+@router.post("/{request_id}/rework", response_model=DataRequestResponse, include_in_schema=False)
 async def rework_data_request_endpoint(request_id: uuid.UUID, req: ActionDataRequest, db: AsyncSession = Depends(get_db)):
     """
     [API] POST /data-requests/{request_id}/rework
@@ -175,7 +216,7 @@ async def rework_data_request_endpoint(request_id: uuid.UUID, req: ActionDataReq
         reason=req.reason
     )
 
-@router.get("/{request_id}/completeness", response_model=CompletenessResponse)
+@router.get("/{request_id}/completeness", response_model=CompletenessResponse, include_in_schema=False)
 async def get_data_request_completeness_endpoint(request_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """
     [API] GET /data-requests/{request_id}/completeness
@@ -186,7 +227,7 @@ async def get_data_request_completeness_endpoint(request_id: uuid.UUID, db: Asyn
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="해당 요청에 대한 완성도 정보가 존재하지 않습니다.")
     return comp_status
 
-@router.get("/suppliers/{supplier_id}/submission-timeline", response_model=List[TimelineHistoryResponse])
+@router.get("/suppliers/{supplier_id}/submission-timeline", response_model=List[TimelineHistoryResponse], include_in_schema=False)
 async def get_supplier_timeline_endpoint(supplier_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """
     [API] GET /data-requests/suppliers/{supplier_id}/submission-timeline

@@ -53,6 +53,7 @@ REGULATION_COUNT = {
 RISK_WEIGHTS = {"low": 0, "medium": 1, "high": 2, "critical": 3, "unknown": 0}
 
 
+# [BYPASS:B6] 미수집 필드 None 처리 — 시드 raw_data 보강은 별도(은진)
 @trace_node("generate_dpp_payload", node_type="agent")
 async def generate_dpp_payload(
     db: AsyncSession,
@@ -121,94 +122,103 @@ async def generate_dpp_payload(
             "02_reporting_period": "2026-Q1",
             "03_year": 2026,
             "04_submission_status": "Draft",
-            "05_customs_declarant_eori": raw_data.get("business_reg_no", "TODO"),
+            "05_customs_declarant_eori": raw_data.get("business_reg_no"),              # (a) seed채움
             "06_customs_declarant_name": raw_data.get("tenant_company_name", "KIRA OEM Inc."),
             "07_customs_declarant_country": raw_data.get("tenant_country", "KR"),
-            "08_importer_eori": str(raw_data.get("customer_id")) if raw_data.get("customer_id") else "TODO",
-            "09_importer_name": raw_data.get("customer_name", "TODO"),
+            "08_importer_eori": str(raw_data.get("customer_id")) if raw_data.get("customer_id") else None,  # (a) seed채움
+            "09_importer_name": raw_data.get("customer_name"),                         # (a) seed채움
             "10_importer_country": raw_data.get("tenant_country", "KR"),
-            "11_representative_eori": "TODO",
-            "12_representative_name": "TODO",
-            "13_representative_role": "TODO",
-            "14_contact_person_name": raw_data.get("contact_name", "TODO"),
-            "15_contact_person_email_phone": raw_data.get("contact_email", "TODO")
+            "11_representative_eori": None,                                            # (b) N/A — KIRA는 직접 신고, 대리인 없음
+            "12_representative_name": None,                                            # (b) N/A
+            "13_representative_role": None,                                            # (b) N/A
+            "14_contact_person_name": raw_data.get("contact_name"),                    # (a) seed채움
+            "15_contact_person_email_phone": raw_data.get("contact_email")             # (a) seed채움
         },
         "section_2_customs_and_goods": {
-            "16_customs_declaration_number_mrn": "TODO",
-            "17_customs_declaration_date": "TODO",
-            "18_customs_office_of_import": "TODO",
-            "19_cn_code_of_goods": raw_data.get("hs_code", "TODO"),
-            "20_goods_description": raw_data.get("product_name") or raw_data.get("part_name") or "TODO",
-            "21_country_of_origin": raw_data.get("item_origin") or raw_data.get("destination") or "TODO",
+            "16_customs_declaration_number_mrn": None,                                 # (c) Blocker — 통관 신고번호 미수집
+            "17_customs_declaration_date": None,                                       # (c) Blocker — 통관일 미수집
+            "18_customs_office_of_import": None,                                       # (c) Blocker — 수입 세관 코드 미수집
+            "19_cn_code_of_goods": raw_data.get("hs_code"),                            # (a) seed채움
+            "20_goods_description": raw_data.get("product_name") or raw_data.get("part_name") or None,  # (a) seed채움
+            "21_country_of_origin": raw_data.get("item_origin") or raw_data.get("destination") or None,  # (a) seed채움
             "22_net_mass": raw_data.get("net_mass", 0.0),  # [3대 산식 변수] 수입 물품 순 중량
             "23_supplementary_units": float(raw_data.get("amperage_ah", 0.0)),
-            "24_commercial_invoice_number": raw_data.get("invoice_number", "TODO"),
-            "25_commercial_invoice_date": "TODO",
+            "24_commercial_invoice_number": raw_data.get("invoice_number"),            # (a) seed채움
+            "25_commercial_invoice_date": None,                                        # (c) Blocker — 인보이스 날짜 미수집
             "26_total_invoice_value": raw_data.get("unit_price", 0.0),
             "27_invoice_currency": "EUR",
-            "28_terms_of_delivery": "TODO",
-            "29_nature_of_transaction": "TODO",
-            "30_mode_of_transport": "TODO",
-            "31_container_id": "TODO",
-            "32_transport_document_number": "TODO",
-            "33_economic_operator_name": raw_data.get("supplier_name_en", "TODO"),
-            "34_national_customs_procedure_code": "TODO",
-            "35_valuation_method": "TODO"
+            "28_terms_of_delivery": None,                                              # (b) N/A — Incoterms 미적용
+            "29_nature_of_transaction": None,                                          # (b) N/A — 거래 성격 구분 불필요
+            "30_mode_of_transport": None,                                              # (c) Blocker — 운송 수단 미수집
+            "31_container_id": None,                                                   # (b) N/A — 컨테이너 단위 추적 없음
+            "32_transport_document_number": None,                                      # (b) N/A — B/L 번호 미관리
+            "33_economic_operator_name": raw_data.get("supplier_name_en"),             # (a) seed채움
+            "34_national_customs_procedure_code": None,                                # (b) N/A — 국내 절차 코드 불필요
+            "35_valuation_method": None                                                # (b) N/A — 관세 평가 방법 불필요
         },
         "section_3_installation_and_process": {
             "36_production_installation_id": str(uuid.uuid4()),
-            "37_installation_name": raw_data.get("factory_name_en", "TODO"),
-            "38_country_of_installation": raw_data.get("country", "TODO"),
-            "39_installation_address": raw_data.get("address", "TODO"),
-            "40_geographical_coordinates": raw_data.get("location_wkt", "TODO"),
-            "41_operator_name": raw_data.get("company_name_en", "TODO"),
-            "42_production_route": raw_data.get("manufacturing_process", "TODO"),
-            "43_production_route_description": "TODO",
+            "37_installation_name": raw_data.get("factory_name_en"),                   # (a) seed채움
+            "38_country_of_installation": raw_data.get("country"),                     # (a) seed채움
+            "39_installation_address": raw_data.get("address"),                        # (a) seed채움
+            "40_geographical_coordinates": raw_data.get("location_wkt"),               # (a) seed채움
+            "41_operator_name": raw_data.get("company_name_en"),                       # (a) seed채움
+            "42_production_route": raw_data.get("manufacturing_process"),              # (a) seed채움
+            "43_production_route_description": None,                                   # (b) N/A — 공정 서술 텍스트 없음
             "44_activity_level": raw_data.get("volume", 0.0),  # [1대 산식 분모]
-            "45_system_boundaries_defined": "TODO",
+            "45_system_boundaries_defined": None,                                      # (b) N/A — 시스템 경계 정의 불필요
             "46_direct_emissions_total": 0.0,
             "47_indirect_emissions_total": 0.0,
             "48_biomass_emissions": 0.0,
             "49_heating_steam_emissions": 0.0,
-            "50_source_stream_data": "TODO"
+            "50_source_stream_data": None                                              # (b) N/A — 배출원 스트림 상세 없음
         },
         "section_4_embedded_emissions_scores": {
             "51_specific_direct_embedded_emissions": raw_data.get("carbon_intensity", 0.0),  # [3대 산식 결과]
             "52_specific_indirect_embedded_emissions": 0.0,  # [3대 산식 결과]
-            "53_determination_methodology_direct": "TODO",
-            "54_determination_methodology_indirect": "TODO",
+            "53_determination_methodology_direct": None,                               # (c) Blocker — 직접배출 산정 방법론 미정
+            "54_determination_methodology_indirect": None,                             # (c) Blocker — 간접배출 산정 방법론 미정
             "55_electricity_consumption_factor": 0.0,
-            "56_electricity_source": raw_data.get("energy_source", "TODO"),
+            "56_electricity_source": raw_data.get("energy_source"),                    # (a) seed채움
             "57_total_electricity_consumed": 0.0,
             "58_specific_embedded_emissions_total": 0.0,
             "59_total_embedded_emissions": raw_data.get("carbon_footprint", 0.0),  # [3대 산식 최종 스코어]
-            "60_qualified_verifier_id": "TODO",
+            "60_qualified_verifier_id": None,                                          # (b) N/A — 외부 검증인 없음(KIRA 자동 검증)
             "61_verifier_name": raw_data.get("auditor", "KIRA AI Verification Engine"),
-            "62_verification_report_number": "TODO",
-            "63_verification_opinion_status": "TODO",
-            "64_accompanying_documents_identifier": raw_data.get("certification_no", "TODO"),
-            "65_data_qualifying_flags": "TODO"
+            "62_verification_report_number": None,                                     # (c) Blocker — 검증 보고서 번호 미발급
+            "63_verification_opinion_status": None,                                    # (c) Blocker — 검증 의견 미확정
+            "64_accompanying_documents_identifier": raw_data.get("certification_no"),  # (a) seed채움
+            "65_data_qualifying_flags": None                                           # (b) N/A — 플래그 체계 미도입
         },
         "section_5_precursors_and_carbon_price": {
             "66_precursor_type_indicator": "Complex",
-            "67_precursor_cn_code": raw_data.get("precursor_hs_code", "TODO"),
+            "67_precursor_cn_code": raw_data.get("precursor_hs_code"),                 # (a) seed채움
             "68_precursor_quantity_consumed": raw_data.get("precursor_quantity", 0.0),  # [2대 산식 변수]
             "69_precursor_specific_direct_emissions": 0.0,
             "70_precursor_specific_indirect_emissions": 0.0,
-            "71_precursor_country_of_origin": raw_data.get("precursor_origin", "TODO"),
+            "71_precursor_country_of_origin": raw_data.get("precursor_origin"),        # (a) seed채움
             "72_carbon_price_paid_indicator": "Y",
-            "73_type_of_carbon_pricing_instrument": "TODO",
+            "73_type_of_carbon_pricing_instrument": None,                              # (b) N/A — 탄소세 유형 구분 불필요
             "74_country_of_carbon_price": raw_data.get("tenant_country", "KR"),
             "75_amount_of_carbon_price_paid": 0.0,
             "76_currency_of_payment": "KRW",
             "77_quantity_of_covered_emissions": 0.0,
             "78_rebates_allocations_received": 0.0,
             "79_net_carbon_price_paid_score": 0.0,
-            "80_carbon_price_supporting_docs": raw_data.get("origin_cert_url", "TODO")
+            "80_carbon_price_supporting_docs": raw_data.get("origin_cert_url")        # (a) seed채움
         }
     }
 
+    # CBAM 80필드 중 실제로 채워진(None이 아닌) 필드 수를 집계해서 수집률 배지용 메타로 얹어줘요.
+    # (표시 문자열은 프론트 책임 — 백엔드는 숫자만 제공)
+    all_cbam_values = [v for section in cbam_80_fields.values() for v in section.values()]
+    data_completeness = {
+        "filled": sum(1 for v in all_cbam_values if v is not None),
+        "total": len(all_cbam_values)
+    }
+
     return {
+        "_data_completeness": data_completeness,
         "product_info": {
             "customer_id": str(raw_data.get("customer_id")) if raw_data.get("customer_id") else None,
             "customer_name": str(raw_data.get("customer_name", "Unknown")),

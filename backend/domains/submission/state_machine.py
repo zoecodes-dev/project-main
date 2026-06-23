@@ -37,7 +37,11 @@ async def transition_submission(
         raise ValueError("반려(REJECTED) 상태 전이 시 사유(reason)는 필수입니다.")
 
     log_record.submission_status = to_status
-    
+
+    # SUBMITTED 전이 시 batch_id 보관 — approve 엔드포인트가 조회해 파이프라인 enqueue에 사용
+    if to_status == SubmissionStatus.SUBMITTED and batch_id is not None:
+        log_record.batch_id = batch_id
+
     history = SubmissionStatusHistory(
         request_id=request_id, 
         from_status=current_status.value if hasattr(current_status, 'value') else current_status, 

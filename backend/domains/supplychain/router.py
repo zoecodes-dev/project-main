@@ -8,6 +8,10 @@ import 경로를 package 기준으로 수정 (flat → backend.* 패키지).
   - GET /supply-chain/tree          : N차 공급망 재귀 CTE 트리 조회
   - GET /supply-chain/alternatives  : 특정 부품 대체 공급사 풀 조회
   - GET /supply-chain/geo-risks     : 지정학 공간 리스크 조회
+
+[ADR 축 분리 신설]
+  - GET /supply-chain/by-bom-depth/{n} : 부품 tier(bom_depth, 0-base) 기준 필터
+  - GET /supply-chain/by-hop/{n}       : 공급망 차수(hop_level, 경로 순번) 기준 필터
 """
 from typing import Any, Dict, Optional
 from uuid import UUID
@@ -82,6 +86,32 @@ async def get_supply_chain_tree_endpoint(
     return await service.get_supply_tree(
         product_id=str(product_id)
     )
+
+
+@router.get("/by-bom-depth/{n}")
+@trace_tool("get_by_bom_depth")
+async def get_by_bom_depth_endpoint(
+    n: int,
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """부품 tier(bom_depth, 0-base) 기준 공급망 노드 필터.
+
+    ADR 분리축: '부품 계층'(Pack=0 … 광산=6) 단위 횡단 조회. hop(차수)과 독립.
+    """
+    return await service.get_by_bom_depth(n)
+
+
+@router.get("/by-hop/{n}")
+@trace_tool("get_by_hop")
+async def get_by_hop_endpoint(
+    n: int,
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """공급망 차수(hop_level, 원청 0 기준 경로 순번) 기준 노드 필터.
+
+    ADR 분리축: '공급망 차수' 단위 횡단 조회. bom_depth(부품 tier)와 독립.
+    """
+    return await service.get_by_hop(n)
 
 
 @router.get("/alternatives")

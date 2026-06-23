@@ -1,3 +1,5 @@
+import json
+import secrets
 import uuid
 from datetime import datetime, timezone
 
@@ -5,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.trace import trace_tool
 from backend.domains.dpp.repository import get_dpp_record, get_score_raw_data
-from backend.domains.dpp.models import DppDeliveryHistory
+from backend.domains.dpp.models import TransmissionLog
 
 
 @trace_tool("generate_delivery_form")
@@ -84,20 +86,33 @@ async def record_delivery_history(
         
     raw_data = await get_score_raw_data(db, dpp_record.batch_id)
     customer_id = raw_data.get("customer_id")
-        
-    history = DppDeliveryHistory(
-        dpp_id=dpp_id,
-        customer_id=uuid.UUID(customer_id) if customer_id else None,
-        recipient_email=recipient_email,
-        subject=subject,
-        body_text=body_text,
-        sent_by=user_id
+
+    # transmission_logs 에는 dpp_id/subject/body_text 전용 컬럼이 없어서(스키마 기준),
+    # payload_summary(TEXT)에 JSON으로 묶어 기록해요. 첨부 파일이 생기면 attachment_urls(JSONB)에
+    # S3 key만 저장하고 presigned URL은 절대 저장하지 않습니다(접근 시점에 발급하는 규약).
+    payload_summary = json.dumps(
+        {"dpp_id": str(dpp_id), "subject": subject, "body_text": body_text},
+        ensure_ascii=False
     )
-    db.add(history)
+
+    log = TransmissionLog(
+        batch_id=dpp_record.batch_id,
+        sender_id=user_id,
+        recipient_type="customer",
+        recipient_id=uuid.UUID(customer_id) if customer_id else None,
+        recipient_email=recipient_email,
+        transmission_type="dpp_report",
+        status="sent",
+        payload_summary=payload_summary,
+        attachment_urls=None,
+        ack_token=secrets.token_hex(32)
+    )
+    db.add(log)
     await db.flush()
-    
+
     return {
-        "delivery_id": str(history.delivery_id),
-        "status": "recorded",
-        "sent_at": history.sent_at.isoformat() if history.sent_at else datetime.now(timezone.utc).isoformat()
+        "transmission_id": str(log.transmission_id),
+        "status": log.status,
+        "ack_token": log.ack_token,
+        "sent_at": log.sent_at.isoformat() if log.sent_at else datetime.now(timezone.utc).isoformat()
     }

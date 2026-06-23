@@ -25,6 +25,8 @@ from typing import Optional
 
 from geoalchemy2 import Geometry
 from pydantic import BaseModel
+
+from backend.events.types import RecycledMaterialsSchema
 from sqlalchemy import (
     Boolean, Date, DateTime, ForeignKey, Integer, NUMERIC, String, Text, func,
 )
@@ -428,6 +430,8 @@ class SupplierCreateRequest(BaseModel):
     company_name: str
     supplier_type: str
     email: str
+    # [G1] 협력사→협력사 초대 시 이동 주체(초대한 협력사). 원청 직접 등록이면 None.
+    inviter_supplier_id: Optional[uuid.UUID] = None
 
 
 class SupplierBrief(BaseModel):
@@ -640,3 +644,248 @@ class SupplierReliabilityResponse(BaseModel):
     total_audits: int = 0
     last_audit_date: Optional[date] = None
     last_audit_result: Optional[str] = None
+
+
+# ============================================================
+# 마스터폼(표준화된 입력양식) 계약 모델 — SSOT (담당: 팀원 B / KIRA W5 §4)
+#
+# 협력사가 보는 것은 '하나의 표준화된 입력양식'이다. 역할 분기 없이 모든
+# 협력사가 동일 양식을 보고, 역할에 해당없는 섹션 칸은 None으로 비활성한다.
+# POST /suppliers/{supplier_id}/master-form 로 한 번에 제출되면, service가
+# 섹션별로 쪼개 각 도메인 repository의 write 함수를 호출하고 **단일 트랜잭션으로
+# commit(atomic)** 한다. 한 섹션 실패 시 전체 롤백. 신규 테이블은 만들지 않는다.
+#
+# 이 모델이 SSOT다. 프론트·각 도메인 담당(C/D/E)이 이 계약을 두고 시작한다.
+#
+# 섹션 → 저장 테이블 매핑(§4):
+#   0 회사·공장·PIC      → suppliers / supplier_factories / supplier_contacts          (B)
+#   1 탄소발자국         → supplier_manufacturer_details / factory_carbon_declarations (B)
+#   2 재활용 패널·함량율 → supplier_recycler_details (recycling_efficiency 신규 DDL)    (B)
+#   3 원산지·GPS         → supplier_miner_details / origin_certificates   (C 원산지 · D GPS/geo)
+#   4 지분·FEOC          → supplier_trader_details                                      (E)
+#   5 인권·중대·교육     → supplier_human_rights_issues / supplier_audit_records /
+#                          supplier_industrial_accidents / training_records             (E)
+#   6 EoL·인증서         → supplier_certifications                                       (E)
+#
+# 좌표는 ordering 혼선(PostGIS=lng/lat, Leaflet=lat/lng)을 구조적으로 차단하기
+# 위해 latitude/longitude 명시 필드(GeoPoint)로 받는다. POINT 변환은 각 도메인의
+# write 함수가 담당한다(섹션 0 공장 location = B, 섹션 3 mine_coordinates = D).
+# ============================================================
+class GeoPoint(BaseModel):
+    """좌표 — 입력은 lat/lng 명시, POINT(srid=4326) 변환은 write 함수가 수행."""
+    latitude: float
+    longitude: float
+
+
+# ----- 섹션 0: 회사·공장·PIC (suppliers / supplier_factories / supplier_contacts) -----
+class MasterFormCompany(BaseModel):
+    """섹션 0 회사 — suppliers."""
+    company_name: str
+    company_name_en: Optional[str] = None
+    company_name_ko: Optional[str] = None
+    short_name_en: Optional[str] = None
+    short_name_ko: Optional[str] = None
+    ceo_name: Optional[str] = None
+    business_reg_no: Optional[str] = None
+    corporate_reg_no: Optional[str] = None
+    duns_number: Optional[str] = None
+    tax_number: Optional[str] = None
+    website: Optional[str] = None
+    supplier_type: str  # manufacturer / recycler / trader / miner (chk_supplier_type)
+    established_year: Optional[int] = None
+    employee_count: Optional[int] = None
+
+
+class MasterFormFactory(BaseModel):
+    """섹션 0 공장 — supplier_factories (다건). location은 B가 POINT 변환."""
+    factory_name: Optional[str] = None
+    factory_name_en: Optional[str] = None
+    address: Optional[str] = None
+    country: Optional[str] = None        # ISO 3166-1 alpha-2
+    region: Optional[str] = None
+    coordinates: Optional[GeoPoint] = None   # → location GEOMETRY(POINT,4326)
+    factory_role: Optional[str] = None   # headquarters/production/outsourcing/processing/mining
+    operating_period_from: Optional[date] = None
+    operating_period_to: Optional[date] = None
+    monthly_capacity: Optional[str] = None
+    destination: Optional[str] = None    # EU/US/KR/BOTH
+    destination_detail: Optional[str] = None
+    applicable_regulations: Optional[list] = None
+    supply_ratio_percent: Optional[float] = None
+    supply_quantity: Optional[str] = None
+
+
+class MasterFormContact(BaseModel):
+    """섹션 0 PIC(담당자) — supplier_contacts (다건)."""
+    name: Optional[str] = None
+    name_en: Optional[str] = None
+    role: Optional[str] = None
+    department: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    mobile: Optional[str] = None
+    is_primary: bool = False
+    language: Optional[str] = None
+
+
+# ----- 섹션 1: 탄소발자국 (supplier_manufacturer_details / factory_carbon_declarations) -----
+class MasterFormFactoryCarbon(BaseModel):
+    """섹션 1 공장 단위 1차 탄소 선언 — factory_carbon_declarations (다건)."""
+    # factories 리스트 내 인덱스로 공장을 가리킨다(같은 트랜잭션에서 공장이 먼저 생성됨).
+    factory_index: Optional[int] = None
+    carbon_intensity: float                  # kg CO2e/kWh (PEF 기반)
+    methodology: Optional[str] = None        # 예: 'PEF'
+    declared_at: date
+    valid_from: Optional[date] = None
+    valid_to: Optional[date] = None
+    source: str = "supplier_declared"        # supplier_declared/third_party_verified/estimated
+
+
+class MasterFormManufacturing(BaseModel):
+    """섹션 1 탄소발자국 — supplier_manufacturer_details + factory_carbon_declarations."""
+    manufacturing_process: Optional[str] = None
+    energy_source: Optional[str] = None
+    capacity: Optional[str] = None
+    carbon_intensity: Optional[float] = None         # 공급사 단위 집약도(kgCO2eq/kg)
+    factory_declarations: list[MasterFormFactoryCarbon] = []
+
+
+# ----- 섹션 2: 재활용 패널·함량율 (supplier_recycler_details) -----
+class MasterFormRecycling(BaseModel):
+    """섹션 2 재활용 — supplier_recycler_details."""
+    recycled_materials: Optional[RecycledMaterialsSchema] = None  # 소재별 재활용 함량 %(B·C 공유 계약)
+    recycling_certification: Optional[str] = None
+    input_source: Optional[str] = None
+    recycled_content_ratio: Optional[float] = None   # 완성품 내 재활용 패널 비율 %
+    # 신규 DDL(recycling_efficiency JSONB): 소재별 회수율(함량과 별개). 예 {"Li":80,"Co":90,"Ni":85}
+    recycling_efficiency: Optional[dict] = None
+
+
+# ----- 섹션 3: 원산지·GPS (supplier_miner_details=D / origin_certificates=C) -----
+class MasterFormOriginCert(BaseModel):
+    """섹션 3 원산지 증명서 — origin_certificates (다건). 담당: C."""
+    cert_type: str                           # FTA/GSP/UFLPA_REBUTTAL/IRA_ORIGIN/CONFLICT_FREE/GENERAL
+    cert_number: Optional[str] = None
+    issuing_authority: Optional[str] = None
+    issued_at: Optional[date] = None
+    expires_at: date                         # 12개월 만료 자동 검증 대상
+    origin_country: Optional[str] = None      # ISO 3166-1 alpha-2
+    covered_minerals: Optional[dict] = None
+    document_url: Optional[str] = None
+
+
+class MasterFormOrigin(BaseModel):
+    """섹션 3 원산지·GPS — supplier_miner_details(D) + origin_certificates(C)."""
+    mine_name: Optional[str] = None
+    mining_method: Optional[str] = None
+    extraction_volume: Optional[float] = None
+    mine_coordinates: Optional[GeoPoint] = None   # GPS — D가 POINT 변환
+    active_period_from: Optional[date] = None
+    active_period_to: Optional[date] = None
+    origin_certificates: list[MasterFormOriginCert] = []
+
+
+# ----- 섹션 4: 지분·FEOC (supplier_trader_details, FEOC 라우팅은 E) -----
+class MasterFormOwnership(BaseModel):
+    """섹션 4 지분·FEOC — supplier_trader_details (FEOC 지분 라우팅은 E 결정)."""
+    trading_license: Optional[str] = None
+    broker_certification: Optional[str] = None
+    disclosure_completeness: Optional[float] = None
+    feoc_direct_ownership: Optional[float] = None    # %
+    feoc_indirect_ownership: Optional[float] = None   # %
+
+
+# ----- 섹션 5: 인권·중대·교육 (E) -----
+class MasterFormHumanRightsIssue(BaseModel):
+    """supplier_human_rights_issues (다건)."""
+    issue_type: Optional[str] = None     # forced_labor/child_labor/.../other
+    severity: Optional[str] = None       # critical/major/minor
+    description: Optional[str] = None
+    status: Optional[str] = None         # open/in_remediation/resolved/monitoring
+    source: Optional[str] = None
+
+
+class MasterFormAuditRecord(BaseModel):
+    """supplier_audit_records (다건)."""
+    audit_date: date
+    audit_type: Optional[str] = None     # on_site/remote/document_review/third_party
+    auditor: Optional[str] = None
+    audit_scope: Optional[str] = None
+    result: Optional[str] = None         # pass/conditional_pass/fail/pending
+    next_audit_due: Optional[date] = None
+    report_url: Optional[str] = None
+
+
+class MasterFormAccident(BaseModel):
+    """supplier_industrial_accidents (다건)."""
+    accident_date: date
+    accident_type: Optional[str] = None  # fatality/serious_injury/minor_injury/near_miss/environmental
+    description: Optional[str] = None
+    casualties: int = 0
+    ltifr: Optional[float] = None
+    status: Optional[str] = None         # reported/investigating/closed
+    corrective_action: Optional[str] = None
+
+
+class MasterFormTrainingRecord(BaseModel):
+    """training_records (다건)."""
+    material_id: Optional[uuid.UUID] = None
+    factory_index: Optional[int] = None  # factories 리스트 내 인덱스(선택)
+    trainee_count: int = 0
+    total_eligible: int = 0
+    completion_rate: Optional[float] = None
+    completed_at: Optional[datetime] = None
+    due_date: date
+    status: str = "not_started"          # completed/in_progress/overdue/not_started
+    instructor: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class MasterFormSocial(BaseModel):
+    """섹션 5 인권·중대·교육 — 4개 테이블 묶음 (E)."""
+    human_rights_issues: list[MasterFormHumanRightsIssue] = []
+    audit_records: list[MasterFormAuditRecord] = []
+    industrial_accidents: list[MasterFormAccident] = []
+    training_records: list[MasterFormTrainingRecord] = []
+
+
+# ----- 섹션 6: EoL·인증서 (supplier_certifications, E) -----
+class MasterFormCertification(BaseModel):
+    """supplier_certifications (다건)."""
+    certification_type: Optional[str] = None
+    certification_no: Optional[str] = None
+    issued_at: Optional[date] = None
+    expires_at: Optional[date] = None
+    issuing_body: Optional[str] = None
+    document_url: Optional[str] = None
+
+
+class MasterFormCertifications(BaseModel):
+    """섹션 6 EoL·인증서 — supplier_certifications 묶음 (E)."""
+    certifications: list[MasterFormCertification] = []
+
+
+# ----- 최상위 마스터폼 요청/응답 -----
+class MasterFormRequest(BaseModel):
+    """
+    마스터폼 전체 요청 — POST /suppliers/{supplier_id}/master-form.
+
+    섹션 0~6 전체. 역할에 해당없는 섹션은 None 허용(섹션 0 company만 필수).
+    service가 섹션별로 쪼개 각 도메인 write 함수 호출 → 단일 트랜잭션 commit(atomic).
+    """
+    company: MasterFormCompany                                  # 섹션 0 (필수)
+    factories: list[MasterFormFactory] = []                     # 섹션 0
+    contacts: list[MasterFormContact] = []                      # 섹션 0
+    manufacturing: Optional[MasterFormManufacturing] = None     # 섹션 1
+    recycling: Optional[MasterFormRecycling] = None             # 섹션 2
+    origin: Optional[MasterFormOrigin] = None                   # 섹션 3
+    ownership: Optional[MasterFormOwnership] = None             # 섹션 4
+    social: Optional[MasterFormSocial] = None                   # 섹션 5
+    certifications: Optional[MasterFormCertifications] = None    # 섹션 6
+
+
+class MasterFormResponse(BaseModel):
+    """마스터폼 제출 결과 — 저장된 섹션 키 목록을 함께 반환."""
+    supplier_id: uuid.UUID
+    status: str
+    sections_saved: list[str] = []   # 예: ["company", "factories", "recycling"]

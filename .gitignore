@@ -31,3 +31,4 @@ backend/tests/
 scripts/
 backend/scripts/
 .claude/
+CLAUDE.md

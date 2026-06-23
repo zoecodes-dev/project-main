@@ -560,7 +560,7 @@ class BomVersion(Base):
 
 class Part(Base):
     """
-    부품 마스터 — Pack→Module→Cell→전구체→광물 5계층 자기참조 트리.
+    부품 마스터 — Pack→Module→Cell→전구체→광물 7계층 0-base 자기참조 트리.
 
     [자기참조 설계]
     parent_part_id = ForeignKey("parts.part_id")
@@ -607,7 +607,7 @@ class Part(Base):
     tier_level = Column(
         Integer,
         nullable=True,
-        comment="부품 계층 레벨. 1=Pack / 2=Module / 3=Cell / 4=전구체 / 5=광물",
+        comment="부품 계층 레벨. 0=Pack / 1=Module / 2=Cell / 3=활물질·CAM / 4=전구체 / 5=제련·정제 / 6=광산",
     )
 
     parent_part_id = Column(

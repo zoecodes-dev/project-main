@@ -446,7 +446,7 @@ CREATE TABLE parts (
     part_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     part_code        VARCHAR(50) UNIQUE NOT NULL,
     part_name        VARCHAR(255),
-    tier_level       INT, -- 1(Pack) 2(Module) 3(Cell) 4(활물질/CAM) 5(전구체) 6(제련·정제) 7(광산). 분리막/전해질은 material_type
+    tier_level       INT, -- 0(Pack) 1(Module) 2(Cell) 3(활물질/CAM) 4(전구체) 5(제련·정제) 6(광산) 분리막/전해질은 material_type
     parent_part_id   UUID REFERENCES parts(part_id),
     
     -- [위상 조정] 세번변경 FTA 계산용이 아닌, 단순 통관 및 특정 HS코드 규제 필터링용으로 용도 변경
@@ -519,7 +519,7 @@ CREATE TABLE supply_chain_map (
     parent_supplier_id UUID REFERENCES suppliers(supplier_id),
     child_supplier_id  UUID REFERENCES suppliers(supplier_id), -- 미발견 시 NULL 허용
     part_id            UUID REFERENCES parts(part_id),
-    hop_level          INT,  -- 차수 SSOT: 원청(parent NULL)=1 기준 hop. (구 suppliers.tier 대체)
+    hop_level          INT,  -- 차수 SSOT: 원청(parent NULL)=0 기준 경로 순번(+1 연속). (구 suppliers.tier 대체)
     po_number          VARCHAR(50),
     invoice_number     VARCHAR(50),
     supply_period_from DATE,
@@ -896,6 +896,10 @@ CREATE TRIGGER trg_dpp_immutable
 -- ============================================================
 
 -- [뷰 역할] 공급망 허브 중앙 지도 컬러링 지원 뷰. (수정된 접두어 반영)
+-- [축 정의] 두 축을 모두 노출한다 (ADR 분리축):
+--   · hop_level = 공급망 차수 (원청 0 기준 경로 순번, +1 연속)
+--   · bom_depth = 부품 tier  (parts.tier_level, 0-base: Pack=0 … 광산=6)
+--   두 값은 독립축이다. 겸업/계층건너뜀 시 hop_level != bom_depth 일 수 있음.
 CREATE OR REPLACE VIEW v_supply_chain_node_status AS
 SELECT
     scm.map_id,
@@ -906,8 +910,8 @@ SELECT
     s.company_name,
     s.company_name_en,
     s.supplier_type,
-    scm.hop_level,
-    p.tier_level        AS bom_depth,
+    scm.hop_level,              -- 경로 순번(원청 0 기준 +1 연속)
+    p.tier_level        AS bom_depth,   -- 부품 tier(0-base, Pack=0 … 광산=6)
     s.status            AS supplier_status,
     s.risk_level,
     s.feoc_status,

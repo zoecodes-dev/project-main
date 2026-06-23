@@ -1,8 +1,10 @@
 import uuid
 import json
 import asyncio
+import logging
 import boto3
 from botocore.exceptions import ClientError
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.hitl.repository import HitlRepository
 from backend.hitl.state_machine import HitlStateMachine
@@ -13,9 +15,11 @@ from backend.llm.bedrock_factory import get_llm_for_agent
 from backend.domains.verification.service import get_compliance_history_dto
 from backend.domains.supplychain.repository import SupplyChainRepository
 from backend.domains.submission.service import get_evidence_urls_dto
-from backend.infrastructure.queue import enqueue, HITL_QUEUE
 from backend.domains.audit.repository import list_trail_by_batch
 
+logger = logging.getLogger(__name__)
+
+# [BYPASS:C4] config 이동 예정(W5 인프라)
 S3_BUCKET = "kira-documents-423937245947-ap-northeast-2-an"
 AWS_REGION = "ap-northeast-2"
 
@@ -38,8 +42,10 @@ def _generate_presigned_url(s3_key: str, expiration: int = 3600) -> str:
             Params={'Bucket': S3_BUCKET, 'Key': clean_key},
             ExpiresIn=expiration
         )
+    # [BYPASS:C1] AWS 권한 부재 시 dummy URL 폴백 — 프론트 감지용 마커 포함
     except Exception:
         # 로컬 테스트 환경 등 AWS 권한이 없을 경우 프론트엔드 화면이 깨지지 않게 임시 URL 반환
+        logger.error("Presigned URL 발급 실패 — dummy URL 폴백: %s", clean_key)
         return f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{clean_key}?dummy_presigned=true"
 
 @trace_tool("summarize_hitl_context")
@@ -63,6 +69,7 @@ async def _summarize_hitl_context(context_data: dict) -> str:
         resp = await llm.ainvoke([system_msg, human_msg])
         return resp.content if isinstance(resp.content, str) else str(resp.content)
     except Exception as e:
+        # [BYPASS:C2] LLM 실패 시 오류 문자열 반환(정직한 폴백)
         return f"AI 요약을 생성하지 못했습니다. (오류: {str(e)})"
 
 class HitlService:
@@ -91,18 +98,17 @@ class HitlService:
                 "resolution": resolution
             }
         )
-        
-        # LangGraph 파이프라인 재개는 무거우므로 ARQ 워커(hitl_queue)로 위임합니다.
-        await enqueue(
-            HITL_QUEUE,
-            "process_hitl_resolution",
-            batch_id=str(batch_id),
-            resolution=resolution,
-            job_id=f"hitl_resume_{batch_id}"
-        )
 
         # 3. 반려 시 연관 제출 건 처리를 위해 Submission 도메인으로 신호 발행 (직접 SQL 수정 금지)
         if resolution == 'reject':
+            # batches.status 전이 — WHERE의 현재상태 조건은 멱등성용
+            # (schema.sql batches 테이블엔 updated_at 컬럼이 없어 status만 갱신)
+            await db.execute(
+                text("""UPDATE batches
+                        SET status = 'batch_rejected'
+                        WHERE batch_id = :b AND status = 'batch_hitl_wait'"""),
+                {"b": str(batch_id)},
+            )
             await publish(
                 event_name="submission.reject_requested",
                 payload={
@@ -110,7 +116,7 @@ class HitlService:
                     "reason": decision_text
                 }
             )
-            
+
         return review
 
     async def get_review_context(self, db: AsyncSession, batch_id: uuid.UUID) -> dict:
@@ -145,16 +151,10 @@ class HitlService:
 
         if supplier_id:
             sc_repo = SupplyChainRepository(db)
-            
-            # 영수(D)님이 메서드를 구현하기 전까지 뻗지 않도록 방어 로직 추가
-            if hasattr(sc_repo, "get_supplier_master_and_gps_dto"):
-                sup_data = await sc_repo.get_supplier_master_and_gps_dto(supplier_id)
-                supplier_master = sup_data.get("supplier_master", {})
-                factory_gps = sup_data.get("factory_gps", [])
-            else:
-                supplier_master = {"company_name": "임시 테스트 협력사(타 도메인 연동 대기중)"}
-                factory_gps = [{"factory_name": "임시 공장", "location": "임시 좌표"}]
-            
+            sup_data = await sc_repo.get_supplier_master_and_gps_dto(supplier_id)
+            supplier_master = sup_data.get("supplier_master", {})
+            factory_gps = sup_data.get("factory_gps", [])
+
             # 제출 증빙 URL 조회 및 Presigned URL 동적 발급
             raw_evidences = await get_evidence_urls_dto(db, supplier_id)
             for ev in raw_evidences:
