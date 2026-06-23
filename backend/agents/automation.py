@@ -1,190 +1,208 @@
+"""
+agents/automation.py  (담당: 팀원 E 차윤)
+
+W2 D2+D3: 4개 automation 노드를 그래프에서 제거하고 결정론 후처리 서비스 함수로 재배치.
+
+  변경 전: graph에 verification / risk_scoring / readiness / issuance 노드로 등록
+  변경 후: compliance 완료 후 run_post_compliance_pipeline() 후처리로 호출
+           (A1 핸들러 — agents/graph.py — 의 compliance 완료 콜백에서 invoke)
+"""
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agents.state import BatchState
 from backend.infrastructure.database import AsyncSessionLocal
 from backend.domains.verification.service import verify_feoc_rule
 from backend.domains.risk.service import calculate_risk_score
-from backend.domains.dpp.service import calculate_readiness
-from backend.domains.dpp.service import generate_dpp_payload, create_dpp_record
+from backend.domains.dpp.service import calculate_readiness, generate_dpp_payload, create_dpp_record
 from backend.domains.dpp.state_machine import issue_dpp
-from backend.domains.product.models import Product as _Product  # noqa: F401 — registers products table columns in SA mapper
+from backend.domains.product.models import Product as _Product  # noqa: F401 — SA 매퍼 등록
 
 
-async def verification_node(state: BatchState) -> Dict[str, Any]:
+# ── 1. FEOC 지분 검증 ──────────────────────────────────────────────────────
+async def run_feoc_verification(
+    db: AsyncSession,
+    batch_id: uuid.UUID,
+    supplier_ids: List[uuid.UUID],
+) -> Dict[str, Any]:
     """
-    [Verification Engine]
-    stage_extraction 완료 후 호출되는 노드예요.
-    FEOC 규제 등 Verification 도메인의 룰 엔진을 트리거합니다.
+    FEOC 지분 규칙 검증. compliance judge_ira 내 흡수 예정; 과도기에는 직접 호출 가능.
+    체인 내 공급사 중 한 곳이라도 위반이면 feoc_passed=False.
     """
-    batch_id = uuid.UUID(state["batch_id"])
+    stmt = text("""
+        SELECT supplier_id, COALESCE(feoc_direct_ownership, 0), COALESCE(feoc_indirect_ownership, 0)
+        FROM supplier_risk_profiles
+        WHERE supplier_id = ANY(:sids)
+    """)
+    rows = (await db.execute(stmt, {"sids": supplier_ids})).fetchall()
 
-    # extraction_result에서 검증 대상 공급사 목록을 추출해요
-    # (data_gateway는 N-tier 공급망 전체를 다루므로 단일 supplier_id가 아니라 리스트로 실려와요)
-    extraction = state.get("extraction_result") or {}
-    supplier_ids = [uuid.UUID(s) for s in (extraction.get("supplier_ids") or [])]
+    passed = True
+    for supplier_id, direct_ownership, indirect_ownership in rows:
+        row_passed = await verify_feoc_rule(
+            db=db,
+            batch_id=batch_id,
+            supplier_id=supplier_id,
+            direct_ownership=float(direct_ownership),
+            indirect_ownership=float(indirect_ownership),
+        )
+        if not row_passed:
+            passed = False
 
-    if not supplier_ids:
-        raise ValueError("extraction_result에 supplier_ids가 누락되었습니다.")
-
-    async with AsyncSessionLocal() as db:
-        # 지분율은 state가 아니라 supplier_risk_profiles에서 직접 조회해요
-        stmt = text("""
-            SELECT supplier_id, COALESCE(feoc_direct_ownership, 0), COALESCE(feoc_indirect_ownership, 0)
-            FROM supplier_risk_profiles
-            WHERE supplier_id = ANY(:sids)
-        """)
-        rows = (await db.execute(stmt, {"sids": supplier_ids})).fetchall()
-
-        # 체인 내 한 공급사라도 위반이면 배치 전체가 위반 — 위반 전부 기록되도록 끝까지 순회해요
-        passed = True
-        for supplier_id, direct_ownership, indirect_ownership in rows:
-            # 도메인 서비스(얇은 래퍼) 호출
-            row_passed = await verify_feoc_rule(
-                db=db,
-                batch_id=batch_id,
-                supplier_id=supplier_id,
-                direct_ownership=float(direct_ownership),
-                indirect_ownership=float(indirect_ownership)
-            )
-            if not row_passed:
-                passed = False
-
-    return {
-        "current_stage": "stage_verification",
-        "verification_result": {"feoc_passed": passed}
-    }
+    return {"feoc_passed": passed}
 
 
-async def risk_scoring_node(state: BatchState) -> Dict[str, Any]:
+# ── 2. 위험 점수 산정 ──────────────────────────────────────────────────────
+async def run_risk_scoring(
+    db: AsyncSession,
+    batch_id: uuid.UUID,
+    supplier_ids: List[uuid.UUID],
+    compliance_result: Optional[Dict[str, Any]] = None,
+    geo_result: Optional[Dict[str, Any]] = None,
+    current_hitl_required: bool = False,
+) -> Dict[str, Any]:
     """
-    [Pipeline Coordinator]
-    stage_compliance 완료 후 호출되는 노드예요.
-    다른 노드들이 모아둔 위반 사항을 Risk 도메인으로 넘겨 점수를 계산합니다.
+    compliance·geo 위반 내역을 종합해 위험 점수를 산정하고 에스컬레이션 여부를 반환한다.
+    반환값의 hitl_required=True 이면 run_post_compliance_pipeline이 즉시 early return하여
+    supervisor가 hitl_interrupt 노드로 라우팅한다.
     """
-    batch_id = uuid.UUID(state["batch_id"])
-    extraction = state.get("extraction_result") or {}
-    supplier_ids = [uuid.UUID(s) for s in (extraction.get("supplier_ids") or [])]
+    violations: List[Dict[str, str]] = []
 
-    if not supplier_ids:
-        raise ValueError("extraction_result에 supplier_ids가 누락되었습니다.")
-
-    # compliance나 geo 등 이전 단계의 위반 내역을 추출해요
-    violations = []
-    comp_res = state.get("compliance_result") or {}
+    comp_res = compliance_result or {}
     if comp_res.get("verdict") in ("compliance_violation", "compliance_reject", "compliance_warning"):
         violations.append({
             "type": comp_res["verdict"],
-            "reason": comp_res.get("reasoning_text", "규제 심사 위반")
+            "reason": comp_res.get("reasoning_text", "규제 심사 위반"),
         })
 
-    geo_res = state.get("geo_result") or {}
+    geo_res = geo_result or {}
     if geo_res.get("risk_detected"):
         violations.append({"type": "GeoRiskDetected", "reason": "지리적 위험(GeoRisk) 검출"})
 
-    async with AsyncSessionLocal() as db:
-        # risk 서비스 시그니처는 단수 유지 — 체인 내 FEOC 위반이 검출된 "최악 공급사"를
-        # 우선 점수 산정 대상으로 삼고, 위반이 없으면 첫 공급사를 대상으로 해요.
-        stmt = text("""
-            SELECT supplier_id, COALESCE(feoc_direct_ownership, 0), COALESCE(feoc_indirect_ownership, 0)
-            FROM supplier_risk_profiles
-            WHERE supplier_id = ANY(:sids)
-        """)
-        rows = (await db.execute(stmt, {"sids": supplier_ids})).fetchall()
+    # FEOC 위반이 가장 심각한 공급사를 우선 점수 산정 대상으로 선정
+    stmt = text("""
+        SELECT supplier_id, COALESCE(feoc_direct_ownership, 0), COALESCE(feoc_indirect_ownership, 0)
+        FROM supplier_risk_profiles
+        WHERE supplier_id = ANY(:sids)
+    """)
+    rows = (await db.execute(stmt, {"sids": supplier_ids})).fetchall()
 
-        target_supplier_id = supplier_ids[0]
-        worst_total_ownership = -1.0
-        for supplier_id, direct_ownership, indirect_ownership in rows:
-            direct_ownership = float(direct_ownership)
-            indirect_ownership = float(indirect_ownership)
-            total_ownership = direct_ownership + indirect_ownership
-            is_violation = direct_ownership >= 25.0 or indirect_ownership >= 25.0 or total_ownership >= 25.0
-            if is_violation and total_ownership > worst_total_ownership:
-                worst_total_ownership = total_ownership
-                target_supplier_id = supplier_id
+    target_supplier_id = supplier_ids[0]
+    worst_total = -1.0
+    for supplier_id, direct, indirect in rows:
+        direct, indirect = float(direct), float(indirect)
+        total = direct + indirect
+        if (direct >= 25.0 or indirect >= 25.0 or total >= 25.0) and total > worst_total:
+            worst_total = total
+            target_supplier_id = supplier_id
 
-        risk_result = await calculate_risk_score(
-            db=db,
-            batch_id=batch_id,
-            supplier_id=target_supplier_id,
-            violations=violations
-        )
+    risk_result = await calculate_risk_score(
+        db=db,
+        batch_id=batch_id,
+        supplier_id=target_supplier_id,
+        violations=violations,
+    )
 
     is_escalated = risk_result.get("is_escalated", False)
-
-    updates = {
+    updates: Dict[str, Any] = {
         "current_stage": "stage_risk",
-        # 리스크가 70점 이상이면 에스컬레이션(HITL) 플래그를 올려줘요
-        "hitl_required": state.get("hitl_required", False) or is_escalated
+        "hitl_required": current_hitl_required or is_escalated,
     }
-
-    # 에스컬레이션 되었다면 사유를 명확히 적어주어 HITL 노드가 헷갈리지 않게 해요
     if is_escalated:
         updates["error_reason"] = "risk_escalated"
-        # Supervisor가 hitl_interrupt 노드로 라우팅하도록 점수를 강제로 깎습니다.
         updates["confidence_score"] = 0.84
 
     return updates
 
 
-async def readiness_node(state: BatchState) -> Dict[str, Any]:
+# ── 3. DPP 준비도 체크 ────────────────────────────────────────────────────
+async def run_readiness(
+    db: AsyncSession,
+    product_id: uuid.UUID,
+) -> Dict[str, Any]:
     """
-    [Pipeline Coordinator]
-    stage_risk 완료 후 호출되는 노드예요.
-    8대 체크리스트 기반으로 Readiness 점수를 계산합니다.
+    8대 체크리스트 기반 Readiness 점수 산정.
+    만점(1.0) 미만이면 gray_zone 플래그 → supervisor가 hitl_interrupt로 라우팅.
     """
-    product_id = uuid.UUID(state["product_id"])
+    result = await calculate_readiness(db, product_id)
+    score = result["readiness_score"]
 
-    async with AsyncSessionLocal() as db:
-        result = await calculate_readiness(db, product_id)
-        score = result["readiness_score"]
+    updates: Dict[str, Any] = {
+        "current_stage": "stage_readiness",
+        "readiness_score": score,
+    }
+    if score < 1.0:
+        updates["error_reason"] = "gray_zone"
+        updates["confidence_score"] = 0.84
 
-        updates = {
-            "current_stage": "stage_readiness",
-            "readiness_score": score,
-        }
-
-        # 만점이 아니라면 보류 사유를 적고, Supervisor가 HITL로 보내도록 유도해요.
-        if score < 1.0:
-            updates["error_reason"] = "gray_zone"
-            updates["confidence_score"] = 0.84
-
-        return updates
+    return updates
 
 
-async def issuance_node(state: BatchState) -> Dict[str, Any]:
+# ── 4. DPP 발행 ───────────────────────────────────────────────────────────
+async def run_issuance(
+    db: AsyncSession,
+    batch_id: uuid.UUID,
+    product_id: uuid.UUID,
+) -> Dict[str, Any]:
     """
-    [Pipeline Coordinator]
-    stage_readiness에서 1.0(만점)을 받은 배치를 대상으로 호출되는 노드예요.
-    최종 DPP JSON을 생성하고 불변성(Immutable) Lock을 걸어 발행을 확정합니다.
+    DPP JSON 생성 + 불변 Lock 확정 발행.
+    """
+    payload = await generate_dpp_payload(db=db, product_id=product_id, batch_id=batch_id)
+
+    emissions = payload.get("annex_xiii_fields", {}).get("section_4_embedded_emissions_scores", {})
+    carbon_footprint = float(emissions.get("59_total_embedded_emissions", 0.0))
+
+    dpp_id = await create_dpp_record(
+        db=db,
+        batch_id=batch_id,
+        product_id=product_id,
+        carbon_footprint=carbon_footprint,
+        qr_code_url=f"https://dpp.kira.compliance/verify/{batch_id}",
+        payload=payload,
+    )
+    await issue_dpp(db=db, dpp_id=dpp_id)
+
+    return {"current_stage": "stage_issuance", "batch_status": "batch_completed"}
+
+
+# ── 후처리 파이프라인 (compliance 완료 후 A1 핸들러가 호출) ───────────────
+async def run_post_compliance_pipeline(state: BatchState) -> Dict[str, Any]:
+    """
+    compliance 완료 직후 A1 핸들러(agents/graph.py)가 호출하는 결정론 후처리 파이프라인.
+    risk_scoring → readiness → issuance 를 단일 DB 세션에서 순차 실행한다.
+
+    HITL 조건 발생 시 즉시 partial 업데이트를 반환하여
+    supervisor가 hitl_interrupt 노드로 라우팅할 수 있게 한다.
     """
     batch_id = uuid.UUID(state["batch_id"])
     product_id = uuid.UUID(state["product_id"])
+    extraction = state.get("extraction_result") or {}
+    supplier_ids = [uuid.UUID(s) for s in (extraction.get("supplier_ids") or [])]
+
+    if not supplier_ids:
+        raise ValueError("extraction_result에 supplier_ids가 누락되었습니다.")
 
     async with AsyncSessionLocal() as db:
-        # 1. 80필드 DPP 페이로드 생성
-        payload = await generate_dpp_payload(db=db, product_id=product_id, batch_id=batch_id)
-
-        # 2. 탄소발자국 점수 추출 및 DppRecord 초안 생성
-        emissions = payload.get("annex_xiii_fields", {}).get("section_4_embedded_emissions_scores", {})
-        carbon_footprint = float(emissions.get("59_total_embedded_emissions", 0.0))
-
-        # 3. 서비스 함수를 호출하여 DppRecord 초안을 생성해요 (얇은 래퍼 패턴)
-        dpp_id = await create_dpp_record(
+        # 1) 위험 점수 산정
+        risk_updates = await run_risk_scoring(
             db=db,
             batch_id=batch_id,
-            product_id=product_id,
-            carbon_footprint=carbon_footprint,
-            qr_code_url=f"https://dpp.kira.compliance/verify/{batch_id}",
-            payload=payload
+            supplier_ids=supplier_ids,
+            compliance_result=state.get("compliance_result"),
+            geo_result=state.get("geo_result"),
+            current_hitl_required=bool(state.get("hitl_required")),
         )
+        if risk_updates.get("hitl_required"):
+            return risk_updates
 
-        # 4. 발행 처리 및 불변 Lock 확정
-        await issue_dpp(db=db, dpp_id=dpp_id)
+        # 2) DPP 준비도 체크
+        readiness_updates = await run_readiness(db=db, product_id=product_id)
+        if readiness_updates.get("error_reason") == "gray_zone":
+            return readiness_updates
 
-    return {
-        "current_stage": "stage_issuance",
-        "batch_status": "batch_completed"
-    }
+        # 3) DPP 발행
+        issuance_updates = await run_issuance(db=db, batch_id=batch_id, product_id=product_id)
+
+    return {**risk_updates, **readiness_updates, **issuance_updates}
