@@ -715,8 +715,21 @@ async def _insert_compliance_result(
 #    없는 키는 빈값으로 채워요(KeyError 방지).
 # ---------------------------------------------------------------------------
 
-def _build_judge_context(state: BatchState) -> dict:
+def _build_judge_context(state) -> dict:
+    """
+    앞 단계(extraction, verification, geo) 결과를 합쳐
+    judge에게 넘길 컨텍스트 dict를 구성한다.
+
+    [D4 수정 사항]
+      geo_audit·verification 노드가 D2+D3 그래프 축소로 제거되면
+      state에 'geo_result'·'verification_result' 키가 존재하지 않는다.
+      기존에도 .get()으로 방어하고 있었지만, 기본값을 명시화하고
+      주석으로 근거를 남겨 향후 혼란을 방지한다.
+    """
     extraction:   dict = state.get("extraction_result")   or {}
+
+    # [D4] geo/verification 결과는 그래프 축소 후 state에 없을 수 있다.
+    #       or {}로 빈 dict 폴백 → .get()에서 None/[] 반환.
     verification: dict = state.get("verification_result") or {}
     geo:          dict = state.get("geo_result")          or {}
 
@@ -730,15 +743,20 @@ def _build_judge_context(state: BatchState) -> dict:
         "feoc_direct_ownership":   extraction.get("feoc_direct_ownership"),
         "feoc_indirect_ownership": extraction.get("feoc_indirect_ownership"),
         "carbon_intensity":        extraction.get("carbon_intensity"),
-        "mine_coordinates":        geo.get("mine_coordinates"),
+
+        # ── [D4] 그래프 축소 방어 — 명시적 기본값 ──
+        # geo_audit 노드 제거 후: state에 geo_result 자체가 없음.
+        # verification 노드 제거 후: state에 verification_result 자체가 없음.
+        # None / [] 기본값으로 judge 함수들이 안전하게 동작하도록 보장.
+        "mine_coordinates":        geo.get("mine_coordinates", None),
         "geo_risk_flags":          geo.get("risk_flags", []),
         "verification_flags":      verification.get("flags", []),
+
         # ── Day2 신규 키 ──
-        # supplier_recycler_details 출처.
-        # key 컨벤션: 소문자 원소기호(co/ni/li/pb) — events/types.py RecycledMaterialsSchema SSOT.
         "recycled_content_ratio":  extraction.get("recycled_content_ratio"),
         "recycled_materials":      extraction.get("recycled_materials"),
     }
+
 
 
 # ---------------------------------------------------------------------------
