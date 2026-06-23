@@ -152,10 +152,38 @@ async def import_products(
         )
 
         # 2-2. LotImported
+        # ──────────────────────────────────────────────────────
+        # [A2 수정 — 은지] batch_id TODO 정리
+        #
+        # [현재 상태]
+        #   A(지혜)의 A1 배치 생성 단일 진입점이 아직 머지되지 않았다.
+        #   batch_id=None으로 방어적 동작. LotImported 이벤트에
+        #   batch_id가 None이어도 downstream(subscriber)이
+        #   None 체크 후 안전하게 처리한다.
+        #
+        # [A1 머지 후 교체할 코드]
+        # ┌────────────────────────────────────────────────────┐
+        # │ # A(지혜)의 배치 생성 단일 진입점으로 위임           │
+        # │ from backend.handlers.batch_trigger import (       │
+        # │     create_batch_for_product,                      │
+        # │ )                                                  │
+        # │ batch = await create_batch_for_product(            │
+        # │     db=db,                                         │
+        # │     product_id=product.product_id,                 │
+        # │     source_system="MES",                           │
+        # │     external_id=product.external_id,               │
+        # │ )                                                  │
+        # │ actual_batch_id = batch.batch_id                   │
+        # └────────────────────────────────────────────────────┘
+        #
+        # [교체 방법]
+        #   1. A1 머지 확인 (handlers/batch_trigger.py 존재 확인)
+        #   2. 위 주석의 import + 함수 호출 코드를 해제
+        #   3. 아래 batch_id=None 을 batch_id=actual_batch_id 로 교체
+        #   4. 이 TODO 주석 블록 삭제
+        # ──────────────────────────────────────────────────────
         lot_event = LotImportedEvent(
-            batch_id=None,  # TODO(W3): repo.create_batch() 호출 후 실제 batch_id로 교체.
-                            # batches.source_system='MES', external_id, synced_at 세팅 필수.
-                            # schema.sql batches 테이블 DEFAULT 'MES' 참조.
+            batch_id=None,  # → A1 머지 후 actual_batch_id 로 교체
             product_id=product.product_id,
             external_id=product.external_id,
         )

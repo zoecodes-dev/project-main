@@ -31,12 +31,11 @@ class SupplyChainRepository:
         스펙 5-1 SUPPLY_CHAIN_TREE_QUERY 기준: bom_versions JOIN으로 product_id 진입,
         트리 루트 = 원청(tier0/hop0, parent_supplier_id IS NULL → child=원청 Pack)부터 하향 탐색.
 
-        [hop_level = 경로 순번(원청 0 기준 +1 연속)]
-          - 재귀 진행 시 hop_level = 부모 hop + 1 을 JOIN 조건으로 강제한다.
-            · 겸업(한양셀 = Module hop1 + Cell hop2 등) self-edge(parent=child)를 결정적으로 탐색
-              (같은 회사의 다음 hop 만 매칭 → 형제 엣지 중복 부착/무한루프 방지).
-          - 순환 판정 path 키를 (child_supplier_id, part_id) 복합키로 변경.
-            · 단일 child_supplier_id 키는 같은 회사의 연속 hop 등장(겸업)을 사이클로 오판함.
+        [F1 표시 기준 — depth 단일화]
+          - depth = CTE 재귀 깊이(0=원청). 프론트 트리 렌더링·레이어 표시 기준축.
+          - hop_level = supply_chain_map 엣지 보조 메타(경로 순번). 재귀 JOIN 조건·겸업 탐색용.
+            겸업(한양셀 Module→Cell)처럼 depth ≠ hop_level 이 될 수 있다 → 표시는 depth만 사용.
+          - 순환 판정: path 키 = (child_supplier_id, part_id) 복합키(겸업 오판 방지).
         공장 좌표는 GeoJSON으로 반환 (스펙 완료 기준).
         """
         query = text("""
@@ -79,8 +78,10 @@ class SupplyChainRepository:
             )
             SELECT
                 map_id, parent_supplier_id, child_supplier_id, part_id,
-                company_name, supplier_type, hop_level, country,
-                location_geojson, depth, is_cycle
+                company_name, supplier_type,
+                depth,       -- [F1 주축] 프론트 트리 표시 기준
+                hop_level,   -- [F1 보조] 엣지 메타 — 겸업 탐색·JOIN 조건용
+                country, location_geojson, is_cycle
             FROM sc_tree
             ORDER BY depth, hop_level;
         """)
@@ -307,6 +308,87 @@ class SupplyChainRepository:
             "product_id": product_id,
             "part_id": part_id,
         })
+        return [dict(row._mapping) for row in result]
+
+    @trace_tool("supply_chain_gaps_query")
+    async def get_supplier_field_data(self, product_id: str) -> List[Dict[str, Any]]:
+        """
+        C2 gap 계산용: 제품 공급망 내 모든 고유 협력사와 각 규제 필수 필드의 보유 여부를 조회.
+
+        반환 컬럼:
+          supplier_id, supplier_type, depth (트리 최소 depth)
+          has_carbon_intensity          : manufacturer_details.carbon_intensity 존재 여부
+          has_factory_carbon_decl       : factory_carbon_declarations 행 존재 여부
+          has_recycled_content_ratio    : recycler_details.recycled_content_ratio 존재 여부
+          has_recycled_materials        : recycler_details.recycled_materials 존재 여부
+          has_mine_coordinates          : miner_details.mine_coordinates 존재 여부
+          has_origin_country            : origin_certificates(valid/expiring_soon) 존재 여부
+          has_feoc_direct_ownership     : risk_profiles.feoc_direct_ownership 존재 여부
+          has_feoc_indirect_ownership   : risk_profiles.feoc_indirect_ownership 존재 여부
+        """
+        query = text("""
+            WITH RECURSIVE sc_tree AS (
+                SELECT
+                    scm.child_supplier_id, s.supplier_type,
+                    0 AS depth
+                FROM supply_chain_map scm
+                JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
+                JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
+                WHERE bv.product_id = :product_id
+                  AND scm.parent_supplier_id IS NULL
+
+                UNION ALL
+
+                SELECT
+                    scm.child_supplier_id, s.supplier_type,
+                    sct.depth + 1
+                FROM supply_chain_map scm
+                JOIN sc_tree sct ON scm.parent_supplier_id = sct.child_supplier_id
+                JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
+            ),
+            unique_suppliers AS (
+                SELECT DISTINCT ON (child_supplier_id)
+                    child_supplier_id AS supplier_id,
+                    supplier_type,
+                    MIN(depth) OVER (PARTITION BY child_supplier_id) AS depth
+                FROM sc_tree
+            )
+            SELECT
+                us.supplier_id,
+                us.supplier_type,
+                us.depth,
+                -- Manufacturer: carbon_intensity
+                (smd.carbon_intensity IS NOT NULL)                           AS has_carbon_intensity,
+                -- Manufacturer: factory_carbon_declarations (공장 단위 1차 선언)
+                EXISTS (
+                    SELECT 1 FROM factory_carbon_declarations fcd
+                    JOIN supplier_factories sf ON sf.factory_id = fcd.factory_id
+                    WHERE sf.supplier_id = us.supplier_id AND fcd.is_active = TRUE
+                )                                                            AS has_factory_carbon_decl,
+                -- Recycler: recycled_content_ratio
+                (srd.recycled_content_ratio IS NOT NULL)                     AS has_recycled_content_ratio,
+                -- Recycler: recycled_materials (JSONB — 광물별 함량)
+                (srd.recycled_materials IS NOT NULL)                         AS has_recycled_materials,
+                -- Miner: mine_coordinates (PostGIS POINT)
+                (smind.mine_coordinates IS NOT NULL)                         AS has_mine_coordinates,
+                -- Miner/Trader: origin_country via origin_certificates
+                EXISTS (
+                    SELECT 1 FROM origin_certificates oc
+                    WHERE oc.supplier_id = us.supplier_id
+                      AND oc.status IN ('valid', 'expiring_soon')
+                )                                                            AS has_origin_country,
+                -- Trader/Manufacturer: FEOC 직접 지분 (risk_profiles)
+                (srp.feoc_direct_ownership IS NOT NULL)                      AS has_feoc_direct_ownership,
+                -- Trader/Manufacturer: FEOC 간접 지분 (risk_profiles)
+                (srp.feoc_indirect_ownership IS NOT NULL)                    AS has_feoc_indirect_ownership
+            FROM unique_suppliers us
+            LEFT JOIN supplier_manufacturer_details smd ON smd.supplier_id = us.supplier_id
+            LEFT JOIN supplier_recycler_details srd      ON srd.supplier_id = us.supplier_id
+            LEFT JOIN supplier_miner_details smind       ON smind.supplier_id = us.supplier_id
+            LEFT JOIN supplier_risk_profiles srp         ON srp.supplier_id = us.supplier_id
+            ORDER BY us.depth, us.supplier_type;
+        """)
+        result = await self.session.execute(query, {"product_id": product_id})
         return [dict(row._mapping) for row in result]
 
     @trace_tool("xinjiang_proximity_check")
