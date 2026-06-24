@@ -625,22 +625,6 @@ CREATE TABLE dpp_records (
 );
 
 
--- [테이블 역할] FEOC 지분 검증 결과 대장. run_feoc_verification 실행 시 위반 공급사·지분율을 적재.
-CREATE TABLE verification_results (
-    result_id     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    batch_id      UUID REFERENCES batches(batch_id) ON DELETE CASCADE,
-    supplier_id   UUID REFERENCES suppliers(supplier_id),
-    supplier_name VARCHAR(255),
-    direct        NUMERIC(5,2),
-    indirect      NUMERIC(5,2),
-    total         NUMERIC(5,2),
-    is_violation  BOOLEAN NOT NULL DEFAULT FALSE,
-    reason        TEXT,
-    created_at    TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX idx_verification_results_batch ON verification_results(batch_id);
-
 
 -- ============================================================
 -- 영역 10. 규제 / 컴플라이언스 (C 담당 — 최종 10대 규제화)
