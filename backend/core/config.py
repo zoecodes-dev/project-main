@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
+    # E2(데모 축소): 협력사 상세 모달 탭 노출 정책.
+    #   True면 핵심 3탭(detail/factories/risk)만 노출하고 esg/training/reliability는 숨긴다.
+    #   False(.env에서 SUPPLIER_DEMO_MODE=false)면 7탭 전체가 다시 살아난다 — 가역 토글.
+    SUPPLIER_DEMO_MODE: bool = True
+
     # .env 파일을 자동으로 읽어오도록 설정
     model_config = SettingsConfigDict(
         env_file=".env", 

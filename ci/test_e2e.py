@@ -97,6 +97,46 @@ def test_masterform_prefill_path(client, a_supplier_id):
     assert body["document_count"] >= 0
 
 
+# ============================================================
+# 기능: E2 협력사 7탭 축소 (2026-06-24) — 데모서 핵심 3탭만 노출
+# ============================================================
+def test_e2_supplier_tab_reduction(client, a_supplier_id):
+    """
+    E2: 협력사 상세 모달을 데모에서 핵심 3탭(detail/factories/risk)만 노출하고
+    esg/training/reliability는 숨긴다(SUPPLIER_DEMO_MODE=True 기준).
+
+    검증:
+      1) GET /suppliers/_meta/tabs 가 노출/숨김 SSOT를 반환한다.
+      2) 노출 탭(detail/factories/risk-profile)은 정상 응답(200, 또는 데이터 없으면 404).
+      3) 숨긴 탭(esg/training/reliability)은 데모에서 404로 가려진다.
+    데모 모드를 끈 환경(SUPPLIER_DEMO_MODE=false)이면 숨김 탭도 살아나므로,
+    메타가 알려주는 visible/hidden 목록을 기준으로 단언한다(환경에 무관하게 일관).
+    """
+    meta = client.get("/suppliers/_meta/tabs")
+    assert meta.status_code == 200, f"_meta/tabs {meta.status_code}: {meta.text}"
+    body = meta.json()
+    visible, hidden = set(body["visible"]), set(body["hidden"])
+    # 핵심 3탭은 항상 노출, 둘은 상호배타.
+    assert {"detail", "factories", "risk"} <= visible
+    assert not (visible & hidden)
+
+    # 숨긴 탭은 404로 가려진다(존재하지 않는 것처럼).
+    tab_to_path = {
+        "esg": f"/suppliers/{a_supplier_id}/esg",
+        "training": f"/suppliers/{a_supplier_id}/training",
+        "reliability": f"/suppliers/{a_supplier_id}/reliability",
+    }
+    for tab, path in tab_to_path.items():
+        resp = client.get(path)
+        if tab in hidden:
+            assert resp.status_code == 404, f"{tab} 숨김인데 {resp.status_code} — 가드 누락"
+        else:
+            assert resp.status_code == 200, f"{tab} 노출인데 {resp.status_code}: {resp.text}"
+
+    # 노출 탭은 라우터가 살아있어야 한다(데이터 유무와 무관하게 405/404 아닌 200 기대).
+    assert client.get(f"/suppliers/{a_supplier_id}/factories").status_code == 200
+
+
 # ════════════════════════════════════════════════════════════
 # 새 기능을 만들면 아래에 e2e 함수를 한 개 추가하세요 (누적 스위트가 매일 재검증).
 #   def test_<기능>_<날짜>(client, a_supplier_id): ...
