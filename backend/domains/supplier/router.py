@@ -13,7 +13,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.core.config import config
 from backend.infrastructure.database import get_db
 from backend.domains.supplier import service
 # 스키마 클래스들을 models 내부 하단에서 안전하게 import
@@ -33,48 +32,6 @@ from backend.domains.supplier.models import (
 )
 
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
-
-
-# ============================================================
-# E2(데모 축소): 협력사 상세 모달 탭 노출 정책 SSOT
-# ------------------------------------------------------------
-# "7탭 모달"을 데모에서는 핵심 3탭(detail/factories/risk)만 노출하고
-# esg/training/reliability는 숨긴다(config.SUPPLIER_DEMO_MODE). 숨김은 기능 삭제가
-# 아니라 가역 토글 — .env에서 SUPPLIER_DEMO_MODE=false면 7탭 전체가 다시 살아난다.
-#
-# 프론트 데모는 GET /suppliers/_meta/tabs 를 읽어 '보이는 탭'만 렌더한다. 숨긴 탭
-# 엔드포인트를 직접 때려도 _require_tab 가드가 404로 가린다(존재하지 않는 것처럼).
-# ============================================================
-_CORE_TABS = ("detail", "factories", "risk")          # 데모에서도 항상 노출
-_DEMO_HIDDEN_TABS = ("esg", "training", "reliability")  # 데모 모드에서 숨김
-
-
-def _tab_visible(tab: str) -> bool:
-    """탭이 현재 노출 대상인지. 데모 모드일 때만 _DEMO_HIDDEN_TABS를 숨긴다."""
-    if tab in _DEMO_HIDDEN_TABS:
-        return not config.SUPPLIER_DEMO_MODE
-    return True
-
-
-def _require_tab(tab: str):
-    """숨긴 탭 엔드포인트를 404로 가리는 의존성. config를 호출 시점에 읽어 토글 가능."""
-    async def _guard():
-        if not _tab_visible(tab):
-            raise HTTPException(
-                status_code=404, detail=f"'{tab}' 탭은 데모에서 비활성화되어 있습니다"
-            )
-    return _guard
-
-
-@router.get("/_meta/tabs")
-async def get_supplier_tabs_meta():
-    """
-    협력사 상세 모달에 노출할 탭 목록(노출/숨김 SSOT). 프론트 데모가 이걸 읽어 탭을 렌더한다.
-    경로 세그먼트가 2개(_meta/tabs)라 단일 세그먼트인 GET /{supplier_id}와 충돌하지 않는다.
-    """
-    visible = list(_CORE_TABS) + [t for t in _DEMO_HIDDEN_TABS if _tab_visible(t)]
-    hidden = [t for t in _DEMO_HIDDEN_TABS if not _tab_visible(t)]
-    return {"visible": visible, "hidden": hidden, "demo_mode": config.SUPPLIER_DEMO_MODE}
 
 
 @router.post("", status_code=201)
@@ -207,11 +164,7 @@ async def update_risk_score_endpoint(
 # ============================================================
 # BE-3: 7탭 모달 조회 엔드포인트 (기존 테이블 SELECT 전용)
 # ============================================================
-@router.get(
-    "/{supplier_id}/esg",
-    response_model=SupplierEsgResponse,
-    dependencies=[Depends(_require_tab("esg"))],  # E2: 데모에서 숨김
-)
+@router.get("/{supplier_id}/esg", response_model=SupplierEsgResponse)
 async def get_supplier_esg_endpoint(
     supplier_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -223,11 +176,7 @@ async def get_supplier_esg_endpoint(
     return data
 
 
-@router.get(
-    "/{supplier_id}/training",
-    response_model=SupplierTrainingResponse,
-    dependencies=[Depends(_require_tab("training"))],  # E2: 데모에서 숨김
-)
+@router.get("/{supplier_id}/training", response_model=SupplierTrainingResponse)
 async def get_supplier_training_endpoint(
     supplier_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -239,11 +188,7 @@ async def get_supplier_training_endpoint(
     return data
 
 
-@router.get(
-    "/{supplier_id}/reliability",
-    response_model=SupplierReliabilityResponse,
-    dependencies=[Depends(_require_tab("reliability"))],  # E2: 데모에서 숨김
-)
+@router.get("/{supplier_id}/reliability", response_model=SupplierReliabilityResponse)
 async def get_supplier_reliability_endpoint(
     supplier_id: UUID,
     db: AsyncSession = Depends(get_db),
