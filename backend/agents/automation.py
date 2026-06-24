@@ -31,27 +31,67 @@ async def run_feoc_verification(
     """
     FEOC 지분 규칙 검증. compliance judge_ira 내 흡수 예정; 과도기에는 직접 호출 가능.
     체인 내 공급사 중 한 곳이라도 위반이면 feoc_passed=False.
+    위반 공급사 목록과 지분율을 verification_results 테이블에 저장하고 응답에도 포함한다.
     """
     stmt = text("""
-        SELECT supplier_id, COALESCE(feoc_direct_ownership, 0), COALESCE(feoc_indirect_ownership, 0)
-        FROM supplier_risk_profiles
-        WHERE supplier_id = ANY(:sids)
+        SELECT srp.supplier_id,
+               s.company_name AS supplier_name,
+               COALESCE(srp.feoc_direct_ownership, 0) AS direct,
+               COALESCE(srp.feoc_indirect_ownership, 0) AS indirect
+        FROM supplier_risk_profiles srp
+        JOIN suppliers s ON srp.supplier_id = s.supplier_id
+        WHERE srp.supplier_id = ANY(:sids)
     """)
     rows = (await db.execute(stmt, {"sids": supplier_ids})).fetchall()
 
     passed = True
-    for supplier_id, direct_ownership, indirect_ownership in rows:
+    violation_rows: List[tuple] = []
+    violations: List[Dict[str, Any]] = []
+
+    for row in rows:
+        supplier_id = row[0]
+        supplier_name = row[1]
+        direct = float(row[2])
+        indirect = float(row[3])
+        total = direct + indirect
+
         row_passed = await verify_feoc_rule(
             db=db,
             batch_id=batch_id,
             supplier_id=supplier_id,
-            direct_ownership=float(direct_ownership),
-            indirect_ownership=float(indirect_ownership),
+            direct_ownership=direct,
+            indirect_ownership=indirect,
         )
         if not row_passed:
             passed = False
+            violation_rows.append((supplier_id, supplier_name, direct, indirect, total))
+            violations.append({
+                "supplier_id": str(supplier_id),
+                "supplier_name": supplier_name,
+                "direct": direct,
+                "indirect": indirect,
+                "total": total,
+            })
 
-    return {"feoc_passed": passed}
+    if violation_rows:
+        insert_stmt = text("""
+            INSERT INTO verification_results
+                (batch_id, supplier_id, supplier_name, direct, indirect, total, is_violation)
+            VALUES
+                (:batch_id, :supplier_id, :supplier_name, :direct, :indirect, :total, TRUE)
+        """)
+        for sid, sname, d, i, t in violation_rows:
+            await db.execute(insert_stmt, {
+                "batch_id": batch_id,
+                "supplier_id": sid,
+                "supplier_name": sname,
+                "direct": d,
+                "indirect": i,
+                "total": t,
+            })
+        await db.flush()
+
+    return {"feoc_passed": passed, "violations": violations}
 
 
 # ── 2. 위험 점수 산정 ──────────────────────────────────────────────────────
@@ -120,13 +160,21 @@ async def run_risk_scoring(
 async def run_readiness(
     db: AsyncSession,
     product_id: uuid.UUID,
+    batch_id: uuid.UUID,
 ) -> Dict[str, Any]:
     """
     8대 체크리스트 기반 Readiness 점수 산정.
     만점(1.0) 미만이면 gray_zone 플래그 → supervisor가 hitl_interrupt로 라우팅.
+    점수를 batches.readiness_score에 저장하여 배치별 조회 가능.
     """
     result = await calculate_readiness(db, product_id)
     score = result["readiness_score"]
+
+    await db.execute(
+        text("UPDATE batches SET readiness_score = :score WHERE batch_id = :batch_id"),
+        {"score": score, "batch_id": batch_id},
+    )
+    await db.flush()
 
     updates: Dict[str, Any] = {
         "current_stage": "stage_readiness",
@@ -196,7 +244,7 @@ async def run_post_compliance_pipeline(state: BatchState) -> Dict[str, Any]:
             return risk_updates
 
         # 2) DPP 준비도 체크
-        readiness_updates = await run_readiness(db=db, product_id=product_id)
+        readiness_updates = await run_readiness(db=db, product_id=product_id, batch_id=batch_id)
         if readiness_updates.get("error_reason") == "gray_zone":
             return readiness_updates
 

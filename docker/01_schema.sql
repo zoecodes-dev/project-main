@@ -598,7 +598,7 @@ CREATE TABLE batches (
         ),
         
     confidence_score NUMERIC(5,4),
-    readiness_score  NUMERIC(5,4), -- [E R6] run_readiness 결과 저장 (차윤)
+    readiness_score  NUMERIC(5,4),
 
     -- [결정 #1 정교화] 외부 원천시스템 연동 마크 주입 (생산 배치는 MES 동기화)
     source_system   VARCHAR(100) DEFAULT 'MES',
@@ -623,6 +623,23 @@ CREATE TABLE dpp_records (
     payload          JSONB, -- Annex XIII 80개 법적 연동 규격 전체
     approved_by      UUID REFERENCES users(user_id)
 );
+
+
+-- [테이블 역할] FEOC 지분 검증 결과 대장. run_feoc_verification 실행 시 위반 공급사·지분율을 적재.
+CREATE TABLE verification_results (
+    result_id     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_id      UUID REFERENCES batches(batch_id) ON DELETE CASCADE,
+    supplier_id   UUID REFERENCES suppliers(supplier_id),
+    supplier_name VARCHAR(255),
+    direct        NUMERIC(5,2),
+    indirect      NUMERIC(5,2),
+    total         NUMERIC(5,2),
+    is_violation  BOOLEAN NOT NULL DEFAULT FALSE,
+    reason        TEXT,
+    created_at    TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_verification_results_batch ON verification_results(batch_id);
 
 
 -- ============================================================
