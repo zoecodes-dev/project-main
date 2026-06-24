@@ -112,7 +112,6 @@ async def run_risk_scoring(
     }
     if is_escalated:
         updates["error_reason"] = "risk_escalated"
-        updates["confidence_score"] = 0.84
 
     return updates
 
@@ -135,7 +134,6 @@ async def run_readiness(
     }
     if score < 1.0:
         updates["error_reason"] = "gray_zone"
-        updates["confidence_score"] = 0.84
 
     return updates
 
