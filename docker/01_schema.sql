@@ -598,7 +598,8 @@ CREATE TABLE batches (
         ),
         
     confidence_score NUMERIC(5,4),
-    
+    readiness_score  NUMERIC(5,4), -- [E R6] run_readiness 결과 저장 (차윤)
+
     -- [결정 #1 정교화] 외부 원천시스템 연동 마크 주입 (생산 배치는 MES 동기화)
     source_system   VARCHAR(100) DEFAULT 'MES',
     external_id     VARCHAR(255),
@@ -1245,6 +1246,34 @@ CREATE INDEX idx_trans_logs_ack_token ON transmission_logs(ack_token) WHERE ack_
 CREATE INDEX idx_detention_cases_due ON detention_cases(due_date) WHERE status != 'released';
 CREATE INDEX idx_reverify_logs_status ON reverification_logs(status);
 CREATE INDEX idx_audit_snapshots_batch ON audit_data_snapshots(batch_id);
+
+-- ============================================================
+-- 영역 13. 에이전트 판정 결과 저장 (D·E 담당)
+-- ============================================================
+
+-- [테이블 역할] 배치별 지리 감사 판정 결과 저장. (D R5 — 영수)
+--   geo_audit_node가 실행될 때마다 upsert. batch_id UNIQUE로 최신 결과 유지.
+CREATE TABLE geo_audit_results (
+    audit_result_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_id        UUID UNIQUE REFERENCES batches(batch_id) ON DELETE CASCADE,
+    risk_detected   BOOLEAN DEFAULT FALSE,
+    risk_flags      JSONB DEFAULT '[]', -- ["xinjiang", "country_mismatch", ...]
+    detected_risks  JSONB DEFAULT '[]', -- GeoRiskDetectedEvent 전체 목록
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX idx_geo_audit_results_batch ON geo_audit_results(batch_id);
+
+-- [테이블 역할] 배치별 FEOC 검증 결과 저장. (E R4 — 차윤이 데이터 적재)
+--   batch_id UNIQUE로 최신 검증 결과 유지.
+CREATE TABLE verification_results (
+    verification_result_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_id               UUID UNIQUE REFERENCES batches(batch_id) ON DELETE CASCADE,
+    feoc_passed            BOOLEAN,
+    violations             JSONB DEFAULT '[]', -- [{supplier_id, supplier_name, direct, indirect, total}]
+    created_at             TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX idx_verification_results_batch ON verification_results(batch_id);
+
 
 -- ============================================================
 -- 마스터 데이터 시드 (Regulations - 최종 10개)
