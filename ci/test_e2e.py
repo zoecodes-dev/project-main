@@ -97,6 +97,39 @@ def test_masterform_prefill_path(client, a_supplier_id):
     assert body["document_count"] >= 0
 
 
+# ============================================================
+# 기능: R10 data_gateway supplier_ids 산출 가드 (2026-06-24)
+# ============================================================
+# 4대 데모 시나리오 제품 (02_seed_data.sql §products). data_gateway는
+# get_n_tier_supply_chain(product_id)의 child_supplier_id로 supplier_ids를 만들고,
+# verification·risk가 이를 필수 입력으로 받는다 → 트리가 비면 전 판정이 깨진다.
+# /supply-chain/tree 가 같은 재귀 쿼리를 쓰므로, 이 엔드포인트의 child_supplier_id
+# 집합이 곧 data_gateway가 수집할 supplier_ids다. (누가 시드/hop을 건드려 트리를
+# 끊으면 이 테스트가 즉시 잡는다 — R10 회귀 가드.)
+_SCENARIO_PRODUCT_IDS = {
+    "① iX3 (Happy)":  "d1111111-0000-4000-8000-000000000001",
+    "② i4 (Gray)":    "d2222222-0000-4000-8000-000000000002",
+    "③ GLC (Sad)":    "d3333333-0000-4000-8000-000000000003",
+    "④ EQS (Happy)":  "d4444444-0000-4000-8000-000000000004",
+}
+
+
+@pytest.mark.parametrize("label,product_id", list(_SCENARIO_PRODUCT_IDS.items()))
+def test_r10_supply_tree_yields_supplier_ids(client, label, product_id):
+    """
+    R10 DoD: 4시나리오 모두 supplier_ids(=트리 child_supplier_id 집합)가 비어있지 않다.
+    트리가 비면 verification(FEOC ANY(:sids) 빈집합 → 헛통과)·risk(supplier_ids[0] →
+    IndexError)가 깨지므로, 빈 트리를 배포 게이트에서 차단한다.
+    """
+    resp = client.get("/supply-chain/tree", params={"product_id": product_id})
+    assert resp.status_code == 200, f"{label} tree {resp.status_code}: {resp.text}"
+    nodes = resp.json()
+    assert isinstance(nodes, list) and nodes, f"{label}: 공급망 트리가 비었음 — 시드/hop 연속성 확인"
+
+    supplier_ids = {n["child_supplier_id"] for n in nodes if n.get("child_supplier_id")}
+    assert supplier_ids, f"{label}: child_supplier_id가 전부 비었음 — data_gateway supplier_ids 공집합"
+
+
 # ════════════════════════════════════════════════════════════
 # 새 기능을 만들면 아래에 e2e 함수를 한 개 추가하세요 (누적 스위트가 매일 재검증).
 #   def test_<기능>_<날짜>(client, a_supplier_id): ...

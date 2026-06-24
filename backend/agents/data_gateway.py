@@ -297,3 +297,82 @@ async def data_gateway_node(state: BatchState) -> BatchState:
             "has_missing": has_missing,
         },
     }
+
+
+def _coerce_number(value):
+    """숫자로 해석되면 float, 아니면 None. '95 kgCO2eq' 같은 단위 접미사는 앞 숫자만 본다."""
+    if isinstance(value, bool):       # bool은 int 하위형이라 숫자 취급 방지
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        head = value.strip().split()[0] if value.strip() else ""
+        try:
+            return float(head)
+        except ValueError:
+            return None
+    return None
+
+
+async def get_integrity_pairs(
+    db: AsyncSession, supplier_id, confirmed_fields: dict | None
+) -> list[dict]:
+    """
+    [문서무결성 검증용 B 제공 계약 — 결정 #4 · #3 연장]
+
+    협력사 확정값(confirmed_fields, parsed_fields와 같은 키 공간)과 그 협력사가 올린
+    증빙문서의 AI 추출값(document_extraction_results.parsed_fields)을 같은 키로 짝지어
+    비교 가능한 페어 리스트로 반환한다. verification 도메인(E)의 document_integrity_rule이
+    이 페어를 받아 불일치 판정만 한다 — 점수/등급은 STEP 6 몫(레이어 경계 유지).
+
+    규칙:
+      - 미확정 문서(supplier_confirmed=False)는 제외 — 협력사 확정값만 검증(헛검증 방지, 결정 #4).
+      - 한 키가 여러 문서에 있으면 추출 신뢰도(confidence_map)가 가장 높은 문서값을 대표로 채택.
+      - 증빙에 없는 확정 키, 증빙문서가 아예 없는 경우, confirmed_fields가 비면 → 페어에서 제외.
+        (E의 룰은 빈 리스트를 '무결성 통과'로 처리하면 된다.)
+
+    인자:
+      supplier_id      : 확정값의 주인(제출 협력사). UUID 또는 str.
+      confirmed_fields : 협력사 확정값 dict. 보통 state["confirmed_fields"]를 그대로 넘긴다.
+
+    반환 페어: {"field", "confirmed_value", "document_value", "confidence", "value_type"}
+      value_type: "numeric"(양쪽 수치 해석 가능) | "string"(그 외 — 정규화 후 문자열 비교)
+    """
+    if not confirmed_fields:
+        return []
+
+    sid = supplier_id if isinstance(supplier_id, UUID) else UUID(str(supplier_id))
+    results = await submission_repo.list_extraction_results_by_suppliers(db, [sid])
+
+    # 키별 '최고 신뢰' 증빙값 집계 (확정 문서만 대상)
+    best_doc_value: dict = {}
+    best_conf: dict = {}
+    for record, _supplier_type in results:
+        if not record.supplier_confirmed:
+            continue
+        parsed = record.parsed_fields or {}
+        cmap = record.confidence_map or {}
+        for key, doc_value in parsed.items():
+            try:
+                conf = float(cmap.get(key, 0.0))
+            except (TypeError, ValueError):
+                conf = 0.0
+            if key not in best_conf or conf > best_conf[key]:
+                best_doc_value[key] = doc_value
+                best_conf[key] = conf
+
+    pairs: list[dict] = []
+    for key, confirmed_value in confirmed_fields.items():
+        if key not in best_doc_value:
+            continue  # 증빙에 없는 확정값 — 무결성 비교 대상 아님
+        doc_value = best_doc_value[key]
+        c_num, d_num = _coerce_number(confirmed_value), _coerce_number(doc_value)
+        numeric = c_num is not None and d_num is not None
+        pairs.append({
+            "field": key,
+            "confirmed_value": c_num if numeric else confirmed_value,
+            "document_value": d_num if numeric else doc_value,
+            "confidence": best_conf[key],
+            "value_type": "numeric" if numeric else "string",
+        })
+    return pairs
