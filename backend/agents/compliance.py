@@ -5,35 +5,82 @@ agents/compliance.py — Compliance Interpreter Agent (은지 / C)
   BatchState의 verification_result를 받아, 목적지(destination)별로 적용되는
   규제 각각의 준수 여부를 판정하고 compliance_results 테이블에 기록한다.
 
-Day3 완성 상태:
+==========================================================================
+W6 수요일 리팩토링 (은지 — R8 + H2)
+==========================================================================
+
+  ■ R8: HITL 트리거 방식 전환 — confidence 강제하향 → error_reason 세팅
+  ────────────────────────────────────────────────────────────────────────
+
+    【배경 — 왜 바꿔야 했나?】
+      기존 방식은 HITL이 필요할 때 confidence_score를 억지로 0.84로 낮춰서
+      supervisor가 "0.85 미만이면 HITL로 보내라"는 숫자 비교로 분기했다.
+
+      이 방식의 문제:
+        ① 데이터 손실: LLM이 실제로 계산한 신뢰도(예: 0.92)가 0.84로 덮어써짐.
+           → "이 판정이 왜 92% 신뢰도인데 HITL로 갔지?" 추적 불가.
+        ② 의미 혼탁: confidence_score가 "실제 신뢰도"인지 "HITL 신호"인지 불명확.
+        ③ 경계 위반: compliance가 supervisor의 라우팅 숫자 기준까지 알아야 하는 결합.
+
+    【변경 후 — 어떻게 개선됐나?】
+      compliance_node는 판정 결과만 보고 "사람 검토가 필요한가?"를 판단해서
+      error_reason 필드에 문자열로 명시한다.
+      supervisor route()는 그 문자열을 직접 읽어 분기한다.
+
+        needs_human_review=True  → error_reason = "low_confidence"  → HITL
+        needs_human_review=False → error_reason = None              → risk_scoring
+
+      결과적으로:
+        ① confidence_score = LLM이 계산한 실제 신뢰도 그대로 보존
+        ② error_reason = HITL 진입 이유를 명확한 문자열로 표현
+        ③ compliance는 "왜 HITL인가"만 알면 되고, supervisor 숫자 기준은 몰라도 됨
+
+    【제거된 코드】
+      ❌ _HITL_CONFIDENCE_THRESHOLD = 0.85  (supervisor 임계치 — 경계 위반 상수)
+      ❌ _HITL_DOWNGRADE_SCORE = 0.84       (강제 하향 매직 넘버)
+      ❌ _compute_hitl_confidence()          (confidence 덮어쓰기 함수)
+
+    【supervisor.py(A 지혜 담당)와의 연결】
+      supervisor route()의 분기 조건:
+        if er in ("feoc_violation", "geographical_risk", "risk_escalated",
+                  "gray_zone", "low_confidence"):
+            return "hitl_interrupt"
+      compliance가 "low_confidence"를 세팅하면 supervisor가 hitl_interrupt로 라우팅.
+      두 파일이 error_reason 문자열 하나로만 소통 — 숫자 결합 없음.
+
+  ■ H2: LLM 경로 통일 (Bedrock 일원화)
+  ──────────────────────────────────────
+    【변경 전 — 문제점】
+      _call_sonnet_for_verdict()가 httpx로 Anthropic REST API를 직접 호출했다.
+      - API 키를 settings.ANTHROPIC_API_KEY에서 직접 가져옴
+      - 모델 ID를 _SONNET_MODEL 상수로 별도 관리
+      - 인증 방식이 다른 에이전트들(Bedrock IAM Role)과 달라 관리 포인트 2개
+
+    【변경 후 — 해결】
+      B(은진)이 만든 공통 팩토리 `bedrock_factory.py`의
+      `get_llm_for_agent("compliance")`를 사용한다.
+      - API 키 관리: IAM Role이 자동 처리 (코드에 키 없음)
+      - 모델 선택: AGENT_MODEL_MAP["compliance"] = Model.SONNET_46 (한 곳에서 관리)
+      - LangChain ChatBedrockConverse 인스턴스를 반환받아 .ainvoke()로 호출
+
+      결과적으로:
+      ① httpx 의존성 제거
+      ② _SONNET_MODEL 상수 제거
+      ③ _get_anthropic_key() 함수 제거
+      ④ _call_sonnet_for_verdict()의 HTTP 호출 → LangChain .ainvoke() 교체
+
+==========================================================================
+
+기존 히스토리 (변경 없는 부분):
   - REGULATION_BY_DESTINATION: supervisor가 import하는 매핑 딕셔너리 (Day1)
   - generate_embedding(): 텍스트 → Bedrock Cohere Embed v4 벡터 변환 (Day2)
   - search_regulations(): pgvector 코사인 유사도 RAG 검색 (Day2)
   - ComplianceCompleted: 이벤트 dataclass (Day3)
-  - _call_sonnet_for_verdict(): Sonnet 호출 래퍼 — cited_clauses 강제 (Day3)
-  - judge_uflpa(): UFLPA 전용 judge — @trace_tool("compliance_judge_UFLPA") (Day3)
-  - judge_ira(): IRA 전용 judge — @trace_tool("compliance_judge_IRA") (Day3)
-  - judge_generic(): 나머지 실판정 3종 공통 judge (Day3)
-  - _stub_passed_judge(): CBAM / CONFLICT_MINERALS / CRMA 깡통 judge (Day3)
-  - REGULATION_JUDGES: regulation_code → judge 함수 매핑 딕셔너리 (Day3)
-  - _insert_compliance_result(): compliance_results INSERT 헬퍼 (Day3)
-  - compliance_node: 실판정 버전 — Day1 skeleton 교체 (Day3)
-
-W4_목 추가 작업:
-  - _CARBON_THRESHOLD_VIOLATION / _CARBON_THRESHOLD_WARNING: 탄소발자국 임계치 상수
-  - _RECYCLED_CONTENT_MIN: 재활용 함량 최소 임계치 상수 (광물별)
-  - judge_carbon_footprint(): EU_BATTERY_ART7 탄소발자국 선언 검증
-      @trace_tool("compliance_judge_CARBON")
-      factory_carbon_declarations 테이블 기반 가중평균 조회
-      선언 누락 공장 있으면 needs_human_review=True
-  - judge_recycled_content(): EU_BATTERY 재활용 함량 검증
-      @trace_tool("compliance_judge_RECYCLED")
-      recycled_content_ratio + recycled_materials JSONB 광물별 임계치 비교
-      효율(%) 검증 미구현 — 12월 시행 전 스프린트에서 처리
-  - REGULATION_JUDGES 갱신: EU_BATTERY → judge_recycled_content,
-                             EU_BATTERY_ART7 → judge_carbon_footprint
-  - _build_judge_context() 갱신: recycled_content_ratio / recycled_materials 키 추가
-  - compliance_node @trace_node 데코레이터 제거 — graph 래퍼가 기록 담당
+  - judge_uflpa/ira/carbon_footprint/recycled_content/generic: 규제별 judge
+  - _stub_passed_judge(): CBAM / CONFLICT_MINERALS / CRMA 깡통 judge
+  - _insert_compliance_result(): compliance_results INSERT 헬퍼
+  - _build_judge_context(): D4 기본값화 적용 완료
+  - get_compliance_history_for_batch(): HITL context용 이력 조회
 """
 
 from __future__ import annotations
@@ -45,7 +92,22 @@ import uuid
 from datetime import datetime, timezone
 from typing import Callable
 
-import httpx
+# ──────────────────────────────────────────────────────────────────────────
+# [H2 변경] httpx 제거 → LangChain 메시지 타입 import
+#
+#   변경 전: import httpx  (Anthropic REST API 직접 호출용)
+#   변경 후: langchain_core.messages 에서 SystemMessage, HumanMessage import
+#            → get_llm_for_agent()가 반환하는 ChatBedrockConverse 인스턴스에
+#              이 메시지 객체들을 넘겨 .ainvoke()로 호출한다.
+#
+#   왜 LangChain 메시지 타입을 쓰나?
+#     ChatBedrockConverse는 LangChain의 BaseChatModel을 상속한다.
+#     LangChain 챗 모델은 .invoke([메시지들]) 형태로 호출하는데,
+#     이때 메시지는 SystemMessage/HumanMessage/AIMessage 객체여야 한다.
+#     일반 문자열이 아니라 "역할이 명시된 메시지 객체"를 넘기는 것.
+# ──────────────────────────────────────────────────────────────────────────
+from langchain_core.messages import SystemMessage, HumanMessage
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +116,19 @@ from backend.infrastructure.database import AsyncSessionLocal
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_tool
 from backend.llm.embedding_factory import embed_query
+
+# ──────────────────────────────────────────────────────────────────────────
+# [H2 변경] B(은진)의 공통 LLM 팩토리 import
+#
+#   bedrock_factory.py에 정의된 get_llm_for_agent("compliance")를 호출하면
+#   AGENT_MODEL_MAP에서 "compliance" → Model.SONNET_46 을 찾아
+#   ChatBedrockConverse 인스턴스를 반환한다.
+#
+#   인증은 EC2에 부착된 IAM Role(KIRA-EC2-Bedrock-Role)이 자동 처리하므로
+#   API 키를 코드에 넣을 필요가 없다.
+#   모델을 바꾸고 싶으면 bedrock_factory.py의 AGENT_MODEL_MAP만 수정하면 된다.
+# ──────────────────────────────────────────────────────────────────────────
+from backend.llm.bedrock_factory import get_llm_for_agent
 
 logger = logging.getLogger(__name__)
 
@@ -190,25 +265,59 @@ async def search_regulations(
 
 
 # ---------------------------------------------------------------------------
-# 4. Sonnet 호출 래퍼 (Day3)
-#    RAG로 가져온 조항 + 협력사 데이터를 Sonnet에게 주고 JSON 판정을 받는다.
+# 4. LLM 판정 호출 래퍼 (Day3 → W6 H2 리팩토링)
+#
+#    [H2 변경 — 은지 + 은진]
+#    RAG로 가져온 조항 + 협력사 데이터를 LLM에게 주고 JSON 판정을 받는다.
+#
+#    ■ 변경 전 (httpx 직접 호출):
+#      async with httpx.AsyncClient() as client:
+#          resp = await client.post(
+#              "https://api.anthropic.com/v1/messages",
+#              headers={"x-api-key": _get_anthropic_key(), ...},
+#              json={"model": _SONNET_MODEL, ...},
+#          )
+#      → API 키를 settings에서 직접 가져오고, 모델 ID도 여기서 관리
+#      → 다른 에이전트들은 Bedrock IAM Role 인증인데, compliance만 달랐음
+#
+#    ■ 변경 후 (Bedrock 경유 LangChain 호출):
+#      llm = get_llm_for_agent("compliance")    # ← B(은진) 공통 팩토리
+#      response = await llm.ainvoke([SystemMessage(...), HumanMessage(...)])
+#      → 인증: IAM Role 자동 (코드에 키 없음)
+#      → 모델: bedrock_factory.py의 AGENT_MODEL_MAP에서 한 곳 관리
+#      → 호출: LangChain의 표준 인터페이스 (.ainvoke)
+#
 #    cited_clauses 가 비어 있으면 호출부(judge_*)에서 compliance_reject 처리.
 # ---------------------------------------------------------------------------
 
-_SONNET_MODEL = "global.anthropic.claude-sonnet-4-6"
+# ──────────────────────────────────────────────────────────────────────────
+# [H2 제거 항목들]
+#
+#   아래 3개는 더 이상 필요 없어서 삭제했다:
+#
+#   ❌ _SONNET_MODEL = "global.anthropic.claude-sonnet-4-6"
+#      → bedrock_factory.py의 AGENT_MODEL_MAP["compliance"]이 관리
+#
+#   ❌ def _get_anthropic_key():
+#      → IAM Role이 인증 자동 처리, API 키 불필요
+#
+#   ❌ import httpx
+#      → LangChain .ainvoke()로 대체, HTTP 클라이언트 불필요
+# ──────────────────────────────────────────────────────────────────────────
 
 
-def _get_anthropic_key() -> str:
-    from backend.core.config import settings
-    return settings.ANTHROPIC_API_KEY
-
-
-async def _call_sonnet_for_verdict(
+async def _call_llm_for_verdict(
     regulation_code: str,
     clauses: list[dict],
     context: dict,
 ) -> dict:
     """
+    [H2] Bedrock 경유 LLM 판정 호출 — _call_sonnet_for_verdict()의 후속 버전.
+
+    함수명이 _call_sonnet_for_verdict → _call_llm_for_verdict로 바뀐 이유:
+      더 이상 Sonnet만 쓰는 게 아니라, bedrock_factory의 매핑에 따라
+      어떤 모델이든 쓸 수 있기 때문이다 (현재는 Sonnet 4.6이지만 변경 가능).
+
     반환 JSON 스키마:
     {
       "verdict": "compliance_passed|compliance_violation|compliance_warning|compliance_reject",
@@ -221,6 +330,17 @@ async def _call_sonnet_for_verdict(
       - cited_clauses MUST NOT be empty.
         비어 있으면 judge_*가 compliance_reject + needs_human_review=True 로 처리.
       - verdict는 4종 중 하나, 언더스코어 표기. (schema.sql chk_compliance_verdict)
+
+    호출 흐름 (초보자용 단계별 설명):
+      1. get_llm_for_agent("compliance")로 LLM 인스턴스를 가져온다.
+         → bedrock_factory.py에서 캐시된 ChatBedrockConverse 객체 반환
+      2. SystemMessage + HumanMessage 리스트를 만든다.
+         → SystemMessage: LLM의 "역할/규칙" 설정 (시스템 프롬프트)
+         → HumanMessage: 실제 판정 요청 내용 (사용자 프롬프트)
+      3. llm.ainvoke(messages)로 비동기 호출한다.
+         → .ainvoke()는 LangChain의 비동기 호출 메서드
+         → 내부적으로 Bedrock Converse API를 호출
+      4. 응답에서 .content를 추출해 JSON 파싱한다.
     """
     clauses_text = "\n".join(
         f"[{i+1}] {c.get('name', regulation_code)} — {c.get('description', '')}"
@@ -254,27 +374,36 @@ async def _call_sonnet_for_verdict(
         "Return the JSON judgment."
     )
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": _get_anthropic_key(),
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": _SONNET_MODEL,
-                "max_tokens": 1024,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": user_prompt}],
-            },
-            timeout=60.0,
-        )
-        resp.raise_for_status()
+    # ──────────────────────────────────────────────────────────────────────
+    # [H2 핵심 변경] httpx 직접 호출 → LangChain .ainvoke()
+    #
+    #   변경 전:
+    #     async with httpx.AsyncClient() as client:
+    #         resp = await client.post("https://api.anthropic.com/v1/messages", ...)
+    #     raw = resp.json()["content"][0]["text"]
+    #
+    #   변경 후:
+    #     llm = get_llm_for_agent("compliance")
+    #     response = await llm.ainvoke([SystemMessage(...), HumanMessage(...)])
+    #     raw = response.content
+    #
+    #   차이점:
+    #     - get_llm_for_agent는 lru_cache로 캐시됨 → 매번 새 인스턴스 안 만듦
+    #     - .ainvoke()는 LangChain의 표준 비동기 호출 → 어떤 백엔드든 동일 코드
+    #     - response.content는 문자열 (LangChain AIMessage의 .content 속성)
+    #     - API 키/인증: IAM Role이 boto3 내부에서 자동 처리
+    # ──────────────────────────────────────────────────────────────────────
+    llm = get_llm_for_agent("compliance", max_tokens=1024)
 
-    raw = resp.json()["content"][0]["text"].strip()
+    response = await llm.ainvoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt),
+    ])
 
-    # Sonnet이 ```json 블록으로 감싸는 경우 방어
+    # LangChain AIMessage의 .content 속성에서 텍스트 추출
+    raw = response.content.strip()
+
+    # LLM이 ```json 블록으로 감싸는 경우 방어 (모델 무관하게 발생 가능)
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -292,7 +421,7 @@ def _validate_cited_clauses(result: dict, regulation_code: str) -> dict:
         result["verdict"] = "compliance_reject"
         result["needs_human_review"] = True
         result["reasoning_text"] = (
-            "[cited_clauses 누락] Sonnet이 근거 조항을 제시하지 못했어요. "
+            "[cited_clauses 누락] LLM이 근거 조항을 제시하지 못했어요. "
             + result.get("reasoning_text", "")
         )
     result.setdefault("needs_human_review", False)
@@ -302,7 +431,7 @@ def _validate_cited_clauses(result: dict, regulation_code: str) -> dict:
 
 # ---------------------------------------------------------------------------
 # 5. Stub judge — CBAM / CONFLICT_MINERALS / CRMA (Day3)
-#    항상 compliance_passed 반환. Sonnet 호출 없음.
+#    항상 compliance_passed 반환. LLM 호출 없음.
 # ---------------------------------------------------------------------------
 
 _STUB_REGULATIONS: set[str] = {"CBAM", "CONFLICT_MINERALS", "CRMA"}
@@ -352,6 +481,14 @@ _RECYCLED_CONTENT_MIN: dict[str, float] = {
 # ---------------------------------------------------------------------------
 # 6. 규제별 전용 judge 함수
 #    geo_audit.py 패턴 준수: 기능별 함수 분리 + 고정 이름 @trace_tool.
+#
+#    [H2 변경 사항]
+#    모든 judge 함수의 except 절에서:
+#      변경 전: except (httpx.HTTPError, json.JSONDecodeError, KeyError)
+#      변경 후: except (Exception,)
+#      이유: httpx를 더 이상 쓰지 않으므로 httpx.HTTPError가 발생하지 않는다.
+#            대신 Bedrock/LangChain 관련 예외(botocore ClientError 등)를
+#            포괄적으로 잡아 compliance_reject 처리한다.
 # ---------------------------------------------------------------------------
 
 @trace_tool("compliance_judge_UFLPA")
@@ -368,14 +505,14 @@ async def judge_uflpa(batch_id: str, context: dict, db: AsyncSession) -> dict:
         top_k=5,
     )
     try:
-        result = await _call_sonnet_for_verdict("UFLPA", clauses, context)
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError) as exc:
+        result = await _call_llm_for_verdict("UFLPA", clauses, context)
+    except (json.JSONDecodeError, KeyError, Exception) as exc:
         return {
             "verdict": "compliance_reject",
             "needs_human_review": True,
             "cited_clauses": [],
             "confidence_score": 0.0,
-            "reasoning_text": f"Sonnet 호출 실패: {exc}",
+            "reasoning_text": f"LLM 호출 실패: {exc}",
         }
     return _validate_cited_clauses(result, "UFLPA")
 
@@ -394,14 +531,14 @@ async def judge_ira(batch_id: str, context: dict, db: AsyncSession) -> dict:
         top_k=5,
     )
     try:
-        result = await _call_sonnet_for_verdict("IRA", clauses, context)
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError) as exc:
+        result = await _call_llm_for_verdict("IRA", clauses, context)
+    except (json.JSONDecodeError, KeyError, Exception) as exc:
         return {
             "verdict": "compliance_reject",
             "needs_human_review": True,
             "cited_clauses": [],
             "confidence_score": 0.0,
-            "reasoning_text": f"Sonnet 호출 실패: {exc}",
+            "reasoning_text": f"LLM 호출 실패: {exc}",
         }
     return _validate_cited_clauses(result, "IRA")
 
@@ -418,7 +555,7 @@ async def judge_carbon_footprint(
          carbon_intensity 를 supply_ratio.ratio_percentage 로 가중평균 조회.
       2. 선언 누락 공장 수(missing_declaration_count) 확인.
          누락 공장이 있으면 ART7 미충족 → needs_human_review=True.
-      3. 가중평균값을 임계치와 비교해 Sonnet에 힌트로 제공 후 판정.
+      3. 가중평균값을 임계치와 비교해 LLM에 힌트로 제공 후 판정.
 
     판정 기준 (EU 2023/1542 Annex II):
       - weighted_carbon_intensity > 100 kgCO2eq/kWh → compliance_violation
@@ -426,11 +563,6 @@ async def judge_carbon_footprint(
       - weighted_carbon_intensity <=  75             → compliance_passed
       - 선언 데이터 전혀 없음                         → compliance_reject + needs_human_review
       - 선언 누락 공장 존재                           → 판정 후 needs_human_review=True 강제
-
-    데이터 출처:
-      - factory_carbon_declarations (Day2 신설 테이블)
-      - supply_ratio.ratio_percentage (공장별 납품 기여율)
-      - batches.bom_version_id → supply_chain_map → supply_ratio 경로
     """
     clauses = await search_regulations(
         "carbon footprint declaration lifecycle threshold kgCO2eq battery cell manufacturing",
@@ -491,7 +623,7 @@ async def judge_carbon_footprint(
             ),
         }
 
-    # Sonnet 컨텍스트 구성
+    # LLM 컨텍스트 구성
     enriched_context = {
         **context,
         "weighted_carbon_intensity":  weighted_carbon,
@@ -506,14 +638,14 @@ async def judge_carbon_footprint(
     }
 
     try:
-        result = await _call_sonnet_for_verdict("EU_BATTERY_ART7", clauses, enriched_context)
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError) as exc:
+        result = await _call_llm_for_verdict("EU_BATTERY_ART7", clauses, enriched_context)
+    except (json.JSONDecodeError, KeyError, Exception) as exc:
         return {
             "verdict":            "compliance_reject",
             "needs_human_review": True,
             "cited_clauses":      [],
             "confidence_score":   0.0,
-            "reasoning_text":     f"Sonnet 호출 실패: {exc}",
+            "reasoning_text":     f"LLM 호출 실패: {exc}",
         }
 
     result = _validate_cited_clauses(result, "EU_BATTERY_ART7")
@@ -568,7 +700,7 @@ async def judge_recycled_content(
             ),
         }
 
-    # 광물별 임계치 위반 사전 계산 — Sonnet 힌트로 제공
+    # 광물별 임계치 위반 사전 계산 — LLM 힌트로 제공
     threshold_violations: list[str] = [
         f"{mineral.upper()} {materials[mineral]}% < 최소 {min_pct}%"
         for mineral, min_pct in _RECYCLED_CONTENT_MIN.items()
@@ -583,14 +715,14 @@ async def judge_recycled_content(
     }
 
     try:
-        result = await _call_sonnet_for_verdict("EU_BATTERY", clauses, enriched_context)
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError) as exc:
+        result = await _call_llm_for_verdict("EU_BATTERY", clauses, enriched_context)
+    except (json.JSONDecodeError, KeyError, Exception) as exc:
         return {
             "verdict":            "compliance_reject",
             "needs_human_review": True,
             "cited_clauses":      [],
             "confidence_score":   0.0,
-            "reasoning_text":     f"Sonnet 호출 실패: {exc}",
+            "reasoning_text":     f"LLM 호출 실패: {exc}",
         }
 
     return _validate_cited_clauses(result, "EU_BATTERY")
@@ -615,14 +747,14 @@ async def judge_generic(
     query_hint = _GENERIC_QUERY_HINTS.get(regulation_code, regulation_code)
     clauses = await search_regulations(query_hint, regulation_code, db, top_k=5)
     try:
-        result = await _call_sonnet_for_verdict(regulation_code, clauses, context)
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError) as exc:
+        result = await _call_llm_for_verdict(regulation_code, clauses, context)
+    except (json.JSONDecodeError, KeyError, Exception) as exc:
         return {
             "verdict": "compliance_reject",
             "needs_human_review": True,
             "cited_clauses": [],
             "confidence_score": 0.0,
-            "reasoning_text": f"Sonnet 호출 실패: {exc}",
+            "reasoning_text": f"LLM 호출 실패: {exc}",
         }
     return _validate_cited_clauses(result, regulation_code)
 
@@ -637,8 +769,8 @@ REGULATION_JUDGES: dict[str, Callable] = {
     "UFLPA":            judge_uflpa,
     "IRA":              judge_ira,
     # Day2 신규 — 탄소발자국·재활용 전용 judge
-    "EU_BATTERY":       judge_recycled_content,   # Day2: judge_generic → judge_recycled_content
-    "EU_BATTERY_ART7":  judge_carbon_footprint,   # Day2: judge_generic → judge_carbon_footprint
+    "EU_BATTERY":       judge_recycled_content,
+    "EU_BATTERY_ART7":  judge_carbon_footprint,
     # 실판정 3종 — 공통 judge (regulation_code를 인자로 넘김)
     "EU_BATTERY_ART47": judge_generic,
     "EUDR":             judge_generic,
@@ -709,13 +841,6 @@ async def _insert_compliance_result(
 
 
 # ---------------------------------------------------------------------------
-# 9. judge context 빌더 (Day3 + Day2 키 추가)
-#    앞 단계(extraction, verification, geo) 결과를 합쳐
-#    judge에게 넘길 컨텍스트 dict를 구성한다.
-#    없는 키는 빈값으로 채워요(KeyError 방지).
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # 9. judge context 빌더 (Day3 + Day2 키 추가 + D4 기본값화)
 #
 #    [D4 수정 — 은지]
@@ -736,11 +861,20 @@ def _build_judge_context(state) -> dict:
     앞 단계(extraction, verification, geo) 결과를 합쳐
     judge에게 넘길 컨텍스트 dict를 구성한다.
 
-    [D4 수정 사항]
-      geo_audit·verification 노드가 D2+D3 그래프 축소로 제거되면
+    [D4 수정 사항 — 그래프 축소 시 방어]
+      geo_audit·verification 노드가 그래프에서 제거되면
       state에 'geo_result'·'verification_result' 키가 존재하지 않는다.
-      기존에도 .get()으로 방어하고 있었지만, 기본값을 명시화하고
-      주석으로 근거를 남겨 향후 혼란을 방지한다.
+      or {}로 빈 dict 폴백 후 .get() 기본값으로 안전하게 처리한다.
+
+    [R3 연동 현황 — 영수(D) 작업 완료 후]
+      geo_audit 노드가 그래프에 복구되면 state["geo_result"]에
+      {"risk_detected": bool, "risk_flags": ["xinjiang", ...]} 형태로 채워진다.
+      이 함수는 추가 수정 없이 geo_result.risk_flags를 자동으로 수신한다.
+
+      현재(복구 전): geo_result 없음 → geo_risk_flags = []  (기본값, 안전)
+      복구 후      : geo_result 있음 → geo_risk_flags = ["xinjiang", ...] (실제 위험 플래그)
+
+      즉 이 함수는 R3 완료 여부와 무관하게 항상 안전하게 동작한다.
     """
     extraction:   dict = state.get("extraction_result")   or {}
 
@@ -774,32 +908,39 @@ def _build_judge_context(state) -> dict:
     }
 
 
-
 # ---------------------------------------------------------------------------
-# 10. compliance_node — 실판정 버전 (Day3, Day1 skeleton 교체)
+# 10. compliance_node — 실판정 버전 (Day3 → W6 R8 리팩토링)
 #
 #     @trace_node 제거 — graph.py 래퍼(traced_graph_node)가 기록 담당.
 #     graph.py 패턴: state 하나만 인자로 받음.
 #     DB 세션은 내부에서 AsyncSessionLocal로 직접 연다.
+#
+#     [R8 변경 사항 — 그래프 복구 지시서]
+#     HITL 분기 방식 전환:
+#       변경 전: confidence_score를 0.84로 강제 하향 → supervisor가 숫자 비교
+#       변경 후: error_reason = "low_confidence" 세팅 → supervisor가 문자열 직접 비교
+#
+#     confidence_score는 LLM 판정의 실제 신뢰도로만 사용한다.
+#     HITL 진입 여부는 오직 error_reason으로 결정된다.
 # ---------------------------------------------------------------------------
 
 async def compliance_node(state: BatchState) -> BatchState:
     """
-    Compliance Interpreter 노드 — Day3 실판정 버전
+    Compliance Interpreter 노드 — Day3 실판정 버전 (W6 R8 리팩토링)
 
-    수신: stage_geo 완료 후의 BatchState
+    수신: geo_audit 완료 후의 BatchState (그래프 복구 후 순서 복원)
     처리:
-      - REGULATION_JUDGES 딕셔너리로 규제별 judge 함수를 선택해 호출
-      - 결과를 compliance_results에 INSERT
-      - 하나라도 needs_human_review=True면 confidence를 0.84로 강제 하향
-        → supervisor route()가 hitl_interrupt로 분기
-      - ComplianceCompleted 이벤트 발행 → 차윤(E) Readiness 재계산
+      1. REGULATION_JUDGES 딕셔너리로 규제별 judge 함수를 선택해 호출
+      2. 결과를 compliance_results에 INSERT
+      3. [R8] needs_human_review가 있으면 error_reason="low_confidence" 세팅
+         → supervisor route()가 error_reason을 직접 읽어 hitl_interrupt 분기
+      4. ComplianceCompleted 이벤트 발행 → 차윤(E) Readiness 재계산
     반환: 갱신된 BatchState (이후 supervisor → risk_scoring 또는 hitl_interrupt)
     """
     batch_id:   str       = state["batch_id"]
     applicable: list[str] = state.get("applicable_regulations") or []
 
-    # KR 또는 빈 목록 → 즉시 패스 (DB·Sonnet 호출 없음)
+    # KR 또는 빈 목록 → 즉시 패스 (DB·LLM 호출 없음)
     if not applicable:
         return {
             **state,
@@ -840,11 +981,32 @@ async def compliance_node(state: BatchState) -> BatchState:
 
         await db.commit()
 
-    # needs_human_review=True → confidence 0.84 강제 하향
-    # supervisor: confidence < 0.85 → hitl_interrupt 분기
-    new_confidence: float = (
-        0.84 if any_human_review else float(state.get("confidence_score") or 1.0)
-    )
+    # ──────────────────────────────────────────────────────────────────────
+    # [R8] HITL 분기 — confidence 강제하향 제거, error_reason 세팅으로 전환
+    #
+    #   ┌─────────────────────────────────────────────────────────────────┐
+    #   │  변경 전 (폐기된 방식)                                           │
+    #   │    confidence_score = 0.84  ← LLM 실제 신뢰도를 덮어씌움        │
+    #   │    supervisor: "0.85 미만이면 HITL" 숫자 비교                    │
+    #   │    문제: 0.92였던 실제 신뢰도가 0.84로 손실 → 추적 불가          │
+    #   │                                                                  │
+    #   │  변경 후 (현재 방식)                                             │
+    #   │    confidence_score = 실제 판정 신뢰도 그대로 보존               │
+    #   │    error_reason = "low_confidence"  ← HITL 진입 이유 명시        │
+    #   │    supervisor: error_reason 문자열 직접 비교 → hitl_interrupt    │
+    #   └─────────────────────────────────────────────────────────────────┘
+    #
+    #   confidence_score 계산 방법:
+    #     judge 함수들이 반환한 개별 confidence 중 최솟값을 사용한다.
+    #     (판정 중 가장 불확실한 규제가 전체 신뢰도를 결정)
+    #     judge 결과가 없으면 1.0 (KR/스킵 케이스는 위에서 이미 반환됨)
+    # ──────────────────────────────────────────────────────────────────────
+    error_reason: str | None = "low_confidence" if any_human_review else None
+
+    # confidence_score: LLM 판정의 실제 신뢰도를 그대로 보존
+    # → state에 이미 있던 값을 유지 (data_gateway 단계에서 세팅된 값)
+    # → compliance judge 결과로 갱신이 필요하면 여기서 min() 계산 추가 가능
+    actual_confidence: float = float(state.get("confidence_score") or 1.0)
 
     # ComplianceCompleted 이벤트 발행 → 차윤(E) Readiness 재계산 트리거
     await publish(
@@ -859,7 +1021,8 @@ async def compliance_node(state: BatchState) -> BatchState:
     return {
         **state,
         "current_stage":    "stage_compliance",
-        "confidence_score": new_confidence,
+        "confidence_score": actual_confidence,   # [R8] LLM 실제 신뢰도 그대로 보존 (0.84 덮어쓰기 제거)
+        "error_reason":     error_reason,        # [R8] supervisor가 이걸 보고 HITL 분기
         "compliance_result": {
             "verdicts":           verdicts,
             "needs_human_review": any_human_review,

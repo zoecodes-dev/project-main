@@ -5,7 +5,14 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.infrastructure.auth import CurrentUser, get_current_user
 from backend.infrastructure.database import get_db
+from backend.infrastructure.acl import (
+    _EXEMPT_ROLES,
+    get_supplier_id_for_user,
+    get_accessible_supplier_ids,
+    require_supplier_self_or_connected,
+)
 from backend.domains.submission.models import (
     SubmissionStatus,
     DataRequestCreateRequest,
@@ -39,14 +46,31 @@ async def list_data_requests_endpoint(
     status: Optional[SubmissionStatus] = Query(None, description="제출 상태 필터"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=100),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     [API] GET /data-requests
     데이터 제출 요청 목록을 조건부로 필터링하고 페이징하여 조회합니다.
-    - UI에서 협력사별(supplier_id) 또는 상태별(status)로 목록을 조회할 수 있도록 Query 파라미터를 제공합니다.
-    - 인프라 계층(get_db)으로부터 데이터베이스 비동기 세션을 의존성 주입(Depends) 받습니다.
+
+    [ACL] 협력사 역할은 자기 supplier_id로 자동 제한된다.
+      - supplier_id 미제공 시: 자기 데이터만 조회.
+      - supplier_id 제공 시: 접근 가능한 협력사인지 검증 후 403 또는 통과.
+    원청/관리자/감사자는 필터 그대로 통과.
     """
+    if current_user.role not in _EXEMPT_ROLES:
+        my_supplier_id = await get_supplier_id_for_user(current_user.user_id, db)
+        if my_supplier_id is not None:
+            if supplier_id is None:
+                supplier_id = my_supplier_id
+            else:
+                accessible = await get_accessible_supplier_ids(my_supplier_id, db)
+                if supplier_id not in accessible:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="해당 협력사 데이터에 접근 권한이 없습니다.",
+                    )
+
     return await get_submissions_list(
         db=db, supplier_id=supplier_id, status=status.value if status else None, skip=skip, limit=limit
     )
@@ -227,10 +251,17 @@ async def get_data_request_completeness_endpoint(request_id: uuid.UUID, db: Asyn
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="해당 요청에 대한 완성도 정보가 존재하지 않습니다.")
     return comp_status
 
-@router.get("/suppliers/{supplier_id}/submission-timeline", response_model=List[TimelineHistoryResponse], include_in_schema=False)
+@router.get(
+    "/suppliers/{supplier_id}/submission-timeline",
+    response_model=List[TimelineHistoryResponse],
+    include_in_schema=False,
+    dependencies=[Depends(require_supplier_self_or_connected("supplier_id"))],
+)
 async def get_supplier_timeline_endpoint(supplier_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """
     [API] GET /data-requests/suppliers/{supplier_id}/submission-timeline
     (E-7 규격 대응) 특정 협력사의 데이터 발송~승인/보완/재제출 시간순 타임라인을 조회합니다.
+
+    [ACL] 협력사는 자기 자신 또는 직접 연결된 노드의 타임라인만 조회 가능.
     """
     return await get_supplier_submission_timeline(db, supplier_id)

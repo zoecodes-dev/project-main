@@ -3,6 +3,9 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# 판정 결과 조회 시 compliance 상세 반환 최대 건수
+_COMPLIANCE_DETAIL_LIMIT = 20
+
 # API 단축키 → DB 상태값 매핑
 _STATUS_MAP = {
     "processing": "batch_processing",
@@ -89,6 +92,161 @@ async def list_batches_by_status(
         "status":    db_status,
         "total":     len(rows),
         "by_stage":  by_stage,
+    }
+
+
+async def get_batch_detail(
+    db: AsyncSession,
+    batch_id: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    BE-3: 배치 상세 조회 — compliance·geo·verification·risk·readiness 5종 판정 결과 포함.
+
+    R7 계약:
+      - compliance_result : compliance_results 테이블 집계 (규제코드→verdict 맵 + 상세)
+      - geo_result        : geo_audit_results 테이블 (D R5 저장)
+      - verification_result: verification_results 테이블 (E R4 저장; 미저장 시 null)
+      - risk_result       : supplier_risk_profiles에서 배치 공급망 최고 위험도 조회
+      - dpp_result        : dpp_records 테이블
+    """
+    batch_row = (await db.execute(
+        text("""
+            SELECT
+                b.batch_id, b.product_id, b.bom_version_id, b.tenant_id,
+                b.destination, b.current_stage, b.status,
+                b.confidence_score, b.readiness_score,
+                b.received_at, b.source_system, b.external_id
+            FROM batches b
+            WHERE b.batch_id = :batch_id
+        """),
+        {"batch_id": batch_id},
+    )).mappings().fetchone()
+
+    if batch_row is None:
+        return None
+
+    # ── compliance 판정 결과 ─────────────────────────────────────────────────
+    compliance_rows = (await db.execute(
+        text("""
+            SELECT
+                r.regulation_code,
+                cr.verdict,
+                cr.needs_human_review,
+                cr.confidence_score,
+                cr.reasoning_text
+            FROM compliance_results cr
+            JOIN regulations r ON r.regulation_id = cr.regulation_id
+            WHERE cr.batch_id = :batch_id
+            ORDER BY cr.created_at DESC
+            LIMIT :lim
+        """),
+        {"batch_id": batch_id, "lim": _COMPLIANCE_DETAIL_LIMIT},
+    )).mappings().fetchall()
+
+    # ── geo 판정 결과 ────────────────────────────────────────────────────────
+    geo_row = (await db.execute(
+        text("""
+            SELECT risk_detected, risk_flags, detected_risks
+            FROM geo_audit_results
+            WHERE batch_id = :batch_id
+        """),
+        {"batch_id": batch_id},
+    )).mappings().fetchone()
+
+    # ── verification 판정 결과 (E R4 적재 전까지 null) ───────────────────────
+    verif_row = (await db.execute(
+        text("""
+            SELECT feoc_passed, violations
+            FROM verification_results
+            WHERE batch_id = :batch_id
+        """),
+        {"batch_id": batch_id},
+    )).mappings().fetchone()
+
+    # ── risk 점수 (공급망 공급사 중 최고 위험도) ─────────────────────────────
+    risk_row = (await db.execute(
+        text("""
+            SELECT
+                MAX(srp.overall_risk_score)  AS max_risk_score,
+                BOOL_OR(srp.is_high_risk_flag) AS has_high_risk
+            FROM batches b
+            JOIN supply_chain_map scm ON scm.bom_version_id = b.bom_version_id
+            JOIN supplier_risk_profiles srp
+                ON srp.supplier_id = scm.child_supplier_id
+            WHERE b.batch_id = :batch_id
+        """),
+        {"batch_id": batch_id},
+    )).mappings().fetchone()
+
+    # ── DPP 결과 ────────────────────────────────────────────────────────────
+    dpp_row = (await db.execute(
+        text("""
+            SELECT dpp_id, status, issued_at
+            FROM dpp_records
+            WHERE batch_id = :batch_id
+            LIMIT 1
+        """),
+        {"batch_id": batch_id},
+    )).mappings().fetchone()
+
+    # ── 조립 ────────────────────────────────────────────────────────────────
+    return {
+        "batch_id":        str(batch_row["batch_id"]),
+        "product_id":      str(batch_row["product_id"]) if batch_row["product_id"] else None,
+        "destination":     batch_row["destination"],
+        "current_stage":   batch_row["current_stage"],
+        "status":          batch_row["status"],
+        "confidence_score": (
+            float(batch_row["confidence_score"])
+            if batch_row["confidence_score"] is not None else None
+        ),
+        "readiness_score": (
+            float(batch_row["readiness_score"])
+            if batch_row["readiness_score"] is not None else None
+        ),
+        "received_at": (
+            batch_row["received_at"].isoformat() if batch_row["received_at"] else None
+        ),
+        "compliance_result": {
+            "verdicts": {r["regulation_code"]: r["verdict"] for r in compliance_rows},
+            "needs_human_review": any(r["needs_human_review"] for r in compliance_rows),
+            "details": [
+                {
+                    "regulation_code":    r["regulation_code"],
+                    "verdict":            r["verdict"],
+                    "needs_human_review": r["needs_human_review"],
+                    "confidence_score":   (
+                        float(r["confidence_score"])
+                        if r["confidence_score"] is not None else None
+                    ),
+                    "reasoning_text": r["reasoning_text"] or "",
+                }
+                for r in compliance_rows
+            ],
+        } if compliance_rows else None,
+        "geo_result": {
+            "risk_detected": bool(geo_row["risk_detected"]),
+            "risk_flags":    geo_row["risk_flags"] or [],
+            "detected_risks": geo_row["detected_risks"] or [],
+        } if geo_row else None,
+        "verification_result": {
+            "feoc_passed": bool(verif_row["feoc_passed"]),
+            "violations":  verif_row["violations"] or [],
+        } if verif_row else None,
+        "risk_result": {
+            "max_risk_score": (
+                int(risk_row["max_risk_score"])
+                if risk_row and risk_row["max_risk_score"] is not None else None
+            ),
+            "has_high_risk": bool(risk_row["has_high_risk"]) if risk_row else False,
+        },
+        "dpp_result": {
+            "dpp_id":    str(dpp_row["dpp_id"]),
+            "status":    dpp_row["status"],
+            "issued_at": (
+                dpp_row["issued_at"].isoformat() if dpp_row["issued_at"] else None
+            ),
+        } if dpp_row else None,
     }
 
 
