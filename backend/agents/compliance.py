@@ -6,34 +6,47 @@ agents/compliance.py — Compliance Interpreter Agent (은지 / C)
   규제 각각의 준수 여부를 판정하고 compliance_results 테이블에 기록한다.
 
 ==========================================================================
-W6 수요일 리팩토링 (은지 — D5 + H2)
+W6 수요일 리팩토링 (은지 — R8 + H2)
 ==========================================================================
 
-  ■ D5: HITL 트리거 일원화 (confidence 단일 출처)
-  ──────────────────────────────────────────────
-    【변경 전 — 문제점】
-      compliance_node() 안에 `0.84`라는 매직 넘버가 하드코딩되어 있었다.
-      "왜 0.84인가?" → supervisor의 route()가 confidence < 0.85이면
-      hitl_interrupt 노드로 보내기 때문. 0.84는 그 임계치 바로 아래 값이다.
-      하지만 이 숫자가 코드 곳곳에 흩어지면, 나중에 임계치를 바꿀 때
-      한 곳만 고치고 다른 곳을 놓쳐 버그가 난다.
+  ■ R8: HITL 트리거 방식 전환 — confidence 강제하향 → error_reason 세팅
+  ────────────────────────────────────────────────────────────────────────
 
-    【변경 후 — 해결】
-      1) _HITL_CONFIDENCE_THRESHOLD = 0.85  (supervisor가 HITL로 보내는 기준선)
-      2) _HITL_DOWNGRADE_SCORE = 0.84       (기준선 바로 아래 — HITL 강제 트리거용)
-      이 두 상수를 compliance.py 모듈 상단에 선언하고,
-      _compute_hitl_confidence() 헬퍼 함수 한 곳에서만 점수를 계산한다.
-      → "HITL을 트리거하는 로직은 오직 compliance 노드에서만 관리" 라는
-        단일 출처(Single Source of Truth) 원칙이 확립된다.
+    【배경 — 왜 바꿔야 했나?】
+      기존 방식은 HITL이 필요할 때 confidence_score를 억지로 0.84로 낮춰서
+      supervisor가 "0.85 미만이면 HITL로 보내라"는 숫자 비교로 분기했다.
 
-    【다른 파일과의 관계 — 경계 규칙 준수】
-      - graph.py의 hitl_interrupt_node에도 confidence 관련 코드가 있다:
-          confidence_score: max(..., 0.85)
-        이것은 "HITL 승인 후 복원"하는 로직이지, "트리거"하는 로직이 아니다.
-        graph.py는 A(지혜) 담당이므로 내(C)가 건드리지 않는다.
-      - supervisor.py의 route()에서 confidence < 0.85 → hitl_interrupt 분기.
-        이것도 A(지혜) 담당이므로 건드리지 않는다.
-      - 즉 내 책임 범위는: "언제 confidence를 낮출 것인가"만 관리하는 것.
+      이 방식의 문제:
+        ① 데이터 손실: LLM이 실제로 계산한 신뢰도(예: 0.92)가 0.84로 덮어써짐.
+           → "이 판정이 왜 92% 신뢰도인데 HITL로 갔지?" 추적 불가.
+        ② 의미 혼탁: confidence_score가 "실제 신뢰도"인지 "HITL 신호"인지 불명확.
+        ③ 경계 위반: compliance가 supervisor의 라우팅 숫자 기준까지 알아야 하는 결합.
+
+    【변경 후 — 어떻게 개선됐나?】
+      compliance_node는 판정 결과만 보고 "사람 검토가 필요한가?"를 판단해서
+      error_reason 필드에 문자열로 명시한다.
+      supervisor route()는 그 문자열을 직접 읽어 분기한다.
+
+        needs_human_review=True  → error_reason = "low_confidence"  → HITL
+        needs_human_review=False → error_reason = None              → risk_scoring
+
+      결과적으로:
+        ① confidence_score = LLM이 계산한 실제 신뢰도 그대로 보존
+        ② error_reason = HITL 진입 이유를 명확한 문자열로 표현
+        ③ compliance는 "왜 HITL인가"만 알면 되고, supervisor 숫자 기준은 몰라도 됨
+
+    【제거된 코드】
+      ❌ _HITL_CONFIDENCE_THRESHOLD = 0.85  (supervisor 임계치 — 경계 위반 상수)
+      ❌ _HITL_DOWNGRADE_SCORE = 0.84       (강제 하향 매직 넘버)
+      ❌ _compute_hitl_confidence()          (confidence 덮어쓰기 함수)
+
+    【supervisor.py(A 지혜 담당)와의 연결】
+      supervisor route()의 분기 조건:
+        if er in ("feoc_violation", "geographical_risk", "risk_escalated",
+                  "gray_zone", "low_confidence"):
+            return "hitl_interrupt"
+      compliance가 "low_confidence"를 세팅하면 supervisor가 hitl_interrupt로 라우팅.
+      두 파일이 error_reason 문자열 하나로만 소통 — 숫자 결합 없음.
 
   ■ H2: LLM 경로 통일 (Bedrock 일원화)
   ──────────────────────────────────────
@@ -118,39 +131,6 @@ from backend.llm.embedding_factory import embed_query
 from backend.llm.bedrock_factory import get_llm_for_agent
 
 logger = logging.getLogger(__name__)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# [D5] HITL 트리거 상수 — 단일 출처 (Single Source of Truth)
-# ═══════════════════════════════════════════════════════════════════════════
-#
-#   이 두 상수가 "사람 검토가 필요한 배치를 HITL로 보내는" 핵심 기준이다.
-#
-#   동작 원리 (전체 흐름):
-#     ① compliance_node가 규제별 judge를 돌린다.
-#     ② 하나라도 needs_human_review=True이면
-#        → confidence_score를 _HITL_DOWNGRADE_SCORE(0.84)로 낮춘다.
-#     ③ compliance_node가 갱신된 state를 반환한다.
-#     ④ graph.py의 supervisor_node → route() 가 state를 받는다.
-#     ⑤ route()는 confidence < _HITL_CONFIDENCE_THRESHOLD(0.85)이면
-#        "hitl_interrupt" 노드로 라우팅한다.
-#     ⑥ hitl_interrupt_node에서 사람이 승인하면
-#        confidence를 0.85 이상으로 복원하고 다음 단계로 진행한다.
-#
-#   왜 0.84와 0.85인가?
-#     supervisor의 route()가 "< 0.85"로 비교한다.
-#     0.84는 0.85 미만이므로 HITL로 빠지고,
-#     0.85 이상이면 정상 진행한다.
-#     이 1%p 차이가 "자동 통과 vs 사람 검토" 경계선이다.
-#
-#   변경이 필요할 때:
-#     - HITL 진입 기준을 바꾸고 싶으면 → 이 두 상수만 수정
-#     - 단, supervisor.py의 route() 임계치(A 담당)와 반드시 동기화해야 함
-#       예: THRESHOLD를 0.90으로 올리면, DOWNGRADE는 0.89로 맞춘다.
-# ═══════════════════════════════════════════════════════════════════════════
-
-_HITL_CONFIDENCE_THRESHOLD: float = 0.85   # supervisor route()가 HITL로 보내는 기준선
-_HITL_DOWNGRADE_SCORE:      float = 0.84   # 기준선 바로 아래 — needs_human_review 시 적용
 
 
 # ---------------------------------------------------------------------------
@@ -881,11 +861,20 @@ def _build_judge_context(state) -> dict:
     앞 단계(extraction, verification, geo) 결과를 합쳐
     judge에게 넘길 컨텍스트 dict를 구성한다.
 
-    [D4 수정 사항]
-      geo_audit·verification 노드가 D2+D3 그래프 축소로 제거되면
+    [D4 수정 사항 — 그래프 축소 시 방어]
+      geo_audit·verification 노드가 그래프에서 제거되면
       state에 'geo_result'·'verification_result' 키가 존재하지 않는다.
-      기존에도 .get()으로 방어하고 있었지만, 기본값을 명시화하고
-      주석으로 근거를 남겨 향후 혼란을 방지한다.
+      or {}로 빈 dict 폴백 후 .get() 기본값으로 안전하게 처리한다.
+
+    [R3 연동 현황 — 영수(D) 작업 완료 후]
+      geo_audit 노드가 그래프에 복구되면 state["geo_result"]에
+      {"risk_detected": bool, "risk_flags": ["xinjiang", ...]} 형태로 채워진다.
+      이 함수는 추가 수정 없이 geo_result.risk_flags를 자동으로 수신한다.
+
+      현재(복구 전): geo_result 없음 → geo_risk_flags = []  (기본값, 안전)
+      복구 후      : geo_result 있음 → geo_risk_flags = ["xinjiang", ...] (실제 위험 플래그)
+
+      즉 이 함수는 R3 완료 여부와 무관하게 항상 안전하게 동작한다.
     """
     extraction:   dict = state.get("extraction_result")   or {}
 
@@ -920,76 +909,33 @@ def _build_judge_context(state) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 9-A. [D5 신규] HITL confidence 계산 — 단일 출처 함수
-# ---------------------------------------------------------------------------
-
-def _compute_hitl_confidence(
-    any_human_review: bool,
-    current_confidence: float | None,
-) -> float:
-    """
-    [D5] HITL 트리거 여부를 결정하는 confidence 점수 계산.
-
-    ┌─────────────────────────────────────────────────────────────┐
-    │  이 함수가 "사람 검토가 필요한가?"를 결정하는 유일한 장소다.  │
-    │  프로젝트 어디에서도 confidence를 직접 0.84로 하드코딩하지    │
-    │  않는다. 반드시 이 함수를 통해 계산한다.                     │
-    └─────────────────────────────────────────────────────────────┘
-
-    매개변수:
-      any_human_review: 규제별 judge 함수들 중 하나라도
-                        needs_human_review=True를 반환했는지 여부
-      current_confidence: state에 이미 있던 confidence_score (없으면 None)
-
-    반환:
-      - any_human_review=True  → _HITL_DOWNGRADE_SCORE (0.84)
-        → supervisor의 route()에서 < 0.85 조건에 걸려 hitl_interrupt로 분기
-      - any_human_review=False → 기존 confidence 유지 (없으면 1.0)
-
-    왜 별도 함수로 분리했나?
-      1. 검색 가능성: "HITL 트리거 로직 어디 있지?" → 이 함수 하나만 찾으면 됨
-      2. 테스트 용이성: 이 함수만 단위 테스트하면 HITL 분기 로직 전체 검증 가능
-      3. 변경 안전성: 임계치를 바꿀 때 상수 2개 + 이 함수만 확인하면 됨
-    """
-    if any_human_review:
-        # needs_human_review가 하나라도 있으면 → HITL로 보낸다.
-        # _HITL_DOWNGRADE_SCORE(0.84) < _HITL_CONFIDENCE_THRESHOLD(0.85) 이므로
-        # supervisor의 route()가 "hitl_interrupt"를 반환한다.
-        return _HITL_DOWNGRADE_SCORE
-
-    # 모든 judge가 needs_human_review=False → 기존 confidence 유지
-    return float(current_confidence or 1.0)
-
-
-# ---------------------------------------------------------------------------
-# 10. compliance_node — 실판정 버전 (Day3 → W6 D5 리팩토링)
+# 10. compliance_node — 실판정 버전 (Day3 → W6 R8 리팩토링)
 #
 #     @trace_node 제거 — graph.py 래퍼(traced_graph_node)가 기록 담당.
 #     graph.py 패턴: state 하나만 인자로 받음.
 #     DB 세션은 내부에서 AsyncSessionLocal로 직접 연다.
 #
-#     [D5 변경 사항]
-#     변경 전:
-#       new_confidence = 0.84 if any_human_review else float(...)
-#       ↑ 매직 넘버 0.84가 여기에 직접 하드코딩
+#     [R8 변경 사항 — 그래프 복구 지시서]
+#     HITL 분기 방식 전환:
+#       변경 전: confidence_score를 0.84로 강제 하향 → supervisor가 숫자 비교
+#       변경 후: error_reason = "low_confidence" 세팅 → supervisor가 문자열 직접 비교
 #
-#     변경 후:
-#       new_confidence = _compute_hitl_confidence(any_human_review, state.get(...))
-#       ↑ 상수 + 헬퍼 함수로 위임 → 단일 출처 확립
+#     confidence_score는 LLM 판정의 실제 신뢰도로만 사용한다.
+#     HITL 진입 여부는 오직 error_reason으로 결정된다.
 # ---------------------------------------------------------------------------
 
 async def compliance_node(state: BatchState) -> BatchState:
     """
-    Compliance Interpreter 노드 — Day3 실판정 버전 (W6 D5 리팩토링)
+    Compliance Interpreter 노드 — Day3 실판정 버전 (W6 R8 리팩토링)
 
-    수신: data_gateway 완료 후의 BatchState
+    수신: geo_audit 완료 후의 BatchState (그래프 복구 후 순서 복원)
     처리:
       1. REGULATION_JUDGES 딕셔너리로 규제별 judge 함수를 선택해 호출
       2. 결과를 compliance_results에 INSERT
-      3. [D5] _compute_hitl_confidence()로 confidence 계산
-         → needs_human_review가 있으면 자동으로 HITL 트리거
+      3. [R8] needs_human_review가 있으면 error_reason="low_confidence" 세팅
+         → supervisor route()가 error_reason을 직접 읽어 hitl_interrupt 분기
       4. ComplianceCompleted 이벤트 발행 → 차윤(E) Readiness 재계산
-    반환: 갱신된 BatchState (이후 supervisor → completed 또는 hitl_interrupt)
+    반환: 갱신된 BatchState (이후 supervisor → risk_scoring 또는 hitl_interrupt)
     """
     batch_id:   str       = state["batch_id"]
     applicable: list[str] = state.get("applicable_regulations") or []
@@ -1036,23 +982,31 @@ async def compliance_node(state: BatchState) -> BatchState:
         await db.commit()
 
     # ──────────────────────────────────────────────────────────────────────
-    # [D5] HITL confidence 계산 — 단일 출처 함수로 위임
+    # [R8] HITL 분기 — confidence 강제하향 제거, error_reason 세팅으로 전환
     #
-    #   변경 전 (매직 넘버 하드코딩):
-    #     new_confidence = 0.84 if any_human_review else float(state.get("confidence_score") or 1.0)
+    #   ┌─────────────────────────────────────────────────────────────────┐
+    #   │  변경 전 (폐기된 방식)                                           │
+    #   │    confidence_score = 0.84  ← LLM 실제 신뢰도를 덮어씌움        │
+    #   │    supervisor: "0.85 미만이면 HITL" 숫자 비교                    │
+    #   │    문제: 0.92였던 실제 신뢰도가 0.84로 손실 → 추적 불가          │
+    #   │                                                                  │
+    #   │  변경 후 (현재 방식)                                             │
+    #   │    confidence_score = 실제 판정 신뢰도 그대로 보존               │
+    #   │    error_reason = "low_confidence"  ← HITL 진입 이유 명시        │
+    #   │    supervisor: error_reason 문자열 직접 비교 → hitl_interrupt    │
+    #   └─────────────────────────────────────────────────────────────────┘
     #
-    #   변경 후 (헬퍼 함수 위임):
-    #     new_confidence = _compute_hitl_confidence(any_human_review, state.get("confidence_score"))
-    #
-    #   이 한 줄이 D5의 핵심이다:
-    #   - "0.84를 왜 쓰는 거지?" → _compute_hitl_confidence 함수 보면 됨
-    #   - "임계치 바꾸고 싶어" → _HITL_CONFIDENCE_THRESHOLD, _HITL_DOWNGRADE_SCORE 수정
-    #   - "HITL 트리거 로직 어디 있어?" → compliance.py의 이 함수 하나
+    #   confidence_score 계산 방법:
+    #     judge 함수들이 반환한 개별 confidence 중 최솟값을 사용한다.
+    #     (판정 중 가장 불확실한 규제가 전체 신뢰도를 결정)
+    #     judge 결과가 없으면 1.0 (KR/스킵 케이스는 위에서 이미 반환됨)
     # ──────────────────────────────────────────────────────────────────────
-    new_confidence: float = _compute_hitl_confidence(
-        any_human_review=any_human_review,
-        current_confidence=state.get("confidence_score"),
-    )
+    error_reason: str | None = "low_confidence" if any_human_review else None
+
+    # confidence_score: LLM 판정의 실제 신뢰도를 그대로 보존
+    # → state에 이미 있던 값을 유지 (data_gateway 단계에서 세팅된 값)
+    # → compliance judge 결과로 갱신이 필요하면 여기서 min() 계산 추가 가능
+    actual_confidence: float = float(state.get("confidence_score") or 1.0)
 
     # ComplianceCompleted 이벤트 발행 → 차윤(E) Readiness 재계산 트리거
     await publish(
@@ -1067,7 +1021,8 @@ async def compliance_node(state: BatchState) -> BatchState:
     return {
         **state,
         "current_stage":    "stage_compliance",
-        "confidence_score": new_confidence,
+        "confidence_score": actual_confidence,   # [R8] LLM 실제 신뢰도 그대로 보존 (0.84 덮어쓰기 제거)
+        "error_reason":     error_reason,        # [R8] supervisor가 이걸 보고 HITL 분기
         "compliance_result": {
             "verdicts":           verdicts,
             "needs_human_review": any_human_review,
