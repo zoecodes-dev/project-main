@@ -8,8 +8,15 @@ from psycopg_pool import AsyncConnectionPool
 from langgraph.types import Command, interrupt
 from sqlalchemy import select
 
+from backend.agents.automation import (
+    run_feoc_verification,
+    run_risk_scoring,
+    run_readiness,
+    run_issuance,
+)
 from backend.agents.compliance import compliance_node
 from backend.agents.data_gateway import data_gateway_node
+from backend.agents.geo_audit import geo_audit_node
 from backend.agents.state import BatchState
 from backend.agents.supervisor import route
 from backend.domains.audit import repository
@@ -48,6 +55,56 @@ def traced_graph_node(node_name: str, node_func, node_type: str = "agent"):
 
     return run
 
+
+async def verification_node(state: BatchState, db) -> BatchState:
+    batch_id = UUID(state["batch_id"])
+    extraction = state.get("extraction_result") or {}
+    supplier_ids = [UUID(s) for s in (extraction.get("supplier_ids") or [])]
+    if not supplier_ids:
+        raise ValueError("extraction_result에 supplier_ids가 누락되었습니다.")
+    result = await run_feoc_verification(db=db, batch_id=batch_id, supplier_ids=supplier_ids)
+    error_reason = state.get("error_reason")
+    hitl_required = bool(state.get("hitl_required"))
+    if not result.get("feoc_passed"):
+        error_reason = "feoc_violation"
+        hitl_required = True
+    return {
+        **state,
+        "verification_result": result,
+        "error_reason": error_reason,
+        "hitl_required": hitl_required,
+        "current_stage": "stage_verification",
+    }
+
+
+async def risk_scoring_node(state: BatchState, db) -> BatchState:
+    batch_id = UUID(state["batch_id"])
+    extraction = state.get("extraction_result") or {}
+    supplier_ids = [UUID(s) for s in (extraction.get("supplier_ids") or [])]
+    if not supplier_ids:
+        raise ValueError("extraction_result에 supplier_ids가 누락되었습니다.")
+    updates = await run_risk_scoring(
+        db=db,
+        batch_id=batch_id,
+        supplier_ids=supplier_ids,
+        compliance_result=state.get("compliance_result"),
+        geo_result=state.get("geo_result"),
+        current_hitl_required=bool(state.get("hitl_required")),
+    )
+    return {**state, **updates}
+
+
+async def readiness_node(state: BatchState, db) -> BatchState:
+    product_id = UUID(state["product_id"])
+    updates = await run_readiness(db=db, product_id=product_id)
+    return {**state, **updates}
+
+
+async def issuance_node(state: BatchState, db) -> BatchState:
+    batch_id = UUID(state["batch_id"])
+    product_id = UUID(state["product_id"])
+    updates = await run_issuance(db=db, batch_id=batch_id, product_id=product_id)
+    return {**state, **updates}
 
 
 def _batch_id(state: BatchState) -> UUID:
@@ -113,7 +170,12 @@ async def hitl_interrupt_node(state: BatchState) -> BatchState:
 builder = StateGraph(BatchState)
 builder.add_node("supervisor", supervisor_node)
 builder.add_node("data_gateway", traced_graph_node("data_gateway", data_gateway_node))
+builder.add_node("verification", traced_graph_node("verification", verification_node))
+builder.add_node("geo_audit", traced_graph_node("geo_audit", geo_audit_node))
 builder.add_node("compliance", traced_graph_node("compliance", compliance_node))
+builder.add_node("risk_scoring", traced_graph_node("risk_scoring", risk_scoring_node))
+builder.add_node("readiness", traced_graph_node("readiness", readiness_node))
+builder.add_node("issuance", traced_graph_node("issuance", issuance_node))
 builder.add_node("hitl_interrupt", traced_graph_node("hitl_interrupt", hitl_interrupt_node, "human"))
 builder.add_node("completed", supervisor_node)
 
@@ -123,13 +185,18 @@ builder.add_conditional_edges(
     route_batch,
     {
         "data_gateway": "data_gateway",
+        "verification": "verification",
+        "geo_audit": "geo_audit",
         "compliance": "compliance",
+        "risk_scoring": "risk_scoring",
+        "readiness": "readiness",
+        "issuance": "issuance",
         "hitl_interrupt": "hitl_interrupt",
         "completed": "completed",
     },
 )
 
-for node_name in ("data_gateway", "compliance"):
+for node_name in ("data_gateway", "verification", "geo_audit", "compliance", "risk_scoring", "readiness", "issuance"):
     builder.add_edge(node_name, "supervisor")
 
 builder.add_edge("hitl_interrupt", "supervisor")
