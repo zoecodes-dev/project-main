@@ -60,6 +60,7 @@ class BatchState(TypedDict, total=False):
     error_reason: Optional[str]
 
     # ----- 각 노드 결과 누적 (각 노드가 자기 키에만 기록) -----
+    confirmed_fields: Optional[dict]      # batch_trigger → data_gateway: 협력사 AI 파싱 확정값
     extraction_result: Optional[dict]    # data_gateway (B, stage_extraction)
     verification_result: Optional[dict]  # verification (E, stage_verification)
     geo_result: Optional[dict]           # geo_audit (D, stage_geo)

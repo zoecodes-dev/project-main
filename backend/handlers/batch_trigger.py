@@ -61,5 +61,6 @@ async def on_submission_approved(payload: dict) -> None:
         )
         return
 
+    confirmed_fields: dict = payload.get("confirmed_fields") or {}
     logger.info("[batch_trigger] 그래프 시작 batch=%s product=%s dest=%s", batch_id, product_id, destination)
-    await start_graph(batch_id, product_id, destination)
+    await start_graph(batch_id, product_id, destination, confirmed_fields=confirmed_fields)
