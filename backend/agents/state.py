@@ -59,6 +59,12 @@ class BatchState(TypedDict, total=False):
     #   data_gateway 노드가 저신뢰 시 "low_confidence" 세팅 → Supervisor가 supplier_reverify 라우팅
     error_reason: Optional[str]
 
+    # 협력사 확정값 — SubmissionCompleted(=협력사 확정 시점) payload의 confirmed_fields를
+    #   배치 트리거가 그래프 초기 state에 주입한다(미영속 값이라 state로 운반). 키 공간은
+    #   parsed_fields와 동일(협력사가 'AI 파싱결과를 확정'한 값). document_integrity 검증
+    #   (협력사 확정값 vs 증빙 추출값 불일치 → reject)의 비교 한쪽 축. 폼 미입력이면 None/{}.
+    confirmed_fields: Optional[dict]     # 주입: batch_trigger(A) / 소비: get_integrity_pairs(B)
+
     # ----- 각 노드 결과 누적 (각 노드가 자기 키에만 기록) -----
     extraction_result: Optional[dict]    # data_gateway (B, stage_extraction)
     verification_result: Optional[dict]  # verification (E, stage_verification)
