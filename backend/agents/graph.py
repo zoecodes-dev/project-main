@@ -220,7 +220,12 @@ async def create_batch(db, product_id: str, destination: str) -> str:
     return str(batch.batch_id)
 
 
-async def start_graph(batch_id: str, product_id: str, destination: str) -> None:
+async def start_graph(
+    batch_id: str,
+    product_id: str,
+    destination: str,
+    confirmed_fields: dict | None = None,
+) -> None:
     graph_app = await _ensure_graph()
     initial_state = BatchState(
         batch_id=batch_id,
@@ -228,6 +233,7 @@ async def start_graph(batch_id: str, product_id: str, destination: str) -> None:
         destination=destination,
         current_stage="stage_queued",
         batch_status="batch_processing",
+        confirmed_fields=confirmed_fields or {},
     )
     config = {"configurable": {"thread_id": batch_id}}
     await graph_app.ainvoke(initial_state, config=config)
