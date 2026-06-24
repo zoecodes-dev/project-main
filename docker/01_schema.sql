@@ -598,7 +598,7 @@ CREATE TABLE batches (
         ),
         
     confidence_score NUMERIC(5,4),
-    readiness_score  NUMERIC(5,4), -- [E R6] run_readiness 결과 저장 (차윤)
+    readiness_score  NUMERIC(5,4),
 
     -- [결정 #1 정교화] 외부 원천시스템 연동 마크 주입 (생산 배치는 MES 동기화)
     source_system   VARCHAR(100) DEFAULT 'MES',
@@ -623,6 +623,7 @@ CREATE TABLE dpp_records (
     payload          JSONB, -- Annex XIII 80개 법적 연동 규격 전체
     approved_by      UUID REFERENCES users(user_id)
 );
+
 
 
 -- ============================================================
