@@ -42,7 +42,6 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.regulation.models import Regulation
-from backend.llm.embedding_factory import embed_query
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +187,23 @@ async def search_by_embedding(
       - idx_regulations_embedding (hnsw, vector_cosine_ops) 인덱스가
         schema.sql에 정의돼 있어 대용량에도 빠르게 동작한다.
     """
+    # ──────────────────────────────────────────────────────────────
+    # [②-2 lazy import] embed_query를 함수 안에서만 import
+    #
+    #   변경 전 (모듈 레벨 import — 문제):
+    #     파일 상단에 `from backend.llm.embedding_factory import embed_query`
+    #     → regulation 도메인이 로드될 때마다 langchain_aws(Bedrock)를 끌어옴
+    #     → /supply-chain/gaps 같은 Bedrock와 무관한 엔드포인트도
+    #       langchain_aws 초기화를 시도 → AWS 없는 로컬에서 타임아웃/행
+    #
+    #   변경 후 (lazy import — 해결):
+    #     embed_query가 실제로 필요한 이 함수 안에서만 import
+    #     → get_by_destination(), get_required_fields() 등 DB 전용 함수는
+    #       langchain_aws를 전혀 건드리지 않음
+    #     → /supply-chain/gaps 정상 응답 (200)
+    # ──────────────────────────────────────────────────────────────
+    from backend.llm.embedding_factory import embed_query  # noqa: PLC0415
+
     # 1단계: 쿼리 텍스트를 벡터로 변환
     # embed_query()는 embedding_factory.py의 동기 함수 (Bedrock 호출)
     query_vector: list[float] = embed_query(query_text)
