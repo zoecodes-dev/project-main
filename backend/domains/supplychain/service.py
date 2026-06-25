@@ -382,7 +382,7 @@ class SupplyChainService:
 
     async def _publish_geo_risk(self, event: GeoRiskDetectedEvent) -> None:
         """
-        GeoRiskDetected 이벤트 발행 (후속 처리는 risk_worker가 통합 처리)
+        GeoRiskDetected 이벤트 발행 (후속 처리는 risk_scoring 노드가 인라인 처리)
         """
         payload = asdict(event)
         await publish(event.event_name, payload)
