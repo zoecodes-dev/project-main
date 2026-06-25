@@ -114,18 +114,6 @@ services:
     container_name: kira-worker-verification
     command: ["arq", "backend.workers.verification_worker.WorkerSettings"]
 
-  # risk_queue 워커 (가점식 리스크 점수 — geo 리스크 포함)
-  worker-risk:
-    build: *worker-build
-    networks:
-      - project_net
-    env_file:
-      - ./.env
-    environment: *worker-env
-    depends_on: *worker-deps
-    restart: always
-    container_name: kira-worker-risk
-    command: ["arq", "backend.workers.risk_worker.WorkerSettings"]
 
   # hitl_queue 워커
   worker-hitl:
@@ -154,30 +142,18 @@ services:
     container_name: kira-worker-pipeline
     command: ["arq", "backend.workers.pipeline_worker.WorkerSettings"]
 
-  # worker-notification:
-  #   build: *worker-build
-  #   networks:
-  #     - project_net
-  #   env_file:
-  #     - ./.env
-  #   environment: *worker-env
-  #   depends_on: *worker-deps
-  #   restart: always
-  #   container_name: kira-worker-notification
-  #   command: ["arq", "backend.workers.notification_worker.WorkerSettings"]
+  worker-notification:
+    build: *worker-build
+    networks:
+      - project_net
+    env_file:
+      - ./.env
+    environment: *worker-env
+    depends_on: *worker-deps
+    restart: always
+    container_name: kira-worker-notification
+    command: ["arq", "backend.workers.notification_worker.WorkerSettings"]
 
-  # dpp_publish_queue 워커
-  # worker-dpp:
-  #   build: *worker-build
-  #   networks:
-  #     - project_net
-  #   env_file:
-  #     - ./.env
-  #   environment: *worker-env
-  #   depends_on: *worker-deps
-  #   restart: always
-  #   container_name: kira-worker-dpp
-  #   command: ["arq", "backend.workers.dpp_publish_worker.WorkerSettings"]
 
   # Layer 0: Nginx 리버스 프록시 (정문 — gzip 압축 + app 전달)
   nginx:
