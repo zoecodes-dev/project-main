@@ -154,7 +154,7 @@ class SupplyChainRepository:
             "child_supplier_id": child_supplier_id,
             "part_id": part_id,
         })
-        await self.session.commit()
+        await self.session.flush()
         return dict(result.first()._mapping)
 
     @trace_tool("supply_chain_declare_source")
@@ -185,7 +185,7 @@ class SupplyChainRepository:
             "child_supplier_id": child_supplier_id,
             "part_id": part_id,
         })
-        await self.session.commit()
+        await self.session.flush()
         return dict(result.first()._mapping)
 
     @trace_tool("get_supplier_master_and_gps_dto")
