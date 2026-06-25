@@ -174,11 +174,12 @@ class SupplyChainService:
         if not supplier_rows:
             return {"product_id": product_id, "nodes": []}
 
-        regulations = await get_applicable_regulations(product_id)
+        db = self.repository.session
+        regulations = await get_applicable_regulations(db, product_id)
         # 규제별 필수 필드 미리 로드
         reg_fields: Dict[str, List[Dict]] = {}
         for reg in regulations:
-            reg_fields[reg["regulation_id"]] = await get_required_fields(reg["regulation_id"])
+            reg_fields[reg["regulation_id"]] = await get_required_fields(db, reg["regulation_code"])
 
         nodes = []
         for row in supplier_rows:
