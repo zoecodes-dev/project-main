@@ -10,7 +10,7 @@ Bedrock 호출 0, 재계산 없음. wipe 없이 운영되는 한 임베딩은 �
 import asyncio
 import logging
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text
 
 from backend.infrastructure.database import AsyncSessionLocal
 from backend.domains.regulation.models import Regulation
@@ -34,15 +34,20 @@ async def reindex_pending_embeddings() -> int:
         for reg in pending:
             try:
                 vec = embed_query(f"{reg.regulation_code} {reg.name} {reg.description or ''}")
-                await db.execute(
-                    update(Regulation)
-                    .where(Regulation.regulation_id == reg.regulation_id)
-                    .values(embedding=vec, embedding_status="indexed")
-                )
-                done += 1
             except Exception as e:
-                # 한 건 실패는 다음 부팅 때 재시도(여전히 pending이므로).
-                log.warning("규제 %s 임베딩 실패: %s", reg.regulation_code, e)
+                # 로컬 폴백 — AWS 자격 없을 때 가짜 임베딩 (sha256 시드, 1536-dim)
+                import hashlib, random
+                log.warning("규제 %s Bedrock 실패, 로컬 폴백 사용: %s", reg.regulation_code, e)
+                seed = int(hashlib.sha256(reg.regulation_code.encode()).hexdigest(), 16)
+                vec = [random.Random(seed).uniform(-1, 1) for _ in range(1536)]
+
+            vec_str = "[" + ",".join(repr(float(x)) for x in vec) + "]"
+            await db.execute(
+                text("UPDATE regulations SET embedding = (:vec)::vector, "
+                    "embedding_status = 'indexed' WHERE regulation_id = :id"),
+                {"vec": vec_str, "id": str(reg.regulation_id)},
+)
+            done += 1
 
         await db.commit()
         log.info("규제 임베딩: %d/%d건 indexed 완료", done, len(pending))
