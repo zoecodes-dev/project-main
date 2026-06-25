@@ -100,7 +100,8 @@ async def risk_scoring_node(state: BatchState, db) -> BatchState:
 
 async def readiness_node(state: BatchState, db) -> BatchState:
     product_id = UUID(state["product_id"])
-    updates = await run_readiness(db=db, product_id=product_id)
+    batch_id = UUID(state["batch_id"])
+    updates = await run_readiness(db=db, product_id=product_id, batch_id=batch_id)
     return {**state, **updates}
 
 
