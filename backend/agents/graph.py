@@ -1,12 +1,15 @@
 from dataclasses import asdict
 from inspect import isawaitable, signature
+import logging
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg_pool import AsyncConnectionPool
 from langgraph.types import Command, interrupt
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from backend.agents.automation import (
     run_feoc_verification,
@@ -27,6 +30,7 @@ from backend.domains.audit.state_machine import (
 from backend.events.types import HITLRequestedEvent
 from backend.infrastructure.database import AsyncSessionLocal
 from backend.infrastructure.event_bus import publish
+from backend.infrastructure.queue import enqueue, NOTIFICATION_QUEUE
 from backend.infrastructure.trace import trace_node
 from backend.core.config import config
 from backend.domains.dpp.models import Batch
@@ -138,11 +142,36 @@ async def hitl_interrupt_node(state: BatchState) -> BatchState:
             reason=reason,
             trigger_stage=trigger_stage,
         )
+        owner_users = (await db.execute(
+            text("""
+                SELECT u.user_id FROM batches b
+                JOIN users u ON u.tenant_id = b.tenant_id
+                WHERE b.batch_id = :bid
+                  AND u.role = 'owner_esg'
+                  AND u.is_active = TRUE
+            """),
+            {"bid": str(batch_id)}
+        )).fetchall()
         await db.commit()
 
     if created:
         event = HITLRequestedEvent(batch_id=batch_id, reason=reason)
         await publish(event.event_name, asdict(event))
+        if not owner_users:
+            logger.warning("[notification] owner_esg 담당자 없음 (batch_id=%s)", batch_id)
+        else:
+            for row in owner_users:
+                uid = str(row[0])
+                await enqueue(
+                    NOTIFICATION_QUEUE,
+                    "process_notification",
+                    user_id=uid,
+                    channel="in-app",
+                    notification_type="approval_needed",
+                    subject="HITL 심사 요청이 생성됐습니다",
+                    body=f"배치 {batch_id} 검토가 필요합니다.",
+                    dedup_key=f"hitl_created:{batch_id}:{uid}",
+                )
 
     response = interrupt(
         {
