@@ -58,9 +58,11 @@ class SupplyChainService:
                     "해당 관계는 공급망에 순환 참조를 발생시킵니다."
                 )
 
-        return await self.repository.create_supply_relation(
+        result = await self.repository.create_supply_relation(
             bom_version_id, parent_supplier_id, child_supplier_id, part_id
         )
+        await self.repository.session.commit()
+        return result
 
     async def get_alternatives(
         self, product_id: str, part_id: str
@@ -128,6 +130,7 @@ class SupplyChainService:
         new_map = await self.repository.declare_new_source(
             bom_version_id, parent_supplier_id, new_child_supplier_id, part_id
         )
+        await self.repository.session.commit()
 
         # 자진신고 발생 시, 상위 BOM 검증을 위해 이벤트 발행 (Compliance/Verification 트리고)
         payload = {
