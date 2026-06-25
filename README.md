@@ -155,7 +155,7 @@ ALLOWED_ORIGINS=http://localhost:3000
 - **확장**: PostGIS(공간 좌표) · pgvector(규제 임베딩 1536-dim)
 - **두 상태축**(`batches`):
   - `current_stage` — 노드 위치 (8단계, `stage_*`)
-  - `batch_status` — 거친 국면 (`batch_processing`/`batch_hitl_wait`/`batch_completed`/`batch_rejected`)
+  - `batch_status` — 상위 처리 단계 (`batch_processing`/`batch_hitl_wait`/`batch_completed`/`batch_rejected`)
 
 ---
 
@@ -188,14 +188,13 @@ BASE_URL=http://localhost pytest ci/ -v
 
 ---
 
-## 개발 규칙 (요약 — 상세는 [CLAUDE.md](CLAUDE.md))
+## 개발 규칙 (요약)
 
 1. **레이어 단방향**: router → service → repository → models
 2. **커밋 경계**: router는 commit 금지. service가 일원화. repository는 flush만.
 3. **이벤트 발행 순서**: DB 변경 → commit → **커밋 성공 후** publish
 4. **도메인 격리**: 다른 도메인 import 금지. 이벤트 + publish()로만 통신.
 5. **스키마 변경 = alembic 마이그레이션**: `01_schema.sql`은 동결, DDL 변경은 `alembic/versions/`로. ORM은 최종 스키마와 1:1.
-6. 작업은 feature 브랜치에서. 커밋 메시지에 생성 표기·Co-Authored-By 트레일러 미포함.
 
 ---
 
