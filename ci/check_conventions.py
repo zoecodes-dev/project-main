@@ -21,6 +21,8 @@ import os
 import re
 import sys
 import glob
+import io
+import tokenize
 
 # Windows 콘솔(cp949)에서 한글/이모지 출력 깨짐·크래시 방지 — stdout을 UTF-8로.
 try:
@@ -45,13 +47,40 @@ def py_files():
     return glob.glob(os.path.join(BACKEND, "**", "*.py"), recursive=True)
 
 
+def code_lines(path):
+    """
+    파일을 토큰화해 '주석·문자열을 공백으로 지운 코드만' 라인 리스트를 반환한다(1-based 보존).
+    → 주석/독스트링 안에 적힌 'commit()' · 'datetime.utcnow()' 같은 문구를 위반으로 오탐하지 않음.
+      (예: "이 함수는 db.commit()을 호출하지 않는다" 주석은 코드가 아니므로 건너뜀)
+    토큰화 실패(문법오류 등) 시에는 원본 라인을 그대로 반환(안전 폴백).
+    """
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    lines = src.splitlines()
+    grid = [list(line) for line in lines]  # 라인별 문자 리스트(수정용)
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type not in (tokenize.COMMENT, tokenize.STRING):
+                continue
+            (srow, scol), (erow, ecol) = tok.start, tok.end
+            for row in range(srow, erow + 1):  # 멀티라인 문자열(독스트링) 포함
+                if row - 1 >= len(grid):
+                    break
+                line = grid[row - 1]
+                c0 = scol if row == srow else 0
+                c1 = ecol if row == erow else len(line)
+                for c in range(c0, min(c1, len(line))):
+                    line[c] = " "
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return lines  # 폴백: 원본
+    return ["".join(c) for c in grid]
+
+
 # ── C1: native_enum=False 인데 values_callable 없는 컬럼 ──────────────────────
 def check_enum_values_callable():
     for f in py_files():
-        with open(f, encoding="utf-8") as fp:
-            text = fp.read()
-        # Enum(...) 호출을 한 줄 기준으로 대략 스캔 (대부분 한 줄에 작성됨)
-        for i, line in enumerate(text.splitlines(), 1):
+        # 주석·문자열 제외한 코드 라인만 스캔(오탐 방지)
+        for i, line in enumerate(code_lines(f), 1):
             if "native_enum=False" in line and "values_callable" not in line:
                 add("C1", f, i,
                     "Enum(native_enum=False)에 values_callable 누락 → LookupError 위험")
@@ -61,11 +90,11 @@ def check_enum_values_callable():
 def check_utcnow():
     pat = re.compile(r"datetime\.utcnow\s*\(")
     for f in py_files():
-        with open(f, encoding="utf-8") as fp:
-            for i, line in enumerate(fp, 1):
-                if pat.search(line):
-                    add("C2", f, i,
-                        "datetime.utcnow() 금지 → datetime.now(timezone.utc) 사용")
+        # 주석·문자열 제외(예: "datetime.utcnow() 사용 금지" 주석 오탐 방지)
+        for i, line in enumerate(code_lines(f), 1):
+            if pat.search(line):
+                add("C2", f, i,
+                    "datetime.utcnow() 금지 → datetime.now(timezone.utc) 사용")
 
 
 # ── C3: queue.py QUEUE_NAMES ↔ schema CHECK 정합성 ───────────────────────────
@@ -100,11 +129,11 @@ def check_commit_ownership():
     for f in py_files():
         if os.path.basename(f) != "repository.py":
             continue
-        with open(f, encoding="utf-8") as fp:
-            for i, line in enumerate(fp, 1):
-                if pat.search(line):
-                    add("C4", f, i,
-                        "repository.py 내 commit() → 원자성 파괴 (커밋은 service가 소유)")
+        # 주석·문자열 제외(예: "db.commit()을 호출하지 않는다" 독스트링 오탐 방지)
+        for i, line in enumerate(code_lines(f), 1):
+            if pat.search(line):
+                add("C4", f, i,
+                    "repository.py 내 commit() → 원자성 파괴 (커밋은 service가 소유)")
 
 
 def main():
