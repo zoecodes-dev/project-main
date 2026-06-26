@@ -233,6 +233,39 @@ class SupplyChainService:
             "eudr_deforestation": eudr_risks
         }
 
+    # ---------- 공급망 맵 (10.2a / 10.2b) ----------
+
+    async def get_supply_chain_map(
+        self,
+        product_id: str,
+        tenant_id: str,
+        bom_version_id: str | None = None,
+        period_from: str | None = None,
+        period_to: str | None = None,
+        factory_id: str | None = None,
+        po_number: str | None = None,
+    ) -> dict:
+        return await self.repository.get_supply_chain_map(
+            product_id=product_id,
+            tenant_id=tenant_id,
+            bom_version_id=bom_version_id,
+            period_from=period_from,
+            period_to=period_to,
+            factory_id=factory_id,
+            po_number=po_number,
+        )
+
+    async def confirm_supply_chain_map(
+        self, map_id: str, tenant_id: str
+    ) -> dict | None:
+        result = await self.repository.confirm_map(map_id, tenant_id)
+        if result is None:
+            return None
+        await self.repository.session.commit()
+        # 응답 계약(스펙 10.2b): status는 link_status enum 원본이 아니라 "confirmed" 고정값.
+        # DB에는 link_status='supplychain_confirmed'로 저장되지만 프론트 계약은 {mapId, status:"confirmed"}.
+        return {"map_id": result["map_id"], "status": "confirmed"}
+
     async def get_hitl_geo_context(self, db: AsyncSession) -> Dict[str, Any]:
         """
         HITL 검토 화면용 조회 유틸리티.

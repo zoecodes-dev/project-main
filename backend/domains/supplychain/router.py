@@ -17,17 +17,19 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.supplychain.repository import SupplyChainRepository
 from backend.domains.supplychain.service import SupplyChainService
 from backend.domains.submission.service import create_and_request_submission
+from backend.infrastructure.auth import CurrentUser, get_current_user
 from backend.infrastructure.database import get_db, AsyncSessionLocal
 from backend.infrastructure.trace import trace_tool
 
 router = APIRouter(prefix="/supply-chain", tags=["Supply Chain Domain"])
+product_supply_chain_router = APIRouter(prefix="/products", tags=["Supply Chain Domain"])
 
 
 def get_supply_chain_service(
@@ -260,3 +262,68 @@ async def trigger_data_requests_for_gaps_endpoint(
         "created_count": len(created),
         "requests":      created,
     }
+
+
+# ============================================================
+# 10.2a  GET /products/{product_id}/supply-chain-map
+# ============================================================
+
+@product_supply_chain_router.get("/{product_id}/supply-chain-map")
+async def get_supply_chain_map_endpoint(
+    product_id: UUID,
+    bom_version_id: Optional[str] = None,
+    period_from: Optional[str] = None,
+    period_to: Optional[str] = None,
+    factory_id: Optional[str] = None,
+    po_number: Optional[str] = None,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """
+    10.2a: 제품 공급망 맵 조회.
+    응답: supply_chain_map / supply_chain_ratios / suppliers / supplier_factories
+    products.tenant_id → bom_versions 경로로 tenant 격리.
+    """
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+    return await service.get_supply_chain_map(
+        product_id=str(product_id),
+        tenant_id=str(current_user.tenant_id),
+        bom_version_id=bom_version_id,
+        period_from=period_from,
+        period_to=period_to,
+        factory_id=factory_id,
+        po_number=po_number,
+    )
+
+
+# ============================================================
+# 10.2b  POST /supply-chain/maps/{map_id}/confirm
+# ============================================================
+
+class ConfirmMapRequest(BaseModel):
+    confirmed: bool
+
+
+@router.post("/maps/{map_id}/confirm")
+async def confirm_supply_chain_map_endpoint(
+    map_id: UUID,
+    body: ConfirmMapRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """
+    10.2b: 공급망 맵 확인(confirm). link_status → supplychain_confirmed.
+    products.tenant_id 경로로 tenant 격리.
+    """
+    if not body.confirmed:
+        raise HTTPException(status_code=400, detail="confirmed must be true")
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+    result = await service.confirm_supply_chain_map(
+        map_id=str(map_id),
+        tenant_id=str(current_user.tenant_id),
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Supply chain map not found")
+    return result
