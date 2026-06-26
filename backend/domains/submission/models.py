@@ -240,3 +240,48 @@ class TimelineHistoryResponse(BaseModel):
     changed_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
+
+# ==============================================================================
+# 7. /submissions 전용 DTO (§4.1 프론트 계약)
+# ==============================================================================
+
+class SubmissionFileOut(BaseModel):
+    file_id: uuid.UUID
+    file_name: Optional[str] = None
+    size_bytes: Optional[int] = None
+
+
+class SubmissionCheckOut(BaseModel):
+    label: str
+    result: str  # pass | review | fail
+    reason: Optional[str] = None
+
+
+class SubmissionBriefOut(BaseModel):
+    """4.1a 목록 응답"""
+    submission_id: uuid.UUID
+    supplier_id: Optional[uuid.UUID] = None
+    supplier_name: Optional[str] = None
+    type: Optional[str] = None
+    status: Optional[str] = None
+    due_date: Optional[datetime] = None
+    submitted_at: Optional[datetime] = None
+    file_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SubmissionDetailOut(SubmissionBriefOut):
+    """4.1b 상세 응답"""
+    data_source: Optional[str] = None
+    supplier_contact: Optional[str] = None
+    reviewer_name: Optional[str] = None
+    files: List[SubmissionFileOut] = []
+    checks: List[SubmissionCheckOut] = []
+    related_pos: List = []
+
+
+class SubmissionActionIn(BaseModel):
+    """4.1c/d/e 요청 바디"""
+    reason: Optional[str] = None

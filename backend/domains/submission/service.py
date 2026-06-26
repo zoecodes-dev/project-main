@@ -357,3 +357,141 @@ async def send_overdue_reminders(db: AsyncSession) -> int:
 
     await db.commit()
     return len(overdue_rows)
+
+
+# ── /submissions §4.1 전용 서비스 ──────────────────────────────────────────
+
+async def list_submissions_for_tenant(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    skip: int = 0,
+    limit: int = 100,
+) -> list[dict]:
+    """4.1a 목록: supplier JOIN + file_count 집계. tenant_id 격리."""
+    rows = (await db.execute(
+        text("""
+            SELECT
+                drl.request_id        AS submission_id,
+                drl.target_supplier_id AS supplier_id,
+                s.company_name         AS supplier_name,
+                drl.requested_data_type AS type,
+                drl.submission_status  AS status,
+                drl.due_date,
+                drl.responded_at       AS submitted_at,
+                COUNT(sd.document_id)  AS file_count
+            FROM data_request_log drl
+            JOIN suppliers s ON s.supplier_id = drl.target_supplier_id
+            LEFT JOIN submission_documents sd ON sd.request_id = drl.request_id
+            WHERE s.tenant_id = :tenant_id
+              AND (drl.is_archived IS NULL OR drl.is_archived = FALSE)
+            GROUP BY drl.request_id, drl.target_supplier_id, s.company_name,
+                     drl.requested_data_type, drl.submission_status,
+                     drl.due_date, drl.responded_at
+            ORDER BY drl.created_at DESC
+            LIMIT :limit OFFSET :skip
+        """),
+        {"tenant_id": str(tenant_id), "limit": limit, "skip": skip},
+    )).mappings().fetchall()
+    return [dict(r) for r in rows]
+
+
+async def count_submissions_for_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> int:
+    """4.1a X-Total-Count용 전체 건수."""
+    row = (await db.execute(
+        text("""
+            SELECT COUNT(DISTINCT drl.request_id)
+            FROM data_request_log drl
+            JOIN suppliers s ON s.supplier_id = drl.target_supplier_id
+            WHERE s.tenant_id = :tenant_id
+              AND (drl.is_archived IS NULL OR drl.is_archived = FALSE)
+        """),
+        {"tenant_id": str(tenant_id)},
+    )).scalar()
+    return int(row or 0)
+
+
+async def get_submission_detail_for_tenant(
+    db: AsyncSession,
+    request_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+) -> dict | None:
+    """4.1b 상세: 파일 목록 + 검증 결과(checks) + 담당자 정보."""
+    # 기본 정보 + tenant 격리
+    base = (await db.execute(
+        text("""
+            SELECT
+                drl.request_id        AS submission_id,
+                drl.target_supplier_id AS supplier_id,
+                s.company_name         AS supplier_name,
+                drl.requested_data_type AS type,
+                drl.submission_status  AS status,
+                drl.due_date,
+                drl.responded_at       AS submitted_at,
+                drl.requested_data_type AS data_source,
+                sc.email               AS supplier_contact,
+                u.name                 AS reviewer_name
+            FROM data_request_log drl
+            JOIN suppliers s ON s.supplier_id = drl.target_supplier_id
+            LEFT JOIN supplier_contacts sc
+                   ON sc.supplier_id = drl.target_supplier_id AND sc.is_primary = TRUE
+            LEFT JOIN submission_status_history ssh
+                   ON ssh.request_id = drl.request_id
+                  AND ssh.to_status = 'submission_approved'
+            LEFT JOIN users u ON u.user_id = ssh.actor_id
+            WHERE drl.request_id = :rid
+              AND s.tenant_id = :tenant_id
+            LIMIT 1
+        """),
+        {"rid": str(request_id), "tenant_id": str(tenant_id)},
+    )).mappings().fetchone()
+
+    if not base:
+        return None
+
+    result = dict(base)
+
+    # 파일 목록
+    files = (await db.execute(
+        text("""
+            SELECT document_id AS file_id, file_name,
+                   NULL::int AS size_bytes
+            FROM submission_documents
+            WHERE request_id = :rid
+        """),
+        {"rid": str(request_id)},
+    )).mappings().fetchall()
+    result["files"] = [dict(f) for f in files]
+    result["file_count"] = len(result["files"])
+
+    # 검증 결과(compliance_results → checks)
+    verdict_map = {
+        "compliance_passed": "pass",
+        "compliance_warning": "review",
+        "compliance_violation": "fail",
+        "compliance_reject": "fail",
+    }
+    checks_rows = (await db.execute(
+        text("""
+            SELECT cr.verdict, cr.reasoning_text AS reason,
+                   r.name AS label
+            FROM compliance_results cr
+            JOIN batches b ON b.batch_id = (
+                SELECT batch_id FROM data_request_log WHERE request_id = :rid LIMIT 1
+            )
+            LEFT JOIN regulations r ON r.regulation_id = cr.regulation_id
+            WHERE cr.batch_id = b.batch_id
+        """),
+        {"rid": str(request_id)},
+    )).mappings().fetchall()
+
+    result["checks"] = [
+        {
+            "label": row["label"] or row["verdict"],
+            "result": verdict_map.get(row["verdict"], "review"),
+            "reason": row["reason"],
+        }
+        for row in checks_rows
+    ]
+    result["related_pos"] = []
+
+    return result
