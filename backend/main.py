@@ -21,7 +21,7 @@ from backend.domains.users.router import router as users_router
 from backend.domains.report.router import router as report_router
 from backend.domains.product.router import router as product_router
 from backend.domains.supplier.router import router as supplier_router
-from backend.domains.audit.router import actions_router, router as audit_router
+from backend.domains.audit.router import actions_router, audit_packages_router, router as audit_router
 from backend.domains.risk.router import router as risk_router
 from backend.domains.dpp.router import router as dpp_router
 from backend.hitl.router import router as hitl_router
@@ -85,6 +85,7 @@ app.include_router(supplier_router)
 app.include_router(product_router)
 app.include_router(audit_router)
 app.include_router(actions_router)
+app.include_router(audit_packages_router)
 app.include_router(risk_router)
 app.include_router(dpp_router)
 app.include_router(hitl_router)

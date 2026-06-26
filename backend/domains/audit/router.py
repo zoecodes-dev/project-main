@@ -3,17 +3,20 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.infrastructure.auth import CurrentUser, get_current_user
 from backend.infrastructure.database import get_db
+from backend.infrastructure.pagination import set_total_count
 from backend.domains.audit import service
 from backend.domains.audit.service import BatchNotFound
 from backend.domains.audit.models import AuditTrailRow, ChainVerificationOut
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 actions_router = APIRouter(tags=["actions"])
+audit_packages_router = APIRouter(prefix="/audit-packages", tags=["audit-packages"])
 
 
 class NodeType(str, Enum):
@@ -115,3 +118,50 @@ async def get_gap_analysis(
     db: AsyncSession = Depends(get_db),
 ):
     return await service.get_gap_analysis_results(db, regulation_id)
+
+
+# ── 2.5b GET /audit-packages ─────────────────────────────────────────────────
+
+@audit_packages_router.get("")
+async def list_audit_packages(
+    response: Response,
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    items = await service.list_audit_packages(db, current_user.tenant_id, page, size)
+    total = await service.count_audit_packages(db, current_user.tenant_id)
+    set_total_count(response, total)
+    return items
+
+
+# ── 2.5c GET /audit-packages/{packageId} ─────────────────────────────────────
+
+@audit_packages_router.get("/{package_id}")
+async def get_audit_package(
+    package_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        return await service.get_audit_package(db, package_id, current_user.tenant_id)
+    except BatchNotFound:
+        raise HTTPException(status_code=404, detail=f"audit package not found: {package_id}")
+
+
+# ── 2.5d POST /audit-packages/{packageId}/export (선택) ──────────────────────
+
+@audit_packages_router.post("/{package_id}/export")
+async def export_audit_package(
+    package_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # 패키지 존재 확인
+    try:
+        await service.get_audit_package(db, package_id, current_user.tenant_id)
+    except BatchNotFound:
+        raise HTTPException(status_code=404, detail=f"audit package not found: {package_id}")
+    # 실제 파일 생성은 추후 구현 (S3 업로드 등)
+    return {"export_url": None}
