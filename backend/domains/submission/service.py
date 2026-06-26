@@ -1,4 +1,5 @@
 import uuid
+import logging
 import dataclasses
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -9,7 +10,10 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.event_bus import publish
+from backend.infrastructure.queue import enqueue, NOTIFICATION_QUEUE
 from backend.infrastructure.trace import trace_node, trace_tool
+
+logger = logging.getLogger(__name__)
 from backend.domains.submission.models import DataRequestLog, SubmissionStatus
 from backend.domains.submission.repository import (
     create_data_request, 
@@ -103,7 +107,35 @@ async def create_and_request_submission(
     )
     await publish("SubmissionRequested", dataclasses.asdict(event))
     await publish("SubmissionStatusChanged", dataclasses.asdict(status_event))
-    
+
+    supplier_users = (await db.execute(
+        text("""
+            SELECT u.user_id FROM users u
+            WHERE u.tenant_id = (
+                SELECT tenant_id FROM suppliers WHERE supplier_id = :supplier_id
+            )
+              AND u.role IN ('supplier_ceo', 'supplier_esg')
+              AND u.is_active = TRUE
+        """),
+        {"supplier_id": str(target_supplier_id)},
+    )).fetchall()
+
+    if not supplier_users:
+        logger.warning("[notification] 협력사 담당자 없음 (supplier_id=%s)", target_supplier_id)
+    else:
+        for row in supplier_users:
+            uid = str(row[0])
+            await enqueue(
+                NOTIFICATION_QUEUE,
+                "process_notification",
+                user_id=uid,
+                channel="in-app",
+                notification_type="reminder",
+                subject="데이터 제출 요청이 발송됐습니다",
+                body=f"데이터 제출을 요청받았습니다. (요청 ID: {req_log.request_id})",
+                dedup_key=f"data_request_sent:{req_log.request_id}:{uid}",
+            )
+
     return req_log
 
 @trace_tool("get_submission_detail")
@@ -232,3 +264,34 @@ async def get_evidence_urls_dto(db: AsyncSession, supplier_id: uuid.UUID) -> lis
     stmt = text("SELECT document_id, file_url, file_name, doc_category FROM submission_documents WHERE supplier_id = :supplier_id")
     result = await db.execute(stmt, {"supplier_id": str(supplier_id)})
     return [dict(r._mapping) for r in result.fetchall()]
+
+
+async def check_and_record_pipeline_trigger(
+    db: AsyncSession,
+    request_id: uuid.UUID,
+    batch_id: uuid.UUID,
+) -> bool:
+    """
+    파이프라인 중복 실행 방지용 영속 멱등성 가드.
+    processed_jobs에 'submission_approved:{request_id}' 키가 없을 때만 True 반환 + 기록.
+    이미 있으면 False 반환 — 중복 approve 차단.
+    서버 재시작 후에도 DB에 영구 보존되어 Redis 휘발성 문제를 해소.
+    """
+    key = f"submission_approved:{request_id}"
+    existing = (await db.execute(
+        text("SELECT idempotency_key FROM processed_jobs WHERE idempotency_key = :key"),
+        {"key": key},
+    )).one_or_none()
+
+    if existing:
+        return False
+
+    await db.execute(
+        text("""
+            INSERT INTO processed_jobs (idempotency_key, queue_name, job_id, status)
+            VALUES (:key, 'batch_pipeline_queue', :job_id, 'done')
+        """),
+        {"key": key, "job_id": f"pipeline:{batch_id}"},
+    )
+    await db.commit()
+    return True

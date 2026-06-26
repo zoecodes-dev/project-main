@@ -23,12 +23,13 @@ from backend.domains.submission.models import (
     TimelineHistoryResponse
 )
 from backend.domains.submission.service import (
-    create_and_request_submission, 
-    get_submission_detail, 
-    update_submission_status, 
+    create_and_request_submission,
+    get_submission_detail,
+    update_submission_status,
     get_submissions_list,
     get_submission_completeness,
-    get_supplier_submission_timeline
+    get_supplier_submission_timeline,
+    check_and_record_pipeline_trigger,
 )
 
 from backend.agents.graph import create_batch
@@ -202,14 +203,16 @@ async def approve_data_request_endpoint(request_id: uuid.UUID, req: ActionDataRe
             {"bid": batch_id},
         )).one_or_none()
         if row:
-            await enqueue(
-                BATCH_PIPELINE_QUEUE,
-                "start_batch_pipeline",
-                job_id=f"pipeline:{batch_id}",   # 멱등성 키 — 중복 approve 방어
-                batch_id=str(batch_id),
-                product_id=str(row.product_id),
-                destination=row.destination,
-            )
+            should_run = await check_and_record_pipeline_trigger(db, request_id, batch_id)
+            if should_run:
+                await enqueue(
+                    BATCH_PIPELINE_QUEUE,
+                    "start_batch_pipeline",
+                    job_id=f"pipeline:{batch_id}",
+                    batch_id=str(batch_id),
+                    product_id=str(row.product_id),
+                    destination=row.destination,
+                )
 
     return approved
 
