@@ -28,6 +28,7 @@ from backend.domains.supplier.models import (
     SupplierTrainingResponse,
     SupplierReliabilityResponse,
     SupplierFactoriesResponse,
+    SupplierContactsResponse,
     MasterFormRequest,
     MasterFormResponse,
     MasterFormPrefillResponse,
@@ -247,6 +248,19 @@ async def get_supplier_factories_endpoint(
 ):
     """사업장 탭 — 공장/광산 목록(PostGIS 좌표 lat/lng 포함) 조회. 내 테넌트 소유만."""
     data = await service.get_factories(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
+
+
+@router.get("/{supplier_id}/contacts", response_model=SupplierContactsResponse)
+async def get_supplier_contacts_endpoint(
+    supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
+    db: AsyncSession = Depends(get_db),
+):
+    """담당자 연락처 탭 — supplier_contacts 목록(대표 우선) 조회. 내 테넌트 소유만."""
+    data = await service.get_contacts(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return data

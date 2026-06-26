@@ -315,6 +315,32 @@ async def get_factories(db: AsyncSession, supplier_id: UUID) -> List[dict]:
     return [dict(row._mapping) for row in result]
 
 
+async def get_contacts(db: AsyncSession, supplier_id: UUID) -> List[dict]:
+    """
+    담당자 연락처 탭 — supplier_contacts 목록.
+    대표(is_primary) 우선, 그다음 등록순(created_at) 정렬.
+    """
+    stmt = (
+        select(
+            SupplierContact.contact_id,
+            SupplierContact.factory_id,
+            SupplierContact.name,
+            SupplierContact.name_en,
+            SupplierContact.role,
+            SupplierContact.department,
+            SupplierContact.email,
+            SupplierContact.phone,
+            SupplierContact.mobile,
+            SupplierContact.is_primary,
+            SupplierContact.language,
+        )
+        .where(SupplierContact.supplier_id == supplier_id)
+        .order_by(SupplierContact.is_primary.desc(), SupplierContact.created_at.asc())
+    )
+    result = await db.execute(stmt)
+    return [dict(row._mapping) for row in result]
+
+
 # ============================================================
 # 마스터폼 섹션 0~2 write (담당: 팀원 B / KIRA W5 §4)
 #
