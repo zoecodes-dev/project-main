@@ -3,7 +3,6 @@ import logging
 import dataclasses
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from typing import List
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, text
@@ -295,3 +294,66 @@ async def check_and_record_pipeline_trigger(
     )
     await db.commit()
     return True
+
+
+async def send_overdue_reminders(db: AsyncSession) -> int:
+    """
+    기한이 지났는데 아직 response_pending인 데이터 요청을 찾아
+    협력사 담당자 전원에게 독촉 알림을 발송한다.
+    reminder_count + 1, last_reminder_at 갱신.
+    반환값: 처리된 요청 건수.
+    """
+    overdue_rows = (await db.execute(
+        text("""
+            SELECT request_id, target_supplier_id
+            FROM data_request_log
+            WHERE due_date < now()
+              AND response_status = 'response_pending'
+        """)
+    )).fetchall()
+
+    if not overdue_rows:
+        return 0
+
+    for request_id, supplier_id in overdue_rows:
+        supplier_users = (await db.execute(
+            text("""
+                SELECT u.user_id FROM users u
+                WHERE u.tenant_id = (
+                    SELECT tenant_id FROM suppliers WHERE supplier_id = :sid
+                )
+                  AND u.role IN ('supplier_ceo', 'supplier_esg')
+                  AND u.is_active = TRUE
+            """),
+            {"sid": str(supplier_id)},
+        )).fetchall()
+
+        if not supplier_users:
+            logger.warning("[reminder] 협력사 담당자 없음 (supplier_id=%s)", supplier_id)
+            continue
+
+        for row in supplier_users:
+            uid = str(row[0])
+            await enqueue(
+                NOTIFICATION_QUEUE,
+                "process_notification",
+                user_id=uid,
+                channel="in-app",
+                notification_type="sla_warning",
+                subject="데이터 제출 기한이 지났습니다",
+                body=f"데이터 제출 기한이 지났습니다. 빠른 제출 부탁드립니다. (요청 ID: {request_id})",
+                dedup_key=f"sla_reminder:{request_id}:{uid}",
+            )
+
+        await db.execute(
+            text("""
+                UPDATE data_request_log
+                SET reminder_count   = COALESCE(reminder_count, 0) + 1,
+                    last_reminder_at = now()
+                WHERE request_id = :rid
+            """),
+            {"rid": str(request_id)},
+        )
+
+    await db.commit()
+    return len(overdue_rows)
