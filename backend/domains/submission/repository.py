@@ -22,12 +22,12 @@ from backend.domains.submission.models import (
     ProcessedJob,
 )
 # suppliers는 supplier 도메인 소유 테이블이라 ORM 모델을 import(약속 6번 위반)하지 않고,
-# supplier_type만 읽기 위한 최소 Table 매핑을 둔다. (dpp/supplychain repo의 raw 조인과 동일 취지)
+# provider_type만 읽기 위한 최소 Table 매핑을 둔다. (dpp/supplychain repo의 raw 조인과 동일 취지)
 _supplier_meta = MetaData()
 _suppliers_tbl = Table(
     "suppliers", _supplier_meta,
     Column("supplier_id", PG_UUID(as_uuid=True), primary_key=True),
-    Column("supplier_type", String(30)),
+    Column("provider_type", String(30)),
 )
 
 async def create_data_request(db: AsyncSession, log_record: DataRequestLog) -> DataRequestLog:
@@ -128,17 +128,17 @@ async def list_extraction_results_by_suppliers(
     supplier_ids: list[uuid.UUID],
 ) -> list[tuple[DocumentExtractionResult, str]]:   # ← 반환 타입 변경
     """
-    [SELECT] 주어진 협력사들의 문서 추출결과를 supplier_type과 함께 모은다.
+    [SELECT] 주어진 협력사들의 문서 추출결과를 provider_type과 함께 모은다.
     document_extraction_results → data_request_log(target_supplier_id)
-      → suppliers(supplier_type) 3-단 조인.
-    node(data_gateway)는 (추출결과, supplier_type) 튜플로 신뢰도·확인여부와
+      → suppliers(provider_type) 3-단 조인.
+    node(data_gateway)는 (추출결과, provider_type) 튜플로 신뢰도·확인여부와
     validate_schema 누락 검사(spec 노드 정의 #2단계)를 집계한다.
     """
     if not supplier_ids:
         return []
 
     stmt = (
-        select(DocumentExtractionResult, _suppliers_tbl.c.supplier_type)   # ← 튜플 select
+        select(DocumentExtractionResult, _suppliers_tbl.c.provider_type)   # ← 튜플 select
         .join(
             DataRequestLog,
             DataRequestLog.request_id == DocumentExtractionResult.request_id,

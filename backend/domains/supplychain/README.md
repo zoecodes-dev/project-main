@@ -78,3 +78,18 @@ HITL(Human-In-The-Loop) 검토 화면에서 지도에 핀을 꽂고 회색지대
 시스템이 단순 사후 적발(Sad Path)에 머무르는 것을 방지하기 위해, 협력사가 공급원 변경을 자진 신고하면 상위 가치사슬 전체를 다시 깨워 검증하는 비동기 이벤트 토폴로지가 설계되어 있습니다.
 - **트리거 및 경계 검증**: 협력사가 공급원 변경 신고 시 `evaluate_cross_entity_boundary`를 통해 법인 횡단 여부 판별.
 - **이벤트 전파 (Bus Topology)**: `requires_full_revalidation: True` 플래그를 담아 `supplier.source_change_declared` 이벤트 발행.
+
+## 14. 공급망 맵 API (스펙 §10.2 — 신규)
+프론트 맵 화면(`lib/supply-chain-mock.ts` 대체)의 실데이터 소스. 기존 `/supply-chain/*` 라우터는 유지하고 스펙 shape로 **신규 경로**를 추가함. 두 엔드포인트 모두 `Depends(get_current_user)` + `products.tenant_id` 경로 격리.
+
+| # | Method | Path | 설명 | 응답 |
+| :--- | :--- | :--- | :--- | :--- |
+| 10.2a | `GET` | `/products/{productId}/supply-chain-map` | 제품 공급망 맵 조회. 필터: `bom_version_id`/`period_from`/`period_to`/`factory_id`/`po_number` | `{ supplyChainMap[], supplyChainRatios[], suppliers[], supplierFactories[] }` |
+| 10.2b | `POST` | `/supply-chain/maps/{mapId}/confirm` | 맵 노드 확정. `link_status` → `supplychain_confirmed` | `{ mapId, status:"confirmed" }` |
+
+- **10.2a 응답 계약**(snake_case → 프론트 snakeToCamel):
+  - `supply_chain_map[]`: `map_id, part_id, supplier_id, factory_id, tier_level, link_status` (`map_id`는 10.2b confirm 호출용)
+  - `supply_chain_ratios[]`: `part_id, supplier_id, ratio_percent`
+  - `suppliers[]` = `SupplierBrief` 형태, `supplier_factories[]` = `SupplierFactory` 형태(`latitude`/`longitude` 분리)
+- `linkStatus` enum(§A-4): `supplychain_declared | supplychain_confirmed`.
+- **10.2b**: 요청 `{ confirmed: true }`(false면 400). 타 테넌트/미존재면 404. 응답 `status`는 link_status enum 원본이 아니라 계약 고정값 `"confirmed"`.

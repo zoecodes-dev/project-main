@@ -43,7 +43,7 @@ class SupplyChainRepository:
                 -- 앵커: 트리 루트 = 원청 (parent_supplier_id IS NULL, child=원청 Pack, hop_level=0)
                 SELECT
                     scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
-                    scm.part_id, s.company_name, s.supplier_type, scm.hop_level,
+                    scm.part_id, s.company_name, s.provider_type, scm.hop_level,
                     sf.country,
                     ST_AsGeoJSON(sf.location) AS location_geojson,
                     0 AS depth,
@@ -62,7 +62,7 @@ class SupplyChainRepository:
 
                 SELECT
                     scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
-                    scm.part_id, s.company_name, s.supplier_type, scm.hop_level,
+                    scm.part_id, s.company_name, s.provider_type, scm.hop_level,
                     sf.country,
                     ST_AsGeoJSON(sf.location) AS location_geojson,
                     sct.depth + 1,
@@ -80,7 +80,7 @@ class SupplyChainRepository:
             )
             SELECT
                 map_id, parent_supplier_id, child_supplier_id, part_id,
-                company_name, supplier_type,
+                company_name, provider_type,
                 depth,           -- [F1 주축] 프론트 트리 표시 기준
                 hop_level,       -- [F1 보조] 엣지 메타 — 겸업 탐색·JOIN 조건용
                 is_root_anchor,  -- [F2] parent_supplier_id IS NULL 파생 — OEM/tier0 동적 판정
@@ -101,7 +101,7 @@ class SupplyChainRepository:
         query = text("""
             SELECT
                 scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
-                scm.part_id, s.company_name, s.supplier_type,
+                scm.part_id, s.company_name, s.provider_type,
                 scm.hop_level, p.tier_level AS bom_depth, scm.link_status
             FROM supply_chain_map scm
             JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
@@ -121,7 +121,7 @@ class SupplyChainRepository:
         query = text("""
             SELECT
                 scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
-                scm.part_id, s.company_name, s.supplier_type,
+                scm.part_id, s.company_name, s.provider_type,
                 scm.hop_level, p.tier_level AS bom_depth, scm.link_status
             FROM supply_chain_map scm
             JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
@@ -192,7 +192,7 @@ class SupplyChainRepository:
     async def get_supplier_master_and_gps_dto(self, supplier_id: str) -> dict:
         """HITL 컨텍스트용 협력사 마스터 및 공장 GPS 정보 조회"""
         master_query = text("""
-            SELECT supplier_id, company_name, company_name_en, supplier_type,
+            SELECT supplier_id, company_name, company_name_en, provider_type,
                    status, risk_level, feoc_status, completeness_score,
                    (SELECT sf.country FROM supplier_factories sf
                     WHERE sf.supplier_id = suppliers.supplier_id AND sf.is_active = TRUE
@@ -297,7 +297,7 @@ class SupplyChainRepository:
         """동일 part_id를 공급하는 다른 협력사 목록 (대체 공급망)."""
         query = text("""
             SELECT DISTINCT
-                s.supplier_id, s.company_name, s.supplier_type, scm.hop_level,
+                s.supplier_id, s.company_name, s.provider_type, scm.hop_level,
                 sr.ratio_percentage
             FROM supply_chain_map scm
             JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
@@ -319,7 +319,7 @@ class SupplyChainRepository:
         C2 gap 계산용: 제품 공급망 내 모든 고유 협력사와 각 규제 필수 필드의 보유 여부를 조회.
 
         반환 컬럼:
-          supplier_id, supplier_type, depth (트리 최소 depth)
+          supplier_id, provider_type, depth (트리 최소 depth)
           has_carbon_intensity          : manufacturer_details.carbon_intensity 존재 여부
           has_factory_carbon_decl       : factory_carbon_declarations 행 존재 여부
           has_recycled_content_ratio    : recycler_details.recycled_content_ratio 존재 여부
@@ -332,7 +332,7 @@ class SupplyChainRepository:
         query = text("""
             WITH RECURSIVE sc_tree AS (
                 SELECT
-                    scm.child_supplier_id, s.supplier_type,
+                    scm.child_supplier_id, s.provider_type,
                     0 AS depth
                 FROM supply_chain_map scm
                 JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
@@ -343,7 +343,7 @@ class SupplyChainRepository:
                 UNION ALL
 
                 SELECT
-                    scm.child_supplier_id, s.supplier_type,
+                    scm.child_supplier_id, s.provider_type,
                     sct.depth + 1
                 FROM supply_chain_map scm
                 JOIN sc_tree sct ON scm.parent_supplier_id = sct.child_supplier_id
@@ -352,7 +352,7 @@ class SupplyChainRepository:
             unique_suppliers AS (
                 SELECT DISTINCT ON (child_supplier_id)
                     child_supplier_id AS supplier_id,
-                    supplier_type,
+                    provider_type,
                     MIN(depth) OVER (PARTITION BY child_supplier_id) AS depth
                 FROM sc_tree
                 ORDER BY child_supplier_id, depth
@@ -364,7 +364,7 @@ class SupplyChainRepository:
             )
             SELECT
                 us.supplier_id,
-                us.supplier_type,
+                us.provider_type,
                 us.depth,
                 (rs.child_supplier_id IS NOT NULL) AS is_root_anchor,
                 -- Manufacturer: carbon_intensity
@@ -397,7 +397,7 @@ class SupplyChainRepository:
             LEFT JOIN supplier_recycler_details srd      ON srd.supplier_id = us.supplier_id
             LEFT JOIN supplier_miner_details smind       ON smind.supplier_id = us.supplier_id
             LEFT JOIN supplier_risk_profiles srp         ON srp.supplier_id = us.supplier_id
-            ORDER BY us.depth, us.supplier_type;
+            ORDER BY us.depth, us.provider_type;
         """)
         result = await self.session.execute(query, {"product_id": product_id})
         return [dict(row._mapping) for row in result]
@@ -473,6 +473,154 @@ class SupplyChainRepository:
         # session은 의존성 주입된 self.session 사용. 인자 db는 상위 서비스 호출 호환을 위해 유지합니다.
         result = await self.session.execute(query)
         return [dict(row._mapping) for row in result]
+
+    # -------------------------------------------------------------------------
+    # 10.2a: 제품 공급망 맵 조회
+    # -------------------------------------------------------------------------
+
+    @trace_tool("supply_chain_map_by_product")
+    async def get_supply_chain_map(
+        self,
+        product_id: str,
+        tenant_id: str,
+        bom_version_id: str | None = None,
+        period_from: str | None = None,
+        period_to: str | None = None,
+        factory_id: str | None = None,
+        po_number: str | None = None,
+    ) -> Dict[str, Any]:
+        """
+        제품 공급망 맵 조회 (10.2a).
+        products.tenant_id → bom_versions → supply_chain_map 경로로 tenant 격리.
+        반환: supply_chain_map / supply_chain_ratios / suppliers / supplier_factories
+        """
+        filters = [
+            "bv.product_id = :product_id",
+            "pr.tenant_id = :tenant_id",
+        ]
+        params: Dict[str, Any] = {"product_id": product_id, "tenant_id": tenant_id}
+
+        if bom_version_id:
+            filters.append("bv.bom_version_id = :bom_version_id")
+            params["bom_version_id"] = bom_version_id
+        if po_number:
+            filters.append("scm.po_number = :po_number")
+            params["po_number"] = po_number
+        if period_from:
+            filters.append("scm.supply_period_from >= :period_from")
+            params["period_from"] = period_from
+        if period_to:
+            filters.append("scm.supply_period_to <= :period_to")
+            params["period_to"] = period_to
+        if factory_id:
+            filters.append("EXISTS (SELECT 1 FROM supply_ratio sr2 WHERE sr2.map_id = scm.map_id AND sr2.factory_id = :factory_id)")
+            params["factory_id"] = factory_id
+
+        where = " AND ".join(filters)
+
+        # 맵 노드 — 대표 factory_id는 첫 번째 supply_ratio에서 가져옴
+        map_query = text(f"""
+            SELECT DISTINCT
+                scm.map_id,
+                scm.part_id,
+                scm.child_supplier_id  AS supplier_id,
+                (
+                    SELECT sr.factory_id FROM supply_ratio sr
+                    WHERE sr.map_id = scm.map_id
+                    ORDER BY sr.ratio_percentage DESC NULLS LAST
+                    LIMIT 1
+                )                      AS factory_id,
+                p.tier_level,
+                scm.link_status
+            FROM supply_chain_map scm
+            JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
+            JOIN products pr     ON pr.product_id = bv.product_id
+            LEFT JOIN parts p    ON p.part_id = scm.part_id
+            WHERE {where}
+            ORDER BY p.tier_level NULLS LAST, scm.map_id
+        """)
+        map_rows = await self.session.execute(map_query, params)
+        supply_chain_map = [dict(r._mapping) for r in map_rows]
+
+        # 비율 테이블
+        ratio_query = text(f"""
+            SELECT DISTINCT
+                scm.part_id,
+                scm.child_supplier_id AS supplier_id,
+                sr.ratio_percentage   AS ratio_percent
+            FROM supply_chain_map scm
+            JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
+            JOIN products pr     ON pr.product_id = bv.product_id
+            JOIN supply_ratio sr ON sr.map_id = scm.map_id
+            WHERE {where}
+        """)
+        ratio_rows = await self.session.execute(ratio_query, params)
+        supply_chain_ratios = [dict(r._mapping) for r in ratio_rows]
+
+        # 공급사 브리프 — 맵에 등장하는 고유 supplier_id
+        supplier_ids = list({str(r["supplier_id"]) for r in supply_chain_map if r["supplier_id"]})
+        suppliers: List[Dict[str, Any]] = []
+        if supplier_ids:
+            sup_query = text("""
+                SELECT
+                    s.supplier_id, s.company_name, s.supplier_type, s.status, s.risk_level,
+                    s.feoc_status, s.completeness_score, s.tenant_id
+                FROM suppliers s
+                WHERE s.supplier_id = ANY(:ids)
+            """)
+            sup_rows = await self.session.execute(sup_query, {"ids": supplier_ids})
+            suppliers = [dict(r._mapping) for r in sup_rows]
+
+        # 공장 — supply_ratio에 등장하는 고유 factory_id
+        factory_ids = list({str(r["factory_id"]) for r in supply_chain_map if r["factory_id"]})
+        supplier_factories: List[Dict[str, Any]] = []
+        if factory_ids:
+            fac_query = text("""
+                SELECT
+                    sf.factory_id, sf.supplier_id, sf.factory_name, sf.address,
+                    sf.country, sf.region, sf.factory_role,
+                    ST_Y(sf.location) AS latitude,
+                    ST_X(sf.location) AS longitude,
+                    sf.is_active
+                FROM supplier_factories sf
+                WHERE sf.factory_id = ANY(:ids)
+            """)
+            fac_rows = await self.session.execute(fac_query, {"ids": factory_ids})
+            supplier_factories = [dict(r._mapping) for r in fac_rows]
+
+        return {
+            "supply_chain_map": supply_chain_map,
+            "supply_chain_ratios": supply_chain_ratios,
+            "suppliers": suppliers,
+            "supplier_factories": supplier_factories,
+        }
+
+    @trace_tool("supply_chain_map_confirm")
+    async def confirm_map(
+        self,
+        map_id: str,
+        tenant_id: str,
+    ) -> Dict[str, Any] | None:
+        """
+        10.2b: supply_chain_map.link_status → supplychain_confirmed.
+        products.tenant_id 경로로 tenant 격리 — 타 테넌트면 None 반환(→404).
+        """
+        query = text("""
+            UPDATE supply_chain_map scm
+            SET link_status = 'supplychain_confirmed'
+            FROM bom_versions bv
+            JOIN products pr ON pr.product_id = bv.product_id
+            WHERE scm.bom_version_id = bv.bom_version_id
+              AND scm.map_id = :map_id
+              AND pr.tenant_id = :tenant_id
+            RETURNING scm.map_id, scm.link_status AS status
+        """)
+        result = await self.session.execute(query, {"map_id": map_id, "tenant_id": tenant_id})
+        await self.session.flush()
+        row = result.first()
+        if row is None:
+            return None
+        return {"map_id": str(row[0]), "status": row[1]}
 
     # [BYPASS:A3] 시연용 가상 산림훼손지(보르네오 박스 1개) — 운영 전환 시 GFW 등 실데이터 필요
     @trace_tool("check_eudr_deforestation")

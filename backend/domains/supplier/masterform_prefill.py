@@ -44,7 +44,7 @@ FIELD_CATALOG: Dict[str, _FIELD] = {
     "website":             ("company", "str", "웹사이트"),
     "established_year":    ("company", "int", "설립연도"),
     "employee_count":      ("company", "int", "임직원 수"),
-    "supplier_type":       ("company", "str", "공급자 유형(manufacturer/recycler/trader/miner)"),
+    "provider_type":       ("company", "str", "공급자 유형(manufacturer/recycler/trader/miner)"),
 
     # 섹션 1 — 탄소발자국 (supplier_manufacturer_details)
     "manufacturing_process": ("manufacturing", "str",   "제조 공정 설명"),

@@ -152,7 +152,7 @@ class SupplyChainService:
         흐름:
           1. repository에서 공급망 협력사 + 필드 보유 현황 조회
           2. regulation service 스텁에서 적용 규제 + 규제별 필수 필드 조회
-          3. 협력사 supplier_type × provider_type_applicable 교차 → missing 계산
+          3. 협력사 provider_type × provider_type_applicable 교차 → missing 계산
           4. 노드별 gap 목록 반환
         """
         from backend.domains.regulation.service import (
@@ -186,13 +186,13 @@ class SupplyChainService:
 
         nodes = []
         for row in supplier_rows:
-            supplier_type = row["supplier_type"]
+            provider_type = row["provider_type"]
             missing: List[Dict[str, str]] = []
 
             for reg in regulations:
                 for field in reg_fields.get(reg["regulation_id"], []):
                     applicable_types = field.get("provider_type_applicable") or []
-                    if applicable_types and supplier_type not in applicable_types:
+                    if applicable_types and provider_type not in applicable_types:
                         continue  # 이 협력사 유형에 해당 없는 필드
                     if not field.get("is_mandatory"):
                         continue  # 선택 필드는 gap으로 집계하지 않음
@@ -210,7 +210,7 @@ class SupplyChainService:
 
             nodes.append({
                 "supplier_id":    str(row["supplier_id"]),
-                "supplier_type":  supplier_type,
+                "provider_type":  provider_type,
                 "depth":          row["depth"],
                 "is_root_anchor": bool(row.get("is_root_anchor", False)),
                 "missing_fields": missing,
@@ -232,6 +232,39 @@ class SupplyChainService:
             "country_mismatch": mismatch_risks,
             "eudr_deforestation": eudr_risks
         }
+
+    # ---------- 공급망 맵 (10.2a / 10.2b) ----------
+
+    async def get_supply_chain_map(
+        self,
+        product_id: str,
+        tenant_id: str,
+        bom_version_id: str | None = None,
+        period_from: str | None = None,
+        period_to: str | None = None,
+        factory_id: str | None = None,
+        po_number: str | None = None,
+    ) -> dict:
+        return await self.repository.get_supply_chain_map(
+            product_id=product_id,
+            tenant_id=tenant_id,
+            bom_version_id=bom_version_id,
+            period_from=period_from,
+            period_to=period_to,
+            factory_id=factory_id,
+            po_number=po_number,
+        )
+
+    async def confirm_supply_chain_map(
+        self, map_id: str, tenant_id: str
+    ) -> dict | None:
+        result = await self.repository.confirm_map(map_id, tenant_id)
+        if result is None:
+            return None
+        await self.repository.session.commit()
+        # 응답 계약(스펙 10.2b): status는 link_status enum 원본이 아니라 "confirmed" 고정값.
+        # DB에는 link_status='supplychain_confirmed'로 저장되지만 프론트 계약은 {mapId, status:"confirmed"}.
+        return {"map_id": result["map_id"], "status": "confirmed"}
 
     async def get_hitl_geo_context(self, db: AsyncSession) -> Dict[str, Any]:
         """
