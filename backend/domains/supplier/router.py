@@ -9,12 +9,13 @@ Supplier 도메인 HTTP 진입점(얇은 라우팅 레이어).
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.database import get_db
 from backend.infrastructure.auth import CurrentUser, get_current_user
+from backend.infrastructure.pagination import set_total_count
 from backend.domains.supplier import service
 # 스키마 클래스들을 models 내부 하단에서 안전하게 import
 from backend.domains.supplier.models import (
@@ -137,6 +138,7 @@ async def get_supplier_detail_endpoint(
 
 @router.get("", response_model=List[SupplierBrief])
 async def list_suppliers_endpoint(
+    response: Response,
     status: Optional[str] = None,
     risk_level: Optional[str] = None,
     feoc_status: Optional[str] = None,
@@ -145,10 +147,18 @@ async def list_suppliers_endpoint(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """협력사 목록 필터링 조회 (status / risk_level / feoc_status + 페이지). 내 테넌트만(§0.2)."""
-    return await service.list_suppliers(
+    """
+    협력사 목록 필터링 조회 (status / risk_level / feoc_status + 페이지). 내 테넌트만(§0.2).
+    전체 건수는 X-Total-Count 헤더로 전달(§0.6) — 본문은 bare array 유지.
+    """
+    items = await service.list_suppliers(
         db, status, risk_level, feoc_status, page, size, current_user.tenant_id
     )
+    total = await service.count_suppliers(
+        db, status, risk_level, feoc_status, current_user.tenant_id
+    )
+    set_total_count(response, total)
+    return items
  
 @router.get("/{supplier_id}/risk-profile", response_model=RiskProfileResponse)
 async def get_risk_profile_endpoint(

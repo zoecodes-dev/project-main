@@ -327,6 +327,19 @@ async def list_suppliers(
     )
 
 
+async def count_suppliers(
+    db: AsyncSession,
+    status: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    feoc_status: Optional[str] = None,
+    tenant_id: Optional[UUID] = None,
+) -> int:
+    """목록 전체 건수(필터 동일, 페이지 무관). X-Total-Count 헤더용(§0.6)."""
+    return await repository.count_suppliers(
+        db, status, risk_level, feoc_status, tenant_id
+    )
+
+
 def _score_to_risk_level(score: int) -> str:
     """
     overall_risk_score 구간을 risk_level로 변환 (가점식, 높을수록 위험).

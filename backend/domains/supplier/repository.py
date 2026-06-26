@@ -114,7 +114,27 @@ async def get_suppliers(
 
     result = await db.execute(stmt)
     return result.scalars().all()
- 
+
+async def count_suppliers(
+    db: AsyncSession,
+    status: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    feoc_status: Optional[str] = None,
+    tenant_id: Optional[UUID] = None,
+) -> int:
+    """목록 전체 건수(필터 적용, 페이지 무관). X-Total-Count 헤더용(§0.6)."""
+    stmt = select(func.count()).select_from(Supplier)
+    if tenant_id is not None:
+        stmt = stmt.where(Supplier.tenant_id == tenant_id)
+    if status:
+        stmt = stmt.where(Supplier.status == status)
+    if risk_level:
+        stmt = stmt.where(Supplier.risk_level == risk_level)
+    if feoc_status:
+        stmt = stmt.where(Supplier.feoc_status == feoc_status)
+    result = await db.execute(stmt)
+    return int(result.scalar_one())
+
 async def get_risk_profile_by_supplier(
     db: AsyncSession,
     supplier_id: UUID,

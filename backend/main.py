@@ -27,6 +27,7 @@ from backend.hitl.router import router as hitl_router
 from backend.domains.batches.router import batches_router, dashboard_router
 from backend.domains.acl.router import router as acl_router
 from backend.domains.regulation.router import router as regulation_router
+from backend.domains.files.router import router as files_router
 
 async def _register_subscriptions() -> None:
     """
@@ -87,6 +88,7 @@ app.include_router(batches_router)
 app.include_router(dashboard_router)
 app.include_router(acl_router)
 app.include_router(regulation_router)
+app.include_router(files_router)
 
 @app.get("/health")
 async def health_check():
