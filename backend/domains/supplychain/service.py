@@ -152,7 +152,7 @@ class SupplyChainService:
         흐름:
           1. repository에서 공급망 협력사 + 필드 보유 현황 조회
           2. regulation service 스텁에서 적용 규제 + 규제별 필수 필드 조회
-          3. 협력사 supplier_type × provider_type_applicable 교차 → missing 계산
+          3. 협력사 provider_type × provider_type_applicable 교차 → missing 계산
           4. 노드별 gap 목록 반환
         """
         from backend.domains.regulation.service import (
@@ -186,13 +186,13 @@ class SupplyChainService:
 
         nodes = []
         for row in supplier_rows:
-            supplier_type = row["supplier_type"]
+            provider_type = row["provider_type"]
             missing: List[Dict[str, str]] = []
 
             for reg in regulations:
                 for field in reg_fields.get(reg["regulation_id"], []):
                     applicable_types = field.get("provider_type_applicable") or []
-                    if applicable_types and supplier_type not in applicable_types:
+                    if applicable_types and provider_type not in applicable_types:
                         continue  # 이 협력사 유형에 해당 없는 필드
                     if not field.get("is_mandatory"):
                         continue  # 선택 필드는 gap으로 집계하지 않음
@@ -210,7 +210,7 @@ class SupplyChainService:
 
             nodes.append({
                 "supplier_id":    str(row["supplier_id"]),
-                "supplier_type":  supplier_type,
+                "provider_type":  provider_type,
                 "depth":          row["depth"],
                 "is_root_anchor": bool(row.get("is_root_anchor", False)),
                 "missing_fields": missing,

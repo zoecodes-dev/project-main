@@ -63,7 +63,7 @@ async def create_supplier_endpoint(
     supplier_data = {
         "tenant_id": current_user.tenant_id,
         "company_name": request.company_name,
-        "supplier_type": request.supplier_type,
+        "provider_type": request.provider_type,
     }
     supplier = await service.create_supplier_and_invite(
         db, supplier_data, request.email, request.inviter_supplier_id
@@ -128,7 +128,7 @@ async def get_supplier_detail_endpoint(
 ):
     """
     협력사 단건 + CTI 상세(provider type별) 조회.
-    supplier_type에 해당하는 detail 1종만 채워져 반환된다. 내 테넌트 소유만(아니면 404).
+    provider_type에 해당하는 detail 1종만 채워져 반환된다. 내 테넌트 소유만(아니면 404).
     """
     supplier = await service.get_supplier_detail(db, supplier_id, current_user.tenant_id)
     if not supplier:

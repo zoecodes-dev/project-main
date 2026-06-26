@@ -182,7 +182,7 @@ async def validate_schema(parsed: dict, provider_type: str) -> ValidationResult:
     onboarding_data_requirements(provider_type)의 required_fields를 조회해
     필수 필드 누락 여부를 검사하고 단위를 정규화한다. (spec 3-5)
  
-    * schema 컬럼명은 provider_type (spec 본문의 supplier_type과 동의어).
+    * schema 컬럼명은 provider_type (spec 본문의 provider_type과 동의어).
     * required_fields는 JSONB 리스트로 가정(["carbon_intensity", ...]).
     """
     async with AsyncSessionLocal() as db:
@@ -266,16 +266,16 @@ async def data_gateway_node(state: BatchState) -> BatchState:
     lowest = 1.0
     unconfirmed = 0
     has_missing = False
-    for r, supplier_type in results:
+    for r, provider_type in results:
         cmap = r.confidence_map or {}
         if cmap:
             lowest = min(lowest, min(cmap.values()))
         if not r.supplier_confirmed:
             unconfirmed += 1
         # 스키마 누락 검사 (spec 노드 정의: "validate_schema를 통한 누락 필드 검사").
-        # supplier_type(=provider_type)으로 onboarding_data_requirements를 조회한다.
-        if supplier_type:
-            vr = await validate_schema(r.parsed_fields or {}, supplier_type)
+        # provider_type(=provider_type)으로 onboarding_data_requirements를 조회한다.
+        if provider_type:
+            vr = await validate_schema(r.parsed_fields or {}, provider_type)
             if not vr.ok:
                 has_missing = True
  
@@ -347,7 +347,7 @@ async def get_integrity_pairs(
     # 키별 '최고 신뢰' 증빙값 집계 (확정 문서만 대상)
     best_doc_value: dict = {}
     best_conf: dict = {}
-    for record, _supplier_type in results:
+    for record, _provider_type in results:
         if not record.supplier_confirmed:
             continue
         parsed = record.parsed_fields or {}
