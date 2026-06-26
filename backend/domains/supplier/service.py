@@ -140,7 +140,6 @@ async def submit_master_form(
       1 탄소발자국         B (manufacturer_details + factory_carbon_declarations)
       2 재활용             B (recycler_details · recycling_efficiency 포함)
       3 원산지·GPS         D GPS(miner_details) + C 원산지 증명서(save_origin_certificates, 지연 import)
-      4 지분·FEOC          E (e_masterform.write_supplier_trader_details)
       5 인권·중대·교육     E (e_masterform.write_supplier_social)
       6 EoL·인증서         E (e_masterform.write_supplier_certifications)
 
@@ -206,10 +205,7 @@ async def submit_master_form(
                 )
                 sections_saved.append("origin_certificates")
 
-        # ── 섹션 4~6: E 제공 write 함수 호출 (동일 트랜잭션) ──────────────────
-        if form.ownership is not None:
-            await e_masterform.write_supplier_trader_details(db, supplier_id, form.ownership)
-            sections_saved.append("ownership")
+        # ── 섹션 5~6: E 제공 write 함수 호출 (동일 트랜잭션) ──────────────────
         if form.social is not None:
             await e_masterform.write_supplier_social(db, supplier_id, factory_ids, form.social)
             sections_saved.append("social")
