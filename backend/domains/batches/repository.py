@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,15 +39,23 @@ _TOTAL_STAGES = len(AGENT_STAGE_META)
 async def list_batches_by_status(
     db: AsyncSession,
     status: str,
+    tenant_id: Optional[UUID] = None,
 ) -> Dict[str, Any]:
     """
     BE-1: 특정 상태 배치 목록을 단계(current_stage)별로 그룹핑해 반환한다.
     status 파라미터는 단축형("processing" 등)을 받아 DB 값으로 변환한다.
+    tenant_id 지정 시 해당 테넌트 배치만(§0.2).
     """
     db_status = _STATUS_MAP.get(status, f"batch_{status}")
 
+    # 테넌트 격리(§0.2): tenant_id 가 있으면 WHERE 절에 추가.
+    tenant_clause = "AND b.tenant_id = :tenant_id" if tenant_id is not None else ""
+    params: Dict[str, Any] = {"status": db_status}
+    if tenant_id is not None:
+        params["tenant_id"] = str(tenant_id)
+
     rows = (await db.execute(
-        text("""
+        text(f"""
             SELECT
                 b.batch_id,
                 b.product_id,
@@ -60,9 +69,10 @@ async def list_batches_by_status(
                 b.external_id
             FROM batches b
             WHERE b.status = :status
+            {tenant_clause}
             ORDER BY b.received_at DESC
         """),
-        {"status": db_status},
+        params,
     )).mappings().fetchall()
 
     by_stage: Dict[str, List[Dict]] = {s: [] for s in _STAGE_ORDER}
@@ -98,9 +108,11 @@ async def list_batches_by_status(
 async def get_batch_detail(
     db: AsyncSession,
     batch_id: str,
+    tenant_id: Optional[UUID] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     BE-3: 배치 상세 조회 — compliance·geo·verification·risk·readiness 5종 판정 결과 포함.
+    tenant_id 지정 시 해당 테넌트 배치만(§0.2) — 남의 테넌트면 None(→404, 존재 은닉).
 
     R7 계약:
       - compliance_result : compliance_results 테이블 집계 (규제코드→verdict 맵 + 상세)
@@ -109,8 +121,14 @@ async def get_batch_detail(
       - risk_result       : supplier_risk_profiles에서 배치 공급망 최고 위험도 조회
       - dpp_result        : dpp_records 테이블
     """
+    # 테넌트 게이트는 배치 행 조회에만 걸면 충분 — 없으면 None 반환되어 하위 집계로 진입하지 않는다.
+    tenant_clause = "AND b.tenant_id = :tenant_id" if tenant_id is not None else ""
+    batch_params: Dict[str, Any] = {"batch_id": batch_id}
+    if tenant_id is not None:
+        batch_params["tenant_id"] = str(tenant_id)
+
     batch_row = (await db.execute(
-        text("""
+        text(f"""
             SELECT
                 b.batch_id, b.product_id, b.bom_version_id, b.tenant_id,
                 b.destination, b.current_stage, b.status,
@@ -118,8 +136,9 @@ async def get_batch_detail(
                 b.received_at, b.source_system, b.external_id
             FROM batches b
             WHERE b.batch_id = :batch_id
+            {tenant_clause}
         """),
-        {"batch_id": batch_id},
+        batch_params,
     )).mappings().fetchone()
 
     if batch_row is None:
@@ -250,20 +269,24 @@ async def get_batch_detail(
     }
 
 
-async def get_dashboard_kpis(db: AsyncSession) -> Dict[str, Any]:
+async def get_dashboard_kpis(
+    db: AsyncSession,
+    tenant_id: Optional[UUID] = None,
+) -> Dict[str, Any]:
     """
     BE-2: 대시보드 집계 8종을 batches/dpp_records/compliance_results에서 추출한다.
+    tenant_id 지정 시 해당 테넌트로 격리(§0.2). dpp_records·compliance_results 는
+    tenant_id 컬럼이 없어 batches(batch_id)로 LEFT JOIN 해 스코프한다.
+      - 미스코프(tenant_id=None, 관리 토큰): 기존 전체 집계 그대로(LEFT JOIN 으로 batch 없는 행도 보존).
+      - 스코프: batch 가 해당 테넌트인 DPP/compliance 만 집계(batch 미연결 행은 귀속 불가로 제외).
 
     KPI 목록:
-      1. total_batches           — 전체 배치 수
-      2. processing_batches      — 처리 중(batch_processing) 수
-      3. hitl_wait_batches       — 사람 검토 대기(batch_hitl_wait) 수
-      4. completed_batches       — 완료(batch_completed) 수
-      5. rejected_batches        — 거부(batch_rejected) 수
-      6. dpp_issued_count        — 발행된 DPP 수
-      7. compliance_pass_rate    — 규제 통과율(%) — compliance_passed / 전체
-      8. avg_confidence_score    — 배치 평균 신뢰도 점수
+      1. total_batches  2. processing_batches  3. hitl_wait_batches  4. completed_batches
+      5. rejected_batches  6. dpp_issued_count  7. compliance_pass_rate  8. avg_confidence_score
     """
+    # CAST(:tenant_id AS uuid) IS NULL → 미스코프(전체), 아니면 tenant 일치 행만.
+    tid = str(tenant_id) if tenant_id is not None else None
+
     batch_row = (await db.execute(text("""
         SELECT
             COUNT(*)                                                          AS total_batches,
@@ -273,23 +296,28 @@ async def get_dashboard_kpis(db: AsyncSession) -> Dict[str, Any]:
             COUNT(*) FILTER (WHERE status = 'batch_rejected')                AS rejected_batches,
             ROUND(AVG(confidence_score)::NUMERIC, 4)                         AS avg_confidence_score
         FROM batches
-    """))).mappings().fetchone()
+        WHERE (CAST(:tenant_id AS uuid) IS NULL OR tenant_id = CAST(:tenant_id AS uuid))
+    """), {"tenant_id": tid})).mappings().fetchone()
 
     dpp_row = (await db.execute(text("""
         SELECT COUNT(*) AS dpp_issued_count
-        FROM dpp_records
-        WHERE status = 'dpp_issued'
-    """))).fetchone()
+        FROM dpp_records d
+        LEFT JOIN batches b ON b.batch_id = d.batch_id
+        WHERE d.status = 'dpp_issued'
+          AND (CAST(:tenant_id AS uuid) IS NULL OR b.tenant_id = CAST(:tenant_id AS uuid))
+    """), {"tenant_id": tid})).fetchone()
 
     cr_row = (await db.execute(text("""
         SELECT
             ROUND(
-                100.0 * COUNT(*) FILTER (WHERE verdict = 'compliance_passed')
+                100.0 * COUNT(*) FILTER (WHERE cr.verdict = 'compliance_passed')
                 / NULLIF(COUNT(*), 0),
                 2
             ) AS compliance_pass_rate
-        FROM compliance_results
-    """))).fetchone()
+        FROM compliance_results cr
+        LEFT JOIN batches b ON b.batch_id = cr.batch_id
+        WHERE (CAST(:tenant_id AS uuid) IS NULL OR b.tenant_id = CAST(:tenant_id AS uuid))
+    """), {"tenant_id": tid})).fetchone()
 
     return {
         "total_batches":        int(batch_row["total_batches"] or 0),

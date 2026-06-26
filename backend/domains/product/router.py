@@ -45,6 +45,7 @@ from backend.domains.product.models import (
 )    
 
 from backend.infrastructure.database import get_db
+from backend.infrastructure.auth import CurrentUser, get_current_user
 
 router = APIRouter(prefix="/products", tags=["Product"])
 
@@ -103,12 +104,13 @@ async def list_products_endpoint(
     ),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     제품 목록 조회. 고객사·모델·암페어 범위 필터 지원.
     응답에 customer_name 포함 (Customer 테이블 조인).
-    파라미터 없이 호출하면 전체 목록.
+    파라미터 없이 호출하면 내 테넌트 전체 목록(§0.2).
     """
     return await service.list_products_filtered(
         db=db,
@@ -118,6 +120,7 @@ async def list_products_endpoint(
         max_ah=max_ah,
         limit=limit,
         offset=offset,
+        tenant_id=current_user.tenant_id,
     )
 
 
@@ -128,13 +131,16 @@ async def list_products_endpoint(
 @router.get("/{product_id}", response_model=ProductBrief)
 async def get_product_endpoint(
     product_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    제품 단건 조회.
+    제품 단건 조회. 내 테넌트 소유만(아니면 404, 존재 은닉).
     존재하지 않는 product_id → 404 (service에서 처리, 여기서 중복 체크 안 함).
     """
-    return await service.get_product(db=db, product_id=product_id)
+    return await service.get_product(
+        db=db, product_id=product_id, tenant_id=current_user.tenant_id
+    )
 
 # ---------------------------------------------------------------------------
 # POST /products/bom-versions/{bom_version_id}/activate — BOM 버전 활성화

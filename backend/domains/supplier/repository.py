@@ -45,8 +45,13 @@ async def create_supplier(db: AsyncSession, supplier_data: dict) -> Supplier:
 async def get_supplier_by_id(
     db: AsyncSession,
     supplier_id: UUID,
+    tenant_id: Optional[UUID] = None,
 ) -> Optional[Supplier]:
-    """단건 조회. CTI 상세 + 공장을 미리 로드."""
+    """
+    단건 조회. CTI 상세 + 공장을 미리 로드.
+    tenant_id 지정 시 해당 테넌트 소유만(§0.2) — 남의 테넌트 것은 None(→호출부 404).
+    내부 플로우(마스터폼 등)는 tenant_id 생략해 무필터로 쓴다.
+    """
     stmt = (
         select(Supplier)
         .where(Supplier.supplier_id == supplier_id)
@@ -58,8 +63,25 @@ async def get_supplier_by_id(
             selectinload(Supplier.factories),
         )
     )
+    if tenant_id is not None:
+        stmt = stmt.where(Supplier.tenant_id == tenant_id)
     result = await db.execute(stmt)
     return result.scalars().first()
+
+async def supplier_in_tenant(
+    db: AsyncSession,
+    supplier_id: UUID,
+    tenant_id: Optional[UUID],
+) -> bool:
+    """
+    소유권 경량 확인(§0.2). 하위 리소스(esg/training/factories…) 조회 전 게이트용.
+    tenant_id=None 이면 무스코프(True 반환 — 내부/관리 토큰). PK·tenant만 조회해 가볍다.
+    """
+    stmt = select(Supplier.supplier_id).where(Supplier.supplier_id == supplier_id)
+    if tenant_id is not None:
+        stmt = stmt.where(Supplier.tenant_id == tenant_id)
+    result = await db.execute(stmt)
+    return result.scalars().first() is not None
 
 async def get_suppliers(
     db: AsyncSession,
@@ -68,16 +90,19 @@ async def get_suppliers(
     feoc_status: Optional[str] = None,
     page: int = 1,
     size: int = 20,
+    tenant_id: Optional[UUID] = None,
 ) -> List[Supplier]:
     """목록 조회(필터 + 페이지네이션). 기본값 None 인자는 Optional로 명시."""
     stmt = select(Supplier)
+    if tenant_id is not None:
+        stmt = stmt.where(Supplier.tenant_id == tenant_id)
     if status:
         stmt = stmt.where(Supplier.status == status)
     if risk_level:
         stmt = stmt.where(Supplier.risk_level == risk_level)
     if feoc_status:
         stmt = stmt.where(Supplier.feoc_status == feoc_status)
- 
+
     # 서버 강제 페이지네이션 (N+1 방지 + 응답 크기 제한)
     page = max(page, 1)
     size = min(max(size, 1), 100)
@@ -86,7 +111,7 @@ async def get_suppliers(
         .limit(size)
         .offset((page - 1) * size)
     )
- 
+
     result = await db.execute(stmt)
     return result.scalars().all()
  

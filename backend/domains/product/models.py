@@ -244,6 +244,17 @@ class Product(Base):
     )
 
     # ------------------------------------------------------------------
+    # 테넌트(소유 원청) — 테넌트 격리(§0.2). 마이그레이션 0002 에서 추가.
+    #   baseline 에는 없던 컬럼. nullable(suppliers/batches.tenant_id 와 동일 정책).
+    # ------------------------------------------------------------------
+    tenant_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.tenant_id"),
+        nullable=True,
+        comment="소유 원청 테넌트 FK → tenants.tenant_id. 목록/상세 테넌트 격리 기준.",
+    )
+
+    # ------------------------------------------------------------------
     # 도메인 내부 FK (Customer) — relationship 선언
     # ------------------------------------------------------------------
     customer_id = Column(
