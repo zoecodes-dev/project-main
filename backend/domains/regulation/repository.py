@@ -23,6 +23,12 @@ backend/domains/regulation/repository.py  (담당: 팀원 C — 은지)
   ── [TODO: D 머지 후] ──
   get_required_fields()  : regulation_required_fields 테이블에서 조회
 
+  ── [신규 §2.3a / §7.1] ──
+  get_violations()            : compliance_results(verdict=violation) 조회 (tenant 격리)
+  get_regulation_results()    : compliance_results 전체 조회 (HITL 포함, tenant 격리)
+  count_violations()          : get_violations 필터 동일, 전체 건수만
+  count_regulation_results()  : get_regulation_results 필터 동일, 전체 건수만
+
 [중요 규칙]
   - 이 파일의 모든 함수는 db.commit()을 호출하지 않는다.
     commit은 호출자(service)가 담당한다.
@@ -67,18 +73,12 @@ async def get_all(
     [사용 예시]
       eu_regs = await get_all(db, region="EU")
     """
-    # ── SQLAlchemy select 구문 구성 ──
-    # select(Regulation): "SELECT * FROM regulations" 와 동일.
-    # .where()로 조건 추가, .order_by()로 정렬.
     stmt = select(Regulation).order_by(Regulation.regulation_code)
 
     if region is not None:
         stmt = stmt.where(Regulation.region == region)
 
     result = await db.execute(stmt)
-
-    # .scalars(): Row 객체에서 ORM 인스턴스만 추출.
-    # .all(): 리스트로 변환.
     return list(result.scalars().all())
 
 
@@ -94,11 +94,6 @@ async def get_by_code(
 
     [반환]
       Regulation ORM 객체. 없으면 None.
-
-    [사용 예시]
-      reg = await get_by_code(db, "EU_BATTERY")
-      if reg is None:
-          raise HTTPException(404, "규제를 찾을 수 없습니다.")
     """
     stmt = select(Regulation).where(
         Regulation.regulation_code == regulation_code
@@ -114,33 +109,20 @@ async def get_by_destination(
     """
     destination(출하 시장)에 적용되는 규제 목록을 조회한다.
 
-    [기존 compliance.py REGULATION_BY_DESTINATION 매핑을 DB 쿼리로 대체]
-      기존: 파이썬 딕셔너리에 하드코딩 → 규제 추가 시 코드 수정 필요
-      신규: regulations.region 컬럼 기반 DB 쿼리 → 시드 데이터만 추가하면 됨
-
     [destination → region 매핑 규칙]
       "EU"   → region = 'EU'  인 규제
       "US"   → region = 'US'  인 규제
       "BOTH" → region IN ('EU', 'US', 'BOTH') — 합집합
       "KR"   → 빈 리스트 (국내 출하는 글로벌 규제 검사 대상 없음)
-
-    [파라미터]
-      destination : batches.destination 값 ('EU' / 'US' / 'BOTH' / 'KR')
-
-    [반환]
-      Regulation ORM 리스트. KR이면 빈 리스트.
     """
-    # KR(국내 출하)은 글로벌 규제 검사 대상 없음 — 즉시 빈 리스트
     if destination == "KR":
         return []
 
     stmt = select(Regulation).order_by(Regulation.regulation_code)
 
     if destination == "BOTH":
-        # EU + US + BOTH 합집합 (CONFLICT_MINERALS 같은 양쪽 적용 규제 포함)
         stmt = stmt.where(Regulation.region.in_(["EU", "US", "BOTH"]))
     else:
-        # EU 또는 US 단일 시장
         stmt = stmt.where(Regulation.region == destination)
 
     result = await db.execute(stmt)
@@ -163,54 +145,15 @@ async def search_by_embedding(
 
     [기존 위치] compliance.py search_regulations()
     [이관 이유] 규제 데이터 접근은 regulation 도메인 repository의 책임.
-               compliance.py는 이 함수를 호출하기만 한다.
-
-    [동작 흐름]
-      1. query_text를 Bedrock Cohere Embed v4 벡터로 변환
-         (embedding_factory.embed_query 호출)
-      2. regulations 테이블에서 regulation_code 필터 +
-         embedding_status='indexed' 조건으로
-         코사인 거리(<=> 연산자)가 가장 작은 row top_k개 반환
-      3. 각 row를 dict로 변환
-
-    [파라미터]
-      query_text      : 검색할 자연어 쿼리 (예: "carbon footprint declaration")
-      regulation_code : 검색 범위를 한정할 규제 코드 (예: "EU_BATTERY_ART7")
-      top_k           : 반환할 최대 결과 수 (기본 3)
-
-    [반환]
-      규제 조항 dict 리스트. 각 항목에 similarity 점수 포함.
 
     [주의]
       - embedding_status='indexed' 인 row만 검색 대상.
-        seed_regulation_embeddings.py를 먼저 실행해야 한다.
-      - idx_regulations_embedding (hnsw, vector_cosine_ops) 인덱스가
-        schema.sql에 정의돼 있어 대용량에도 빠르게 동작한다.
+      - lazy import: Bedrock 미연결 환경에서 무관 엔드포인트 타임아웃 방지.
     """
-    # ──────────────────────────────────────────────────────────────
-    # [②-2 lazy import] embed_query를 함수 안에서만 import
-    #
-    #   변경 전 (모듈 레벨 import — 문제):
-    #     파일 상단에 `from backend.llm.embedding_factory import embed_query`
-    #     → regulation 도메인이 로드될 때마다 langchain_aws(Bedrock)를 끌어옴
-    #     → /supply-chain/gaps 같은 Bedrock와 무관한 엔드포인트도
-    #       langchain_aws 초기화를 시도 → AWS 없는 로컬에서 타임아웃/행
-    #
-    #   변경 후 (lazy import — 해결):
-    #     embed_query가 실제로 필요한 이 함수 안에서만 import
-    #     → get_by_destination(), get_required_fields() 등 DB 전용 함수는
-    #       langchain_aws를 전혀 건드리지 않음
-    #     → /supply-chain/gaps 정상 응답 (200)
-    # ──────────────────────────────────────────────────────────────
     from backend.llm.embedding_factory import embed_query  # noqa: PLC0415
 
-    # 1단계: 쿼리 텍스트를 벡터로 변환
-    # embed_query()는 embedding_factory.py의 동기 함수 (Bedrock 호출)
     query_vector: list[float] = embed_query(query_text)
 
-    # 2단계: pgvector 코사인 유사도 검색
-    # <=> 연산자: 코사인 거리 (0에 가까울수록 유사)
-    # 1.0 - distance = similarity (1에 가까울수록 유사)
     sql = text("""
         SELECT
             regulation_id::text,
@@ -262,8 +205,6 @@ async def search_by_embedding(
 # │   3. service.py의 get_required_fields()에서 이 함수 호출       │
 # └──────────────────────────────────────────────────────────────┘
 
-# ── 임시 더미 데이터 (D 머지 전까지만 사용) ──
-# compliance.py _build_judge_context() 키 이름과 일치시킴
 _TEMP_REQUIRED_FIELDS: dict[str, list[dict[str, Any]]] = {
     "EU_BATTERY": [
         {"field_name": "recycled_content_ratio", "field_type": "number",
@@ -304,30 +245,7 @@ async def get_required_fields(
 ) -> list[dict[str, Any]]:
     """
     [TODO — D 머지 후 DB 쿼리로 교체]
-    현재는 더미 데이터 반환. D의 C1(regulation_required_fields DDL + 시드) 완료 후
-    아래 주석 처리된 실제 DB 쿼리로 교체한다.
-
-    [D 머지 후 교체할 코드]
-    ───────────────────────────────
-    # from backend.domains.regulation.models import RegulationRequiredField
-    #
-    # stmt = (
-    #     select(RegulationRequiredField)
-    #     .join(Regulation)
-    #     .where(Regulation.regulation_code == regulation_code)
-    # )
-    # result = await db.execute(stmt)
-    # rows = result.scalars().all()
-    # return [
-    #     {
-    #         "field_name":               row.field_name,
-    #         "field_type":               row.field_type,
-    #         "is_mandatory":             True,  # 테이블 구조에 따라 조정
-    #         "provider_type_applicable": row.provider_type_applicable or [],
-    #     }
-    #     for row in rows
-    # ]
-    ───────────────────────────────
+    현재는 더미 데이터 반환.
     """
     fields = _TEMP_REQUIRED_FIELDS.get(regulation_code, [])
 
@@ -354,50 +272,9 @@ async def write_origin_certificates(
     """
     마스터폼 섹션 3의 원산지 인증서 데이터를 origin_certificates 테이블에 삽입한다.
 
-    [호출 흐름]
-      POST /suppliers/{id}/master-form
-        → B의 supplier/service.py (마스터폼 진입점)
-          → 이 함수 호출 (섹션 3 원산지 인증서 분배)
-          → 단일 트랜잭션 commit (B의 service가 담당)
-
-    [왜 ORM이 아닌 raw SQL을 쓰는가]
-      origin_certificates 테이블의 ORM 모델(OriginCertificate)은
-      B(은진) 담당의 supplier/models.py에 정의돼 있다.
-      경계 규칙(남의 도메인 import 금지)을 지키기 위해
-      raw SQL(text())로 INSERT한다.
-      compliance.py의 _insert_compliance_result()과 동일한 패턴.
-
     [중요 — flush만, commit 금지]
       이 함수는 마스터폼의 단일 트랜잭션 내에서 호출된다.
-      flush(): SQL을 DB에 전송하되 트랜잭션은 열어둔다.
-      commit(): B의 service가 모든 섹션 write 완료 후 일괄 수행.
-      한 섹션이라도 실패하면 전체 rollback (atomic 보장).
-
-    [파라미터]
-      db            : SQLAlchemy 비동기 세션
-      supplier_id   : 마스터폼 제출 주체인 협력사의 UUID 문자열
-      certificates  : MasterFormOriginCert Pydantic 모델을 dict로 변환한 리스트
-                      각 항목 필드:
-                        cert_type          (str)  : FTA/GSP/UFLPA_REBUTTAL/IRA_ORIGIN/CONFLICT_FREE/GENERAL
-                        cert_number        (str?) : 인증서 번호
-                        issuing_authority  (str?) : 발급 기관
-                        issued_at          (date?): 발급일
-                        expires_at         (date) : 만료일 (필수 — 12개월 자동 검증 대상)
-                        origin_country     (str?) : ISO 3166-1 alpha-2 국가 코드
-                        covered_minerals   (dict?): 적용 광물 종류 JSONB
-                        document_url       (str?) : 증빙 문서 URL
-
-    [반환]
-      생성된 cert_id UUID 문자열 리스트. B의 service가 응답에 포함할 수 있도록.
-
-    [사용 예시 — B의 service에서]
-      from backend.domains.regulation.repository import write_origin_certificates
-
-      cert_ids = await write_origin_certificates(
-          db=db,
-          supplier_id=str(supplier_id),
-          certificates=[cert.model_dump() for cert in form.origin.origin_certificates],
-      )
+      B의 service가 모든 섹션 write 완료 후 commit() 일괄 수행.
     """
     created_ids: list[str] = []
 
@@ -446,8 +323,6 @@ async def write_origin_certificates(
             cert_id, supplier_id, cert["cert_type"],
         )
 
-    # flush: SQL을 DB에 전송하되 커밋은 하지 않는다.
-    # B의 service가 모든 섹션 write 완료 후 commit() 일괄 수행.
     await db.flush()
 
     logger.info(
@@ -456,3 +331,248 @@ async def write_origin_certificates(
     )
 
     return created_ids
+
+
+# ============================================================
+# 5. [신규 §2.3a] compliance_results 위반 목록 조회
+#    ★ tenant 격리: compliance_results에 tenant_id 없음
+#      → batches JOIN으로 batches.tenant_id 필터링
+# ============================================================
+
+# severity 매핑: compliance_results의 reasoning_text 등 추가 컨텍스트가 없으므로
+# regulation.region 기반으로 휴리스틱 매핑.
+# EU 규제(EUDR, EU_BATTERY 등) 위반 → critical
+# US 규제(IRA, UFLPA 등) 위반 → high
+# 나머지 → minor
+_REGION_TO_SEVERITY: dict[str, str] = {
+    "EU":   "critical",
+    "US":   "high",
+    "BOTH": "high",
+}
+
+
+def _map_severity(region: Optional[str]) -> str:
+    """regulation.region → severity(critical/high/minor) 매핑."""
+    return _REGION_TO_SEVERITY.get(region or "", "minor")
+
+
+async def get_violations(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    supplier_id: Optional[uuid.UUID] = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    위반(verdict = 'compliance_violation') 건만 조회한다.
+
+    ★ 보안 핵심: compliance_results에 tenant_id 컬럼이 없으므로
+      batches 테이블과 INNER JOIN해 batches.tenant_id = :tenant_id 조건으로
+      현재 테넌트 데이터만 노출한다. (dashboard get_dashboard_kpis 동일 패턴)
+
+    [파라미터]
+      db          : AsyncSession
+      tenant_id   : 현재 로그인 사용자의 테넌트 UUID (get_current_user에서 주입)
+      supplier_id : 선택 필터 — 특정 공급사만 볼 때 사용 (§13.1 위임용)
+      limit       : 반환 최대 건수 (기본 50)
+
+    [반환]
+      violation_id, batch_id, supplier_id, regulation, regulation_label,
+      region, severity, summary, detected_at, status 포함 dict 리스트.
+
+    [공유 계약]
+      supplier §13.1 GET /suppliers/{id}/violations 도 이 함수를 위임받아 사용.
+      supplier_id 인자만 채워서 호출하면 된다.
+    """
+    params: dict[str, Any] = {
+        "tenant_id": str(tenant_id),
+        "limit":     limit,
+    }
+
+    supplier_filter = ""
+    if supplier_id is not None:
+        supplier_filter = "AND cr.supplier_id = :supplier_id"
+        params["supplier_id"] = str(supplier_id)
+
+    sql = text(f"""
+        SELECT
+            cr.result_id                    AS violation_id,
+            cr.batch_id,
+            cr.supplier_id,
+            r.regulation_code               AS regulation,
+            r.name                          AS regulation_label,
+            r.region,
+            cr.reasoning_text               AS summary,
+            cr.created_at                   AS detected_at,
+            b.status
+        FROM compliance_results cr
+        INNER JOIN batches b
+            ON cr.batch_id = b.batch_id
+           AND b.tenant_id = :tenant_id::uuid      -- ★ tenant 격리 핵심
+        LEFT JOIN regulations r
+            ON cr.regulation_id = r.regulation_id
+        WHERE
+            cr.verdict = 'compliance_violation'
+            {supplier_filter}
+        ORDER BY cr.created_at DESC
+        LIMIT :limit
+    """)
+
+    rows = (await db.execute(sql, params)).fetchall()
+
+    return [
+        {
+            "violation_id":      str(row.violation_id),
+            "batch_id":          str(row.batch_id),
+            "supplier_id":       str(row.supplier_id),
+            "regulation":        row.regulation,
+            "regulation_label":  row.regulation_label,
+            "region":            row.region,
+            "severity":          _map_severity(row.region),
+            "summary":           row.summary,
+            "detected_at":       row.detected_at.isoformat() if row.detected_at else None,
+            "status":            row.status,
+        }
+        for row in rows
+    ]
+
+
+async def count_violations(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    supplier_id: Optional[uuid.UUID] = None,
+) -> int:
+    """
+    get_violations과 동일한 필터로 전체 건수만 반환한다.
+    X-Total-Count 헤더 계산용.
+    """
+    params: dict[str, Any] = {"tenant_id": str(tenant_id)}
+
+    supplier_filter = ""
+    if supplier_id is not None:
+        supplier_filter = "AND cr.supplier_id = :supplier_id"
+        params["supplier_id"] = str(supplier_id)
+
+    sql = text(f"""
+        SELECT COUNT(*) AS total
+        FROM compliance_results cr
+        INNER JOIN batches b
+            ON cr.batch_id = b.batch_id
+           AND b.tenant_id = :tenant_id::uuid
+        WHERE
+            cr.verdict = 'compliance_violation'
+            {supplier_filter}
+    """)
+
+    result = await db.execute(sql, params)
+    return result.scalar() or 0
+
+
+# ============================================================
+# 6. [신규 §7.1] compliance_results 전체 조회 (materials 규제 결과)
+#    ★ tenant 격리: 동일하게 batches JOIN
+# ============================================================
+
+# verdict 정규화: DB 저장값 → 프론트 표기 4종
+_VERDICT_MAP: dict[str, str] = {
+    "compliance_passed":    "passed",
+    "compliance_violation": "violation",
+    "compliance_warning":   "warning",
+    "compliance_reject":    "reject",
+}
+
+# HITL 후보 기준 (confidence < 0.85)
+_HITL_THRESHOLD = 0.85
+
+
+async def get_regulation_results(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    page: int = 1,
+    size: int = 20,
+) -> list[dict[str, Any]]:
+    """
+    규제 판정 전체 목록(§7.1 /materials/regulation-results)을 조회한다.
+
+    ★ 보안 핵심: batches INNER JOIN으로 tenant 격리 (get_violations와 동일 패턴).
+
+    [HITL 후보 식별]
+      confidence_score < 0.85 인 row에 needs_human_review = True 플래그.
+      confidence_score는 batches 테이블의 confidence_score 컬럼 활용.
+
+    [반환 필드]
+      result_id, material, supplier_id, supplier_name, regulation,
+      verdict(passed/violation/warning/reject), confidence,
+      needs_human_review(bool), evidence(배열)
+
+    [evidence 구조]
+      compliance_results에 별도 evidence 테이블이 없으므로
+      현재는 빈 배열로 반환. 추후 submission_documents 연계 시 교체.
+    """
+    offset = (page - 1) * size
+    params: dict[str, Any] = {
+        "tenant_id": str(tenant_id),
+        "limit":     size,
+        "offset":    offset,
+    }
+
+    sql = text("""
+        SELECT
+            cr.result_id,
+            b.product_id                    AS material,   -- 현재 product_id를 material 식별자로 사용
+            cr.supplier_id,
+            s.company_name                  AS supplier_name,
+            r.regulation_code               AS regulation,
+            cr.verdict,
+            b.confidence_score              AS confidence,
+            cr.needs_human_review
+        FROM compliance_results cr
+        INNER JOIN batches b
+            ON cr.batch_id = b.batch_id
+           AND b.tenant_id = :tenant_id::uuid      -- ★ tenant 격리 핵심
+        LEFT JOIN regulations r
+            ON cr.regulation_id = r.regulation_id
+        LEFT JOIN suppliers s
+            ON cr.supplier_id = s.supplier_id
+        ORDER BY cr.created_at DESC
+        LIMIT :limit OFFSET :offset
+    """)
+
+    rows = (await db.execute(sql, params)).fetchall()
+
+    return [
+        {
+            "result_id":          str(row.result_id),
+            "material":           str(row.material) if row.material else None,
+            "supplier_id":        str(row.supplier_id),
+            "supplier_name":      row.supplier_name,
+            "regulation":         row.regulation,
+            "verdict":            _VERDICT_MAP.get(row.verdict, row.verdict),
+            "confidence":         float(row.confidence) if row.confidence is not None else None,
+            # confidence가 없거나 임계값 미만이면 HITL 후보
+            "needs_human_review": (
+                row.needs_human_review
+                or (row.confidence is not None and float(row.confidence) < _HITL_THRESHOLD)
+            ),
+            "evidence":           [],  # TODO: submission_documents 연계 후 채움
+        }
+        for row in rows
+    ]
+
+
+async def count_regulation_results(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+) -> int:
+    """
+    get_regulation_results와 동일한 필터로 전체 건수만 반환한다.
+    X-Total-Count 헤더 계산용.
+    """
+    sql = text("""
+        SELECT COUNT(*) AS total
+        FROM compliance_results cr
+        INNER JOIN batches b
+            ON cr.batch_id = b.batch_id
+           AND b.tenant_id = :tenant_id::uuid
+    """)
+    result = await db.execute(sql, {"tenant_id": str(tenant_id)})
+    return result.scalar() or 0
