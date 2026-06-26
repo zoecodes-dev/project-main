@@ -154,6 +154,18 @@ services:
     container_name: kira-worker-notification
     command: ["arq", "backend.workers.notification_worker.WorkerSettings"]
 
+  worker-submission:
+    build: *worker-build
+    networks:
+      - project_net
+    env_file:
+      - ./.env
+    environment: *worker-env
+    depends_on: *worker-deps
+    restart: always
+    container_name: kira-worker-submission
+    command: ["arq", "backend.workers.submission_worker.WorkerSettings"]
+
 
   # Layer 0: Nginx 리버스 프록시 (정문 — gzip 압축 + app 전달)
   nginx:

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.database import get_db
+from backend.infrastructure.auth import CurrentUser, get_current_user
 from backend.domains.batches.repository import (
     list_batches_by_status,
     get_dashboard_kpis,
@@ -21,25 +22,27 @@ async def get_batches(
         "processing",
         description="배치 상태 필터 (processing | hitl_wait | completed | rejected)",
     ),
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     BE-1: GET /batches?status=processing
 
     지정된 상태의 배치 목록을 단계(current_stage)별로 그룹핑해 반환합니다.
-    기본값은 처리 중(processing)입니다.
+    기본값은 처리 중(processing)입니다. 내 테넌트 배치만(§0.2).
 
     Response:
         status     — 조회된 DB 상태값
         total      — 해당 상태 배치 전체 수
         by_stage   — { stage_name: [batch, ...] } 단계별 배치 목록
     """
-    return await list_batches_by_status(db, status)
+    return await list_batches_by_status(db, status, current_user.tenant_id)
 
 
 @batches_router.get("/{batch_id}")
 async def get_batch(
     batch_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -56,14 +59,17 @@ async def get_batch(
         risk_result        — {max_risk_score, has_high_risk}
         dpp_result         — {dpp_id, status, issued_at}  (미발행 시 null)
     """
-    result = await get_batch_detail(db, str(batch_id))
+    result = await get_batch_detail(db, str(batch_id), current_user.tenant_id)
     if result is None:
         raise HTTPException(status_code=404, detail="배치를 찾을 수 없습니다.")
     return result
 
 
 @dashboard_router.get("/kpis")
-async def get_kpis(db: AsyncSession = Depends(get_db)):
+async def get_kpis(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
     BE-2: GET /dashboard/kpis
 
@@ -79,5 +85,6 @@ async def get_kpis(db: AsyncSession = Depends(get_db)):
         6. dpp_issued_count        발행 DPP 수
         7. compliance_pass_rate    규제 통과율(%)
         8. avg_confidence_score    평균 신뢰도 점수
+    (내 테넌트로 격리 — §0.2)
     """
-    return await get_dashboard_kpis(db)
+    return await get_dashboard_kpis(db, current_user.tenant_id)
