@@ -323,16 +323,19 @@ class ProductRepository:
     async def get_product(
         self,
         product_id: UUID,
+        tenant_id: Optional[UUID] = None,
     ) -> Optional[Product]:
         """
         product_id로 제품 단건을 조회한다.
+        tenant_id 지정 시 소유 테넌트만(§0.2) — 남의 테넌트면 None(→404, 존재 은닉).
 
         [반환]
         존재하면 Product ORM 객체, 없으면 None.
         """
-        result = await self.session.execute(
-            select(Product).where(Product.product_id == product_id)
-        )
+        stmt = select(Product).where(Product.product_id == product_id)
+        if tenant_id is not None:
+            stmt = stmt.where(Product.tenant_id == tenant_id)
+        result = await self.session.execute(stmt)
         return result.scalars().first()
 
     # -----------------------------------------------------------------------
@@ -616,6 +619,7 @@ class ProductRepository:
         max_ah: Optional[float] = None,
         limit: int = 20,
         offset: int = 0,
+        tenant_id: Optional[UUID] = None,
     ) -> List[Tuple[Product, Optional[str]]]:
         """
         고객사·모델·암페어 범위로 제품을 필터링하여 반환한다.
@@ -638,6 +642,9 @@ class ProductRepository:
         )
 
         conditions = []
+        # 테넌트 격리(§0.2): tenant_id 지정 시 소유 테넌트 제품만(0002 마이그레이션 컬럼).
+        if tenant_id is not None:
+            conditions.append(Product.tenant_id == tenant_id)
         if customer_id is not None:
             conditions.append(Product.customer_id == customer_id)
         if model_name is not None:

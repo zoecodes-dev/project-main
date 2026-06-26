@@ -240,18 +240,19 @@ async def import_products(
 async def get_product(
     db: AsyncSession,
     product_id: UUID,
+    tenant_id: Optional[UUID] = None,
 ) -> Dict[str, Any]:
     """
-    product_id로 제품 단건을 조회한다.
+    product_id로 제품 단건을 조회한다. tenant_id 지정 시 소유 테넌트만(§0.2).
 
     [예외]
-    존재하지 않는 product_id → HTTP 404.
+    존재하지 않거나 내 테넌트 소유가 아니면 → HTTP 404(존재 은닉).
 
     [반환]
     제품 정보 dict. source_system / synced_at 포함 (결정 #1).
     """
     repo = ProductRepository(db)
-    product = await repo.get_product(product_id=product_id)
+    product = await repo.get_product(product_id=product_id, tenant_id=tenant_id)
 
     if product is None:
         raise HTTPException(
@@ -452,9 +453,10 @@ async def list_products_filtered(
     max_ah: Optional[float] = None,
     limit: int = 20,
     offset: int = 0,
+    tenant_id: Optional[UUID] = None,
 ) -> List[Dict[str, Any]]:
     """
-    고객사·모델·암페어 범위 필터로 제품 목록을 반환한다.
+    고객사·모델·암페어 범위 필터로 제품 목록을 반환한다. tenant_id 지정 시 소유 테넌트만(§0.2).
 
     repository에서 (Product, customer_name) 튜플로 오는 걸
     여기서 dict로 펼쳐요. customer_name은 조인 결과라서
@@ -468,6 +470,7 @@ async def list_products_filtered(
         max_ah=max_ah,
         limit=limit,
         offset=offset,
+        tenant_id=tenant_id,
     )
 
     return [

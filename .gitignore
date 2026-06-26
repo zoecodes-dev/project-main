@@ -34,6 +34,8 @@ backend/scripts/
 CLAUDE.md
 # 개인 학습용 상세 설명서 (공유 안 함)
 ci/GUIDE.md
+# 작업 배분/계약 문서 (깃에 올리지 않음 — 팀 공유는 별도)
+docs/
 # CI 생성 아티팩트 (리포트/테스트 결과)
 ci/report.md
 ci/pytest-results.xml
