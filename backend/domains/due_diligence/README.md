@@ -38,12 +38,16 @@
 - 도메인 격리: 타 도메인 import 금지. **예외 — 파일 저장은 공통 `/files` 모듈(B의 P1-C 산출물)** 을 §7 합의에 따라 service에서 호출(`backend.domains.files.service.upload_file`).
 
 ## 7. 보고서 업로드 흐름 (5.4)
-1. multipart field `file` 수신 → `await file.read()`.
-2. `file_service.upload_file(...)` 로 S3 저장 + `files` insert(내부 commit) → `file_id` 수령.
-3. `update_report`로 `report_file_id`/`result`/`score` `COALESCE` 갱신(미전달 값은 기존 유지).
-4. 테넌트 소유 확인 실패 시 `None` → 404.
+1. **소유권 선검사**: `audit_exists_for_tenant(audit_id, tenant_id)` — 타 테넌트/미존재면 S3 업로드 **전에** `None` → 404. (불필요한 S3 write 방지 — 검사 전 업로드하던 순서를 교정)
+2. multipart field `file` 수신 → `await file.read()`.
+3. `file_service.upload_file(...)` 로 S3 저장 + `files` insert(내부 commit) → `file_id` 수령.
+4. `update_report`로 `report_file_id`/`result`/`score` `COALESCE` 갱신(미전달 값은 기존 유지, 내부 소유권 재검사를 안전망으로 유지).
 
 ## 8. 제약 사항
 - 모든 주요 쿼리 `@trace_tool` 적용.
 - `result` 값은 스키마 CHECK 제약(`pass|conditional_pass|fail|pending`) 준수 필요.
 - `findings`/`corrective_actions`는 JSONB — raw `text()` 쿼리에서 문자열로 반환될 수 있어 service `_normalize_jsonb`로 list 정규화.
+
+## 9. 설계 결정 / 보류 (2026-06-26)
+- **5.4 S3 끝단 검증 보류(환경 제약)**: 로컬에 S3 자격증명이 없어 `multipart → /files → S3` 경로 끝단 검증 시 `NoCredentialsError` 발생(regulation 임베딩과 동일한 기존 환경 제약). **코드 배선은 정상**으로 확인됨. S3/MinIO 구성 후 끝단 검증은 후속으로 미룸.
+- **5.5 없는 capaId → 404**: `corrective_actions` 배열에 매칭되는 `capa_id`가 0건이면 repository가 `None`을 반환해 라우터가 404("Audit or CAPA not found")를 응답. (이전엔 UPDATE가 미변경 행을 반환해 조용한 200 no-op이 되던 갭을 교정. auditId 미존재/타 테넌트는 기존대로 404.)
