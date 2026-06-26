@@ -561,10 +561,12 @@ class SupplyChainRepository:
         supplier_ids = list({str(r["supplier_id"]) for r in supply_chain_map if r["supplier_id"]})
         suppliers: List[Dict[str, Any]] = []
         if supplier_ids:
+            # 내부용 tenant_id는 응답에서 제외 — 프론트 불필요 필드.
+            # (suppliers는 이미 tenant 격리된 supply_chain_map에 등장하는 노드로 한정됨)
             sup_query = text("""
                 SELECT
                     s.supplier_id, s.company_name, s.supplier_type, s.status, s.risk_level,
-                    s.feoc_status, s.completeness_score, s.tenant_id
+                    s.feoc_status, s.completeness_score
                 FROM suppliers s
                 WHERE s.supplier_id = ANY(:ids)
             """)

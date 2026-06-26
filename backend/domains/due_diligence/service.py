@@ -77,6 +77,10 @@ class DueDiligenceService:
         보고서 multipart 업로드 → /files 모듈로 S3 저장 → audit record 갱신.
         커밋: file_service.upload_file 내부에서 1회, audit update 후 1회.
         """
+        # 소유권 선검사 — 타 테넌트면 S3 업로드 전에 404 반환(불필요한 S3 write 방지).
+        if not await self.repository.audit_exists_for_tenant(audit_id, tenant_id):
+            return None
+
         data = await file.read()
         file_meta = await file_service.upload_file(
             db,

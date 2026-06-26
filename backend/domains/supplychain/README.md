@@ -93,3 +93,8 @@ HITL(Human-In-The-Loop) 검토 화면에서 지도에 핀을 꽂고 회색지대
   - `suppliers[]` = `SupplierBrief` 형태, `supplier_factories[]` = `SupplierFactory` 형태(`latitude`/`longitude` 분리)
 - `linkStatus` enum(§A-4): `supplychain_declared | supplychain_confirmed`.
 - **10.2b**: 요청 `{ confirmed: true }`(false면 400). 타 테넌트/미존재면 404. 응답 `status`는 link_status enum 원본이 아니라 계약 고정값 `"confirmed"`.
+
+### 14.1 설계 결정 / 의도적 제외 (2026-06-26)
+- **X-Total-Count 미적용 (의도적 제외, N/A)**: 델타 D공통체크의 "supply-chain-map의 배열들도 X-Total-Count" 문구는 비페이징 aggregate 응답에 일괄 규칙이 기계적으로 딸려 들어간 케이스로 판단해 **미적용**. 근거: (1) 맵 화면은 페이지를 나누지 않고 통째로 렌더 → 페이징 자체가 없음, (2) 헤더는 한 칸인데 응답엔 배열 4종(suppliers/factories/map/ratios)이라 "무엇의 개수"인지 모호. 추후 화면에 총개수 노출이 필요하면 헤더가 아니라 응답 본문에 `counts:{...}` 묶음으로 추가하는 방향(헤더 재사용 금지).
+- **geo-risk(신장/국가불일치/EUDR) ↔ 맵 분리 유지**: 3종 적발은 별도 `GET /supply-chain/geo-risks`로 유지하고 10.2a 응답에는 미포함. 지도 위 위험표시는 프론트가 `factory_id` 기준 overlay로 결합(기능 결합도 ↓, 관심사 분리).
+- **suppliers[] 내부 필드 `tenant_id` 제거**: 프론트 불필요 필드라 10.2a `suppliers[]` SELECT에서 drop. suppliers는 이미 tenant 격리된 `supply_chain_map` 노드로 한정되므로 노출 제거가 격리에 영향 없음.
