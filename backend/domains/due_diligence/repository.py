@@ -160,6 +160,19 @@ class DueDiligenceRepository:
 
     # ── 5.4 보고서 업로드 (result / score / report_file_id 갱신) ───────────
 
+    @trace_tool("due_diligence_check_owner")
+    async def audit_exists_for_tenant(self, audit_id: UUID, tenant_id: UUID) -> bool:
+        """audit_record가 해당 테넌트 소유인지 확인. S3 업로드 전 선검사용(→ 타 테넌트 S3 write 방지)."""
+        query = text("""
+            SELECT 1 FROM supplier_audit_records a
+            JOIN suppliers s ON s.supplier_id = a.supplier_id
+            WHERE a.audit_record_id = :audit_id AND s.tenant_id = :tenant_id
+        """)
+        result = await self.session.execute(
+            query, {"audit_id": str(audit_id), "tenant_id": str(tenant_id)}
+        )
+        return result.first() is not None
+
     @trace_tool("due_diligence_update_report")
     async def update_report(
         self,
@@ -220,6 +233,24 @@ class DueDiligenceRepository:
             ownership, {"audit_id": str(audit_id), "tenant_id": str(tenant_id)}
         )
         if not exists.first():
+            return None
+
+        # capa_id가 corrective_actions 배열에 실제 존재하는지 확인 — 0건이면 None(→404).
+        # (UPDATE는 미존재 시에도 행을 반환하므로 조용한 200 no-op이 되는 것을 방지)
+        capa_exists = text("""
+            SELECT 1
+            FROM supplier_audit_records a,
+                 jsonb_array_elements(
+                     CASE WHEN jsonb_typeof(a.corrective_actions) = 'array'
+                          THEN a.corrective_actions ELSE '[]'::jsonb END
+                 ) AS item
+            WHERE a.audit_record_id = :audit_id
+              AND item->>'capa_id' = :capa_id
+        """)
+        capa_found = await self.session.execute(
+            capa_exists, {"audit_id": str(audit_id), "capa_id": capa_id}
+        )
+        if not capa_found.first():
             return None
 
         query = text("""

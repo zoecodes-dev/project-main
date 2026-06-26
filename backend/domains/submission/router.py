@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.auth import CurrentUser, get_current_user
@@ -31,6 +31,14 @@ from backend.domains.submission.service import (
     get_supplier_submission_timeline,
     check_and_record_pipeline_trigger,
     send_overdue_reminders,
+    list_submissions_for_tenant,
+    count_submissions_for_tenant,
+    get_submission_detail_for_tenant,
+)
+from backend.domains.submission.models import (
+    SubmissionBriefOut,
+    SubmissionDetailOut,
+    SubmissionActionIn,
 )
 
 from backend.agents.graph import create_batch
@@ -280,3 +288,108 @@ async def send_reminders_endpoint(db: AsyncSession = Depends(get_db)):
     """
     count = await send_overdue_reminders(db)
     return {"status": "ok", "reminded_count": count}
+
+
+# ── §4.1 /submissions 라우터 (프론트 계약 응답 형태) ──────────────────────
+submissions_router = APIRouter(prefix="/submissions", tags=["Submissions"])
+
+
+@submissions_router.get("", response_model=list[SubmissionBriefOut])
+async def list_submissions(
+    response: Response,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """[API] GET /submissions — 제출 검토 목록 + X-Total-Count. tenant_id 격리."""
+    from backend.infrastructure.pagination import set_total_count
+    items = await list_submissions_for_tenant(db, current_user.tenant_id, skip, limit)
+    total = await count_submissions_for_tenant(db, current_user.tenant_id)
+    set_total_count(response, total)
+    return items
+
+
+@submissions_router.get("/{submission_id}", response_model=SubmissionDetailOut)
+async def get_submission(
+    submission_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """[API] GET /submissions/{submissionId} — 제출 상세. tenant 격리."""
+    detail = await get_submission_detail_for_tenant(db, submission_id, current_user.tenant_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    return detail
+
+
+@submissions_router.patch("/{submission_id}/approve")
+async def approve_submission(
+    submission_id: uuid.UUID,
+    body: SubmissionActionIn,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """[API] PATCH /submissions/{submissionId}/approve — 승인 + 파이프라인 enqueue."""
+    from sqlalchemy import text as _text
+    req_log = await get_submission_detail(db, submission_id)
+    if not req_log:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    batch_id = req_log.batch_id
+    approved = await _handle_status_update(
+        db, submission_id, SubmissionStatus.APPROVED,
+        type("Req", (), {"actor_id": current_user.user_id, "reason": body.reason})(),
+        reason=body.reason, batch_id=batch_id,
+    )
+    if batch_id:
+        row = (await db.execute(
+            _text("SELECT product_id, destination FROM batches WHERE batch_id = :bid"),
+            {"bid": batch_id},
+        )).one_or_none()
+        if row:
+            should_run = await check_and_record_pipeline_trigger(db, submission_id, batch_id)
+            if should_run:
+                await enqueue(
+                    BATCH_PIPELINE_QUEUE,
+                    "start_batch_pipeline",
+                    job_id=f"pipeline:{batch_id}",
+                    batch_id=str(batch_id),
+                    product_id=str(row.product_id),
+                    destination=row.destination,
+                )
+    return approved
+
+
+@submissions_router.patch("/{submission_id}/rework")
+async def rework_submission(
+    submission_id: uuid.UUID,
+    body: SubmissionActionIn,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """[API] PATCH /submissions/{submissionId}/rework — 보완 요청."""
+    if not body.reason:
+        raise HTTPException(status_code=422, detail="보완 요청 시 사유(reason)는 필수입니다.")
+    return await _handle_status_update(
+        db, submission_id, SubmissionStatus.REWORK,
+        type("Req", (), {"actor_id": current_user.user_id, "reason": body.reason})(),
+        reason=body.reason,
+    )
+
+
+@submissions_router.patch("/{submission_id}/reject")
+async def reject_submission(
+    submission_id: uuid.UUID,
+    body: SubmissionActionIn,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """[API] PATCH /submissions/{submissionId}/reject — 반려."""
+    if not body.reason:
+        raise HTTPException(status_code=422, detail="반려 시 사유(reason)는 필수입니다.")
+    return await _handle_status_update(
+        db, submission_id, SubmissionStatus.REJECTED,
+        type("Req", (), {"actor_id": current_user.user_id, "reason": body.reason})(),
+        reason=body.reason,
+    )

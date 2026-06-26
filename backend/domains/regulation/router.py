@@ -9,51 +9,58 @@ backend/domains/regulation/router.py  (담당: 팀원 C — 은지)
   이 파일은 HTTP 요청 파싱 + 응답 직렬화만 담당한다.
 
 [엔드포인트 목록]
+  ── 기존 (규제 마스터 데이터) ──
   GET  /regulations                       전체 규제 목록 (destination 필터)
   GET  /regulations/{code}                규제 단건 조회 (regulation_code)
   GET  /regulations/applicable            제품에 적용되는 규제 목록
   GET  /regulations/{code}/required-fields 규제별 필수 필드 목록
+
+  ── 신규 (compliance_results 판정/위반 데이터) prefix: /regulation ──
+  GET  /regulation/violations             위반 목록 §2.3a
+  GET  /regulation/materials/regulation-results  규제 판정 목록 §7.1
 
 [레이어 규칙]
   여기(router.py) → service.py → repository.py → models.py  (단방향)
   - router는 db.commit() 하지 않는다.
   - router는 비즈니스 로직을 직접 구현하지 않는다.
 
-[FastAPI Depends 패턴 설명 (초보자용)]
-  FastAPI의 Depends()는 의존성 주입(Dependency Injection) 도구다.
-  예: db: AsyncSession = Depends(get_db)
-  → FastAPI가 요청마다 자동으로 DB 세션을 생성해서 db에 넣어주고,
-    응답 후 자동으로 세션을 닫는다.
-  → 개발자는 db 세션 열고/닫기를 직접 관리할 필요가 없다.
-
 [main.py 등록 방법]
   from backend.domains.regulation.router import router as regulation_router
+  from backend.domains.regulation.router import compliance_router
   app.include_router(regulation_router)
+  app.include_router(compliance_router)
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.regulation import service as reg_service
 from backend.domains.regulation.models import RegulationResponse, RequiredFieldResponse
+from backend.infrastructure.auth import CurrentUser, get_current_user
 from backend.infrastructure.database import get_db
+from backend.infrastructure.pagination import set_total_count
 
-# ── 라우터 생성 ──
-# prefix: 이 라우터의 모든 경로 앞에 /regulations가 자동 추가됨
-# tags: Swagger UI에서 그룹핑 이름
+# ── 기존 라우터 (규제 마스터 데이터) ──
 router = APIRouter(
     prefix="/regulations",
     tags=["regulations"],
 )
 
+# ── 신규 라우터 (compliance_results 판정/위반) ──
+# prefix를 /regulation(단수)으로 분리해 기존 /regulations와 충돌 없이 공존
+compliance_router = APIRouter(
+    prefix="/regulation",
+    tags=["Regulation — Compliance Results"],
+)
+
 
 # ============================================================
-# 1. GET /regulations — 전체 규제 목록
+# [기존] 1. GET /regulations — 전체 규제 목록
 # ============================================================
 
 @router.get(
@@ -75,16 +82,10 @@ async def list_regulations(
     [쿼리 파라미터]
       destination (선택): 'EU', 'US', 'BOTH' 중 하나.
                           지정하면 해당 시장에 적용되는 규제만 반환.
-
-    [사용 예시]
-      GET /regulations              → 전체 10건
-      GET /regulations?destination=EU → EU 규제 8건
     """
     if destination:
-        # destination 필터가 있으면 해당 시장 규제만 조회
         regs = await reg_service.get_regulations_by_destination(db, destination)
     else:
-        # 필터 없으면 전체 조회 (repository.get_all 직접 호출)
         from backend.domains.regulation import repository as reg_repo
         orm_list = await reg_repo.get_all(db)
         regs = [
@@ -105,7 +106,7 @@ async def list_regulations(
 
 
 # ============================================================
-# 2. GET /regulations/applicable — 제품에 적용되는 규제
+# [기존] 2. GET /regulations/applicable — 제품에 적용되는 규제
 # ============================================================
 
 @router.get(
@@ -121,19 +122,12 @@ async def get_applicable_regulations(
 ):
     """
     특정 제품에 적용되는 규제 목록을 반환한다.
-
-    [동작]
-      product_id → destination 조회 → 해당 시장 규제 목록 반환.
-      (현재 destination은 기본값 'EU'. A1 머지 후 실제 조회로 교체.)
-
-    [사용 예시]
-      GET /regulations/applicable?product_id=xxxx-xxxx
     """
     return await reg_service.get_applicable_regulations(db, product_id)
 
 
 # ============================================================
-# 3. GET /regulations/{code} — 규제 단건 조회
+# [기존] 3. GET /regulations/{code} — 규제 단건 조회
 # ============================================================
 
 @router.get(
@@ -147,15 +141,7 @@ async def get_regulation_by_code(
 ):
     """
     regulation_code로 규제 단건을 조회한다.
-
-    [경로 파라미터]
-      code : 'EU_BATTERY', 'UFLPA' 등
-
-    [에러]
-      404 : 해당 regulation_code가 존재하지 않는 경우.
-
-    [사용 예시]
-      GET /regulations/EU_BATTERY
+    없으면 404.
     """
     result = await reg_service.get_regulation_by_code(db, code)
 
@@ -169,7 +155,7 @@ async def get_regulation_by_code(
 
 
 # ============================================================
-# 4. GET /regulations/{code}/required-fields — 규제별 필수 필드
+# [기존] 4. GET /regulations/{code}/required-fields
 # ============================================================
 
 @router.get(
@@ -183,14 +169,96 @@ async def get_required_fields(
 ):
     """
     특정 규제가 요구하는 필수 필드 목록을 반환한다.
-
-    [현재 상태]
-      D의 regulation_required_fields DDL 머지 전까지 더미 데이터 반환.
-
-    [경로 파라미터]
-      code : 'EU_BATTERY', 'UFLPA' 등
-
-    [사용 예시]
-      GET /regulations/EU_BATTERY/required-fields
+    D의 regulation_required_fields DDL 머지 전까지 더미 데이터 반환.
     """
     return await reg_service.get_required_fields(db, code)
+
+
+# ============================================================
+# [신규 §2.3a] GET /regulation/violations
+# ============================================================
+
+@compliance_router.get(
+    "/violations",
+    summary="위반(violation) 목록 조회 §2.3a",
+)
+async def list_violations(
+    response: Response,
+    limit: int = Query(50, ge=1, le=200, description="최대 반환 건수"),
+    supplier_id: Optional[UUID] = Query(None, description="공급사 UUID 필터 (선택)"),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    verdict = 'compliance_violation' 인 위반 건 목록을 반환한다.
+
+    [보안]
+      - get_current_user: 미인증 요청 차단 (401)
+      - tenant 격리: batches JOIN으로 현재 테넌트 데이터만 노출
+        (compliance_results에 tenant_id 없음 → batches.tenant_id 필터)
+
+    [응답]
+      bare array (envelope 없음). 빈 결과 = [].
+      X-Total-Count 헤더 포함.
+
+    [§13.1 위임]
+      supplier router의 GET /suppliers/{id}/violations 는
+      reg_service.list_violations(db, tenant_id, supplier_id=id) 를 그대로 호출하면 된다.
+    """
+    items = await reg_service.list_violations(
+        db,
+        tenant_id=current_user.tenant_id,
+        supplier_id=supplier_id,
+        limit=limit,
+    )
+    total = await reg_service.count_violations(
+        db,
+        tenant_id=current_user.tenant_id,
+        supplier_id=supplier_id,
+    )
+    set_total_count(response, total)
+    return items  # bare array
+
+
+# ============================================================
+# [신규 §7.1] GET /regulation/materials/regulation-results
+# ============================================================
+
+@compliance_router.get(
+    "/materials/regulation-results",
+    summary="규제 판정 전체 목록 조회 §7.1",
+)
+async def list_regulation_results(
+    response: Response,
+    page: int = Query(1, ge=1, description="페이지 번호 (1-base)"),
+    size: int = Query(20, ge=1, le=100, description="페이지 크기"),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    compliance_results 전체 조회. HITL 후보(confidence < 0.85) 포함.
+
+    [보안]
+      - get_current_user: 미인증 요청 차단 (401)
+      - tenant 격리: batches INNER JOIN (get_violations와 동일 패턴)
+
+    [응답 필드]
+      result_id, material, supplier_id, supplier_name, regulation,
+      verdict(passed/violation/warning/reject), confidence,
+      needs_human_review(bool), evidence(배열)
+
+    [응답]
+      bare array. 빈 결과 = []. X-Total-Count 헤더 포함.
+    """
+    items = await reg_service.list_regulation_results(
+        db,
+        tenant_id=current_user.tenant_id,
+        page=page,
+        size=size,
+    )
+    total = await reg_service.count_regulation_results(
+        db,
+        tenant_id=current_user.tenant_id,
+    )
+    set_total_count(response, total)
+    return items  # bare array
