@@ -565,7 +565,7 @@ class SupplyChainRepository:
             # (suppliers는 이미 tenant 격리된 supply_chain_map에 등장하는 노드로 한정됨)
             sup_query = text("""
                 SELECT
-                    s.supplier_id, s.company_name, s.supplier_type, s.status, s.risk_level,
+                    s.supplier_id, s.company_name, s.provider_type, s.status, s.risk_level,
                     s.feoc_status, s.completeness_score
                 FROM suppliers s
                 WHERE s.supplier_id = ANY(:ids)

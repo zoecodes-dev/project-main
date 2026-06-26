@@ -15,12 +15,16 @@ alembic 경로로 넣어야 EC2 기존 DB에도 들어간다(데이터 보존).
 [안전] 대상 테넌트가 없으면 WHERE EXISTS 로 스킵 → FK 실패로 부팅 깨지지 않음.
 
 Revision ID: 0004_demo_accounts
-Revises: 0003_files_table
+Revises: 0004_due_diligence_columns
+
+[머지 선형화] 원래 0003에서 갈라졌으나, 같은 0003에서 분기한 0004_due_diligence_columns
+(D delta)와 head가 충돌(multiple heads)하여 부팅이 깨졌다. 두 0004를 직렬로 잇기 위해
+down_revision 을 0004_due_diligence_columns 로 re-point 한다(체인 단일화, 데이터 보존).
 """
 from alembic import op  # noqa: F401
 
 revision = "0004_demo_accounts"
-down_revision = "0003_files_table"
+down_revision = "0004_due_diligence_columns"
 branch_labels = None
 depends_on = None
 
