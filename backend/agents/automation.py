@@ -1,14 +1,10 @@
 """
 agents/automation.py  (담당: 팀원 E 차윤)
 
-W2 D2+D3: 4개 automation 노드를 그래프에서 제거하고 결정론 후처리 서비스 함수로 재배치.
-
-  변경 전: graph에 verification / risk_scoring / readiness / issuance 노드로 등록
-  변경 후: compliance 완료 후 run_post_compliance_pipeline() 후처리로 호출
-           (A1 핸들러 — agents/graph.py — 의 compliance 완료 콜백에서 invoke)
+결정론 automation 노드. compliance 완료 후 risk_scoring 노드로 그래프에서 호출된다.
+(A1 핸들러 — agents/graph.py — 가 노드로 등록·invoke)
 """
 import uuid
-import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -17,85 +13,11 @@ from sqlalchemy import text
 logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.agents.state import BatchState
-from backend.infrastructure.database import AsyncSessionLocal
-from backend.infrastructure.queue import enqueue, NOTIFICATION_QUEUE
-from backend.domains.verification.service import verify_feoc_rule
 from backend.domains.risk.service import calculate_risk_score
-from backend.domains.dpp.service import calculate_readiness, generate_dpp_payload, create_dpp_record
-from backend.domains.dpp.state_machine import issue_dpp
 from backend.domains.product.models import Product as _Product  # noqa: F401 — SA 매퍼 등록
 
 
-# ── 1. FEOC 지분 검증 ──────────────────────────────────────────────────────
-async def run_feoc_verification(
-    db: AsyncSession,
-    batch_id: uuid.UUID,
-    supplier_ids: List[uuid.UUID],
-) -> Dict[str, Any]:
-    """
-    FEOC 지분 규칙 검증. compliance judge_ira 내 흡수 예정; 과도기에는 직접 호출 가능.
-    체인 내 공급사 중 한 곳이라도 위반이면 feoc_passed=False.
-    위반 공급사 목록과 지분율을 verification_results 테이블에 저장하고 응답에도 포함한다.
-    """
-    stmt = text("""
-        SELECT srp.supplier_id,
-               s.company_name AS supplier_name,
-               COALESCE(srp.feoc_direct_ownership, 0) AS direct,
-               COALESCE(srp.feoc_indirect_ownership, 0) AS indirect
-        FROM supplier_risk_profiles srp
-        JOIN suppliers s ON srp.supplier_id = s.supplier_id
-        WHERE srp.supplier_id = ANY(:sids)
-    """)
-    rows = (await db.execute(stmt, {"sids": supplier_ids})).fetchall()
-
-    passed = True
-    violations: List[Dict[str, Any]] = []
-
-    for row in rows:
-        supplier_id = row[0]
-        supplier_name = row[1]
-        direct = float(row[2])
-        indirect = float(row[3])
-        total = direct + indirect
-
-        row_passed = await verify_feoc_rule(
-            db=db,
-            batch_id=batch_id,
-            supplier_id=supplier_id,
-            direct_ownership=direct,
-            indirect_ownership=indirect,
-        )
-        if not row_passed:
-            passed = False
-            violations.append({
-                "supplier_id": str(supplier_id),
-                "supplier_name": supplier_name,
-                "direct": direct,
-                "indirect": indirect,
-                "total": total,
-            })
-
-    await db.execute(
-        text("""
-            INSERT INTO verification_results (batch_id, feoc_passed, violations)
-            VALUES (:batch_id, :feoc_passed, :violations)
-            ON CONFLICT (batch_id) DO UPDATE
-                SET feoc_passed = EXCLUDED.feoc_passed,
-                    violations  = EXCLUDED.violations
-        """),
-        {
-            "batch_id": batch_id,
-            "feoc_passed": passed,
-            "violations": json.dumps(violations),
-        },
-    )
-    await db.flush()
-
-    return {"feoc_passed": passed, "violations": violations}
-
-
-# ── 2. 위험 점수 산정 ──────────────────────────────────────────────────────
+# ── 1. 위험 점수 산정 ──────────────────────────────────────────────────────
 async def run_risk_scoring(
     db: AsyncSession,
     batch_id: uuid.UUID,
@@ -106,8 +28,7 @@ async def run_risk_scoring(
 ) -> Dict[str, Any]:
     """
     compliance·geo 위반 내역을 종합해 위험 점수를 산정하고 에스컬레이션 여부를 반환한다.
-    반환값의 hitl_required=True 이면 run_post_compliance_pipeline이 즉시 early return하여
-    supervisor가 hitl_interrupt 노드로 라우팅한다.
+    반환값의 hitl_required=True 이면 supervisor가 hitl_interrupt 노드로 라우팅한다.
     """
     violations: List[Dict[str, str]] = []
 
@@ -157,126 +78,3 @@ async def run_risk_scoring(
     return updates
 
 
-# ── 3. DPP 준비도 체크 ────────────────────────────────────────────────────
-async def run_readiness(
-    db: AsyncSession,
-    product_id: uuid.UUID,
-    batch_id: uuid.UUID,
-) -> Dict[str, Any]:
-    """
-    8대 체크리스트 기반 Readiness 점수 산정.
-    만점(1.0) 미만이면 gray_zone 플래그 → supervisor가 hitl_interrupt로 라우팅.
-    점수를 batches.readiness_score에 저장하여 배치별 조회 가능.
-    """
-    result = await calculate_readiness(db, product_id)
-    score = result["readiness_score"]
-
-    await db.execute(
-        text("UPDATE batches SET readiness_score = :score WHERE batch_id = :batch_id"),
-        {"score": score, "batch_id": batch_id},
-    )
-    await db.flush()
-
-    updates: Dict[str, Any] = {
-        "current_stage": "stage_readiness",
-        "readiness_score": score,
-    }
-    if score < 1.0:
-        updates["error_reason"] = "gray_zone"
-
-    return updates
-
-
-# ── 4. DPP 발행 ───────────────────────────────────────────────────────────
-async def run_issuance(
-    db: AsyncSession,
-    batch_id: uuid.UUID,
-    product_id: uuid.UUID,
-) -> Dict[str, Any]:
-    """
-    DPP JSON 생성 + 불변 Lock 확정 발행.
-    """
-    payload = await generate_dpp_payload(db=db, product_id=product_id, batch_id=batch_id)
-
-    emissions = payload.get("annex_xiii_fields", {}).get("section_4_embedded_emissions_scores", {})
-    carbon_footprint = float(emissions.get("59_total_embedded_emissions", 0.0))
-
-    dpp_id = await create_dpp_record(
-        db=db,
-        batch_id=batch_id,
-        product_id=product_id,
-        carbon_footprint=carbon_footprint,
-        qr_code_url=f"https://dpp.kira.compliance/verify/{batch_id}",
-        payload=payload,
-    )
-    await issue_dpp(db=db, dpp_id=dpp_id)
-
-    owner_users = (await db.execute(
-        text("""
-            SELECT u.user_id FROM batches b
-            JOIN users u ON u.tenant_id = b.tenant_id
-            WHERE b.batch_id = :bid
-              AND u.role = 'owner_esg'
-              AND u.is_active = TRUE
-        """),
-        {"bid": str(batch_id)},
-    )).fetchall()
-
-    if not owner_users:
-        logger.warning("[notification] owner_esg 담당자 없음 (batch_id=%s)", batch_id)
-    else:
-        for row in owner_users:
-            uid = str(row[0])
-            await enqueue(
-                NOTIFICATION_QUEUE,
-                "process_notification",
-                user_id=uid,
-                channel="in-app",
-                notification_type="reminder",
-                subject="DPP 발행이 완료됐습니다",
-                body=f"배치 {batch_id}의 디지털 제품 여권(DPP)이 발행됐습니다.",
-                dedup_key=f"dpp_issued:{batch_id}:{uid}",
-            )
-
-    return {"current_stage": "stage_issuance", "batch_status": "batch_completed"}
-
-
-# ── 후처리 파이프라인 (compliance 완료 후 A1 핸들러가 호출) ───────────────
-async def run_post_compliance_pipeline(state: BatchState) -> Dict[str, Any]:
-    """
-    compliance 완료 직후 A1 핸들러(agents/graph.py)가 호출하는 결정론 후처리 파이프라인.
-    risk_scoring → readiness → issuance 를 단일 DB 세션에서 순차 실행한다.
-
-    HITL 조건 발생 시 즉시 partial 업데이트를 반환하여
-    supervisor가 hitl_interrupt 노드로 라우팅할 수 있게 한다.
-    """
-    batch_id = uuid.UUID(state["batch_id"])
-    product_id = uuid.UUID(state["product_id"])
-    extraction = state.get("extraction_result") or {}
-    supplier_ids = [uuid.UUID(s) for s in (extraction.get("supplier_ids") or [])]
-
-    if not supplier_ids:
-        raise ValueError("extraction_result에 supplier_ids가 누락되었습니다.")
-
-    async with AsyncSessionLocal() as db:
-        # 1) 위험 점수 산정
-        risk_updates = await run_risk_scoring(
-            db=db,
-            batch_id=batch_id,
-            supplier_ids=supplier_ids,
-            compliance_result=state.get("compliance_result"),
-            geo_result=state.get("geo_result"),
-            current_hitl_required=bool(state.get("hitl_required")),
-        )
-        if risk_updates.get("hitl_required"):
-            return risk_updates
-
-        # 2) DPP 준비도 체크
-        readiness_updates = await run_readiness(db=db, product_id=product_id, batch_id=batch_id)
-        if readiness_updates.get("error_reason") == "gray_zone":
-            return readiness_updates
-
-        # 3) DPP 발행
-        issuance_updates = await run_issuance(db=db, batch_id=batch_id, product_id=product_id)
-
-    return {**risk_updates, **readiness_updates, **issuance_updates}

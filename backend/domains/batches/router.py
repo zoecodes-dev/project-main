@@ -57,7 +57,6 @@ async def get_batch(
         geo_result         — {risk_detected, risk_flags, detected_risks[]}
         verification_result— {feoc_passed, violations[]}  (E R4 완료 전 null)
         risk_result        — {max_risk_score, has_high_risk}
-        dpp_result         — {dpp_id, status, issued_at}  (미발행 시 null)
     """
     result = await get_batch_detail(db, str(batch_id), current_user.tenant_id)
     if result is None:
@@ -73,8 +72,8 @@ async def get_kpis(
     """
     BE-2: GET /dashboard/kpis
 
-    batches / dpp_records / compliance_results 3개 테이블에서
-    대시보드 집계 8종을 반환합니다.
+    batches / compliance_results 2개 테이블에서
+    대시보드 집계 7종을 반환합니다.
 
     KPIs:
         1. total_batches           전체 배치 수
@@ -82,9 +81,8 @@ async def get_kpis(
         3. hitl_wait_batches       HITL 대기 배치 수
         4. completed_batches       완료 배치 수
         5. rejected_batches        거부 배치 수
-        6. dpp_issued_count        발행 DPP 수
-        7. compliance_pass_rate    규제 통과율(%)
-        8. avg_confidence_score    평균 신뢰도 점수
+        6. compliance_pass_rate    규제 통과율(%)
+        7. avg_confidence_score    평균 신뢰도 점수
     (내 테넌트로 격리 — §0.2)
     """
     return await get_dashboard_kpis(db, current_user.tenant_id)

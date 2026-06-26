@@ -31,7 +31,7 @@ AGENT_STAGE_META: Dict[str, Dict[str, Any]] = {
     "stage_compliance":   {"label": "컴플라이언스",   "index": 5},
     "stage_risk":         {"label": "리스크 분석",    "index": 6},
     "stage_readiness":    {"label": "발행 준비도",    "index": 7},
-    "stage_issuance":     {"label": "DPP 발행",      "index": 8},
+    "stage_issuance":     {"label": "발행",          "index": 8},
 }
 _TOTAL_STAGES = len(AGENT_STAGE_META)
 
@@ -119,7 +119,6 @@ async def get_batch_detail(
       - geo_result        : geo_audit_results 테이블 (D R5 저장)
       - verification_result: verification_results 테이블 (E R4 저장; 미저장 시 null)
       - risk_result       : supplier_risk_profiles에서 배치 공급망 최고 위험도 조회
-      - dpp_result        : dpp_records 테이블
     """
     # 테넌트 게이트는 배치 행 조회에만 걸면 충분 — 없으면 None 반환되어 하위 집계로 진입하지 않는다.
     tenant_clause = "AND b.tenant_id = :tenant_id" if tenant_id is not None else ""
@@ -197,17 +196,6 @@ async def get_batch_detail(
         {"batch_id": batch_id},
     )).mappings().fetchone()
 
-    # ── DPP 결과 ────────────────────────────────────────────────────────────
-    dpp_row = (await db.execute(
-        text("""
-            SELECT dpp_id, status, issued_at
-            FROM dpp_records
-            WHERE batch_id = :batch_id
-            LIMIT 1
-        """),
-        {"batch_id": batch_id},
-    )).mappings().fetchone()
-
     # ── 조립 ────────────────────────────────────────────────────────────────
     return {
         "batch_id":        str(batch_row["batch_id"]),
@@ -259,13 +247,6 @@ async def get_batch_detail(
             ),
             "has_high_risk": bool(risk_row["has_high_risk"]) if risk_row else False,
         },
-        "dpp_result": {
-            "dpp_id":    str(dpp_row["dpp_id"]),
-            "status":    dpp_row["status"],
-            "issued_at": (
-                dpp_row["issued_at"].isoformat() if dpp_row["issued_at"] else None
-            ),
-        } if dpp_row else None,
     }
 
 
@@ -274,15 +255,15 @@ async def get_dashboard_kpis(
     tenant_id: Optional[UUID] = None,
 ) -> Dict[str, Any]:
     """
-    BE-2: 대시보드 집계 8종을 batches/dpp_records/compliance_results에서 추출한다.
-    tenant_id 지정 시 해당 테넌트로 격리(§0.2). dpp_records·compliance_results 는
+    BE-2: 대시보드 집계 7종을 batches/compliance_results에서 추출한다.
+    tenant_id 지정 시 해당 테넌트로 격리(§0.2). compliance_results 는
     tenant_id 컬럼이 없어 batches(batch_id)로 LEFT JOIN 해 스코프한다.
       - 미스코프(tenant_id=None, 관리 토큰): 기존 전체 집계 그대로(LEFT JOIN 으로 batch 없는 행도 보존).
-      - 스코프: batch 가 해당 테넌트인 DPP/compliance 만 집계(batch 미연결 행은 귀속 불가로 제외).
+      - 스코프: batch 가 해당 테넌트인 compliance 만 집계(batch 미연결 행은 귀속 불가로 제외).
 
     KPI 목록:
       1. total_batches  2. processing_batches  3. hitl_wait_batches  4. completed_batches
-      5. rejected_batches  6. dpp_issued_count  7. compliance_pass_rate  8. avg_confidence_score
+      5. rejected_batches  6. compliance_pass_rate  7. avg_confidence_score
     """
     # CAST(:tenant_id AS uuid) IS NULL → 미스코프(전체), 아니면 tenant 일치 행만.
     tid = str(tenant_id) if tenant_id is not None else None
@@ -298,14 +279,6 @@ async def get_dashboard_kpis(
         FROM batches
         WHERE (CAST(:tenant_id AS uuid) IS NULL OR tenant_id = CAST(:tenant_id AS uuid))
     """), {"tenant_id": tid})).mappings().fetchone()
-
-    dpp_row = (await db.execute(text("""
-        SELECT COUNT(*) AS dpp_issued_count
-        FROM dpp_records d
-        LEFT JOIN batches b ON b.batch_id = d.batch_id
-        WHERE d.status = 'dpp_issued'
-          AND (CAST(:tenant_id AS uuid) IS NULL OR b.tenant_id = CAST(:tenant_id AS uuid))
-    """), {"tenant_id": tid})).fetchone()
 
     cr_row = (await db.execute(text("""
         SELECT
@@ -325,7 +298,6 @@ async def get_dashboard_kpis(
         "hitl_wait_batches":    int(batch_row["hitl_wait_batches"] or 0),
         "completed_batches":    int(batch_row["completed_batches"] or 0),
         "rejected_batches":     int(batch_row["rejected_batches"] or 0),
-        "dpp_issued_count":     int(dpp_row[0] or 0),
         "compliance_pass_rate": float(cr_row[0] or 0.0),
         "avg_confidence_score": float(batch_row["avg_confidence_score"] or 0.0),
     }

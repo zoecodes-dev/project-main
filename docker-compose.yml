@@ -55,11 +55,11 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
     # ports 제거: 외부 노출 안 함. nginx가 내부에서 app:8000으로 전달.
     # volumes 제거: 이미지 안의 코드를 그대로 사용 (CI/CD 대비, 운영 정석).
-    # 부팅 시: ① 자동 마이그레이션(데이터 보존) ② 규제 임베딩 자동 시드(멱등) → uvicorn 기동.
-    #   ① DDL 변경이 배포(up -d --build)에 자동 반영된다 — down -v(데이터 전삭제) 불필요.
-    #   ② regulation.embeddings는 pending 규제만 임베딩(멱등, 이미 indexed면 즉시 스킵·재계산 X).
+    # 부팅 시: 규제 임베딩 자동 시드(멱등) → uvicorn 기동.
+    #   스키마 DDL은 docker/01_schema.sql(빈 볼륨 최초 init)로 일원화 — alembic 마이그레이션 미사용.
+    #   regulation.embeddings는 pending 규제만 임베딩(멱등, 이미 indexed면 즉시 스킵·재계산 X).
     #   app 컨테이너 1개에서만 실행되므로 경합 없음(워커는 arq라 미실행).
-    command: ["sh", "-c", "alembic upgrade head && python -m backend.domains.regulation.embeddings && uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 2"]
+    command: ["sh", "-c", "python -m backend.domains.regulation.embeddings && uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 2"]
     expose:
       - "8000"
     depends_on:
@@ -75,7 +75,6 @@ services:
   # 큐 계약(queue.py QUEUE_NAMES)은 6종. 워커도 큐당 1개 구조로 맞춘다.
   # 모듈이 실제 존재하는 3개만 활성, 나머지 3개는 다음주 모듈 생성 후 주석 해제.
   #   - dead_letter_queue: 워커 없음 (실패 작업 보관용 — 운영자가 수동 처리)
-  #   - geo_risk_worker: 삭제됨 (risk_worker가 W3 완성판으로 대체)
   #
   # 공통 설정은 아래 앵커(worker-base)로 한 번만 정의하고 각 워커가 재사용.
   # ─────────────────────────────────────────────────────────────
@@ -114,7 +113,6 @@ services:
     container_name: kira-worker-verification
     command: ["arq", "backend.workers.verification_worker.WorkerSettings"]
 
-
   # hitl_queue 워커
   worker-hitl:
     build: *worker-build
@@ -128,7 +126,6 @@ services:
     container_name: kira-worker-hitl
     command: ["arq", "backend.workers.hitl_worker.WorkerSettings"]
 
-  # notification_queue 워커
   # batch_pipeline_queue worker
   worker-pipeline:
     build: *worker-build
@@ -142,6 +139,7 @@ services:
     container_name: kira-worker-pipeline
     command: ["arq", "backend.workers.pipeline_worker.WorkerSettings"]
 
+  # notification_queue 워커
   worker-notification:
     build: *worker-build
     networks:

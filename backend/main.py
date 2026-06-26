@@ -23,7 +23,6 @@ from backend.domains.product.router import router as product_router
 from backend.domains.supplier.router import router as supplier_router
 from backend.domains.audit.router import actions_router, audit_packages_router, router as audit_router
 from backend.domains.risk.router import router as risk_router
-from backend.domains.dpp.router import router as dpp_router
 from backend.hitl.router import router as hitl_router
 from backend.domains.batches.router import batches_router, dashboard_router
 from backend.domains.acl.router import router as acl_router
@@ -67,7 +66,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="KIRA Compliance Intelligence Platform",
-    description="N차 공급망 추적 및 Geo Audit 기반 DPP 발행 백엔드",
+    description="N차 공급망 추적 및 Geo Audit 기반 컴플라이언스 백엔드",
     lifespan=lifespan,
 )
 
@@ -87,7 +86,6 @@ app.include_router(audit_router)
 app.include_router(actions_router)
 app.include_router(audit_packages_router)
 app.include_router(risk_router)
-app.include_router(dpp_router)
 app.include_router(hitl_router)
 app.include_router(batches_router)
 app.include_router(dashboard_router)

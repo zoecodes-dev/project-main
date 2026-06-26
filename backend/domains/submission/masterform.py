@@ -33,50 +33,6 @@ from backend.domains.supplier.models import (
 )
 
 
-# ── 섹션 4: 지분·FEOC ─────────────────────────────────────────────────────
-async def write_supplier_trader_details(
-    db: AsyncSession,
-    supplier_id: uuid.UUID,
-    data: MasterFormOwnership,
-) -> None:
-    """
-    supplier_trader_details: supplier당 1행 — 기존 삭제 후 재입력.
-    FEOC 지분율이 입력된 경우 supplier_risk_profiles도 동기화한다.
-    """
-    # trader_details replace
-    await db.execute(
-        delete(SupplierTraderDetail).where(SupplierTraderDetail.supplier_id == supplier_id)
-    )
-    db.add(SupplierTraderDetail(
-        supplier_id=supplier_id,
-        trading_license=data.trading_license,
-        broker_certification=data.broker_certification,
-        disclosure_completeness=data.disclosure_completeness or 0.0,
-    ))
-
-    # FEOC 지분율 → risk_profile 동기화 (값이 있을 때만)
-    if data.feoc_direct_ownership is not None or data.feoc_indirect_ownership is not None:
-        result = await db.execute(
-            select(SupplierRiskProfile).where(SupplierRiskProfile.supplier_id == supplier_id)
-        )
-        profile = result.scalar_one_or_none()
-        if profile:
-            if data.feoc_direct_ownership is not None:
-                profile.feoc_direct_ownership = data.feoc_direct_ownership
-            if data.feoc_indirect_ownership is not None:
-                profile.feoc_indirect_ownership = data.feoc_indirect_ownership
-        else:
-            db.add(SupplierRiskProfile(
-                supplier_id=supplier_id,
-                feoc_direct_ownership=data.feoc_direct_ownership,
-                feoc_indirect_ownership=data.feoc_indirect_ownership,
-                overall_risk_score=0,
-                risk_level="low",
-                feoc_status="unknown",
-                is_high_risk_flag=False,
-            ))
-
-
 # ── 섹션 5: 인권·실사·교육 ────────────────────────────────────────────────
 async def write_supplier_social(
     db: AsyncSession,
@@ -95,20 +51,6 @@ async def write_supplier_social(
             return None
         return factory_ids[idx] if 0 <= idx < len(factory_ids) else None
 
-    # 인권 이슈
-    await db.execute(
-        delete(SupplierHumanRightsIssue).where(SupplierHumanRightsIssue.supplier_id == supplier_id)
-    )
-    for item in data.human_rights_issues:
-        db.add(SupplierHumanRightsIssue(
-            supplier_id=supplier_id,
-            issue_type=item.issue_type,
-            severity=item.severity,
-            description=item.description,
-            status=item.status,
-            source=item.source,
-        ))
-
     # 실사 기록
     await db.execute(
         delete(SupplierAuditRecord).where(SupplierAuditRecord.supplier_id == supplier_id)
@@ -124,42 +66,6 @@ async def write_supplier_social(
             next_audit_due=rec.next_audit_due,
             report_url=rec.report_url,
         ))
-
-    # 산업재해
-    await db.execute(
-        delete(SupplierIndustrialAccident).where(SupplierIndustrialAccident.supplier_id == supplier_id)
-    )
-    for acc in data.industrial_accidents:
-        db.add(SupplierIndustrialAccident(
-            supplier_id=supplier_id,
-            accident_date=acc.accident_date,
-            accident_type=acc.accident_type,
-            description=acc.description,
-            casualties=acc.casualties,
-            ltifr=acc.ltifr,
-            status=acc.status,
-            corrective_action=acc.corrective_action,
-        ))
-
-    # 교육 이수 기록
-    await db.execute(
-        delete(TrainingRecord).where(TrainingRecord.supplier_id == supplier_id)
-    )
-    for tr in data.training_records:
-        db.add(TrainingRecord(
-            supplier_id=supplier_id,
-            factory_id=_fid(tr.factory_index),
-            material_id=tr.material_id,
-            trainee_count=tr.trainee_count,
-            total_eligible=tr.total_eligible,
-            completion_rate=tr.completion_rate or 0.0,
-            completed_at=tr.completed_at,
-            due_date=tr.due_date,
-            status=tr.status,
-            instructor=tr.instructor,
-            notes=tr.notes,
-        ))
-
 
 # ── 섹션 6: EoL·인증서 ────────────────────────────────────────────────────
 async def write_supplier_certifications(

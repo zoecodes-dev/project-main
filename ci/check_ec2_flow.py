@@ -66,7 +66,7 @@ async def _db_checks() -> None:
         for t in (
             "suppliers", "products", "batches", "supply_chain_map",
             "regulations", "compliance_results", "document_extraction_results",
-            "verification_results", "geo_audit_results", "dpp_records",
+            "verification_results", "geo_audit_results",
         ):
             try:
                 n = (await db.execute(text(f"SELECT COUNT(*) FROM {t}"))).scalar()

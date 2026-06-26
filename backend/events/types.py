@@ -9,9 +9,9 @@ payload는 JSON 직렬화 가능해야 하며, event_bus.publish(event_name, pay
 
 출처:
 - spec 7장 본문/표: Product, Supplier, Submission, Verification, Risk,
-  GeoRiskDetected, ComplianceCompleted, HITL, DPP
+  GeoRiskDetected, ComplianceCompleted, HITL
 - backend_md_additions I·E-1절: RiskProfileUpdated, FactoryRegulationChanged,
-  SubmissionStatusChanged, OriginCertExpiring, TrainingOverdue
+  SubmissionStatusChanged
 - 폴더·큐·도메인·state·이벤트 전부 verification으로 통일 (events/types.py 기준).
 """
 from dataclasses import dataclass, field
@@ -317,60 +317,6 @@ class HITLRejectedEvent:
     event_name: str = "HITLRejected"
     occurred_at: datetime = field(default_factory=_now_utc)
 
-
-# ============================================================
-# DPP (E)
-# ============================================================
-@dataclass
-class DPPReadinessUpdatedEvent:
-    product_id: Optional[UUID] = None
-    readiness_score: Optional[float] = None
-    readiness_breakdown: dict = field(default_factory=dict)
-    event_name: str = "DPPReadinessUpdated"
-    occurred_at: datetime = field(default_factory=_now_utc)
-
-
-@dataclass
-class DPPIssuedEvent:
-    dpp_id: Optional[UUID] = None
-    product_id: Optional[UUID] = None
-    qr_code_url: Optional[str] = None
-    event_name: str = "DPPIssued"
-    occurred_at: datetime = field(default_factory=_now_utc)
-
-
-# ============================================================
-# Origin (B · 스케줄러)
-# ============================================================
-@dataclass
-class OriginCertExpiringEvent:
-    """
-    원산지(포괄)확인서 만료 임박 감지. (backend_md_additions I절)
-    조건: expires_at < now() + 30일
-    발행: B(스케줄러) → 수신: E(Readiness 재계산), Notification
-    """
-    cert_id: Optional[UUID] = None
-    supplier_id: Optional[UUID] = None
-    expires_at: Optional[datetime] = None
-    event_name: str = "OriginCertExpiring"
-    occurred_at: datetime = field(default_factory=_now_utc)
-
-
-# ============================================================
-# Training (B · 스케줄러)
-# ============================================================
-@dataclass
-class TrainingOverdueEvent:
-    """
-    협력사 교육 이수 지연 감지. (backend_md_additions I절)
-    조건: due_date < now() AND status != completed
-    발행: B(스케줄러) → 수신: Notification
-    """
-    record_id: Optional[UUID] = None
-    supplier_id: Optional[UUID] = None
-    due_date: Optional[datetime] = None
-    event_name: str = "TrainingOverdue"
-    occurred_at: datetime = field(default_factory=_now_utc)
 
 # ============================================================
 # ValidationResult + validate_schema (B)

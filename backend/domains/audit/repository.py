@@ -184,18 +184,16 @@ async def get_audit_package(
             COUNT(DISTINCT cr.result_id)
                 FILTER (WHERE cr.verdict != 'compliance_passed')           AS gap_count,
             COALESCE(t.company_name, '')                                   AS owner,
-            b.received_at                                                  AS created_at,
-            d.dpp_id                                                       AS dpp_ref
+            b.received_at                                                  AS created_at
         FROM batches b
         LEFT JOIN products p        ON p.product_id  = b.product_id
         LEFT JOIN tenants  t        ON t.tenant_id   = b.tenant_id
         LEFT JOIN audit_data_snapshots ads ON ads.batch_id = b.batch_id
         LEFT JOIN compliance_results   cr  ON cr.batch_id  = b.batch_id
-        LEFT JOIN dpp_records          d   ON d.batch_id   = b.batch_id
         WHERE b.batch_id = CAST(:package_id AS uuid)
           AND (CAST(:tenant_id AS uuid) IS NULL OR b.tenant_id = CAST(:tenant_id AS uuid))
         GROUP BY b.batch_id, p.name, b.destination, b.status,
-                 t.company_name, b.received_at, d.dpp_id
+                 t.company_name, b.received_at
         """
     )
     result = await db.execute(

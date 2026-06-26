@@ -58,6 +58,20 @@ CREATE TABLE view_permissions (
     granted_at           TIMESTAMPTZ DEFAULT now()
 );
 
+-- [테이블 역할 §0.8] 공통 파일 업로드 저장소. 첨부 화면(자료 제출·실사/시정 보고서·온보딩)이
+-- 공통으로 쓰는 POST/GET/DELETE /files 의 메타 대장. 실제 바이트는 S3, 여기엔 메타 + s3_key 만.
+CREATE TABLE files (
+    file_id      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id    UUID REFERENCES tenants(tenant_id),
+    file_name    VARCHAR(255) NOT NULL,
+    content_type VARCHAR(100),
+    size_bytes   BIGINT,
+    s3_key       VARCHAR(500) NOT NULL,
+    context      VARCHAR(100),
+    uploaded_by  UUID REFERENCES users(user_id),
+    created_at   TIMESTAMPTZ DEFAULT now()
+);
+
 
 -- ============================================================
 -- 영역 2. 협력사 마스터 (B 담당)
@@ -78,8 +92,8 @@ CREATE TABLE suppliers (
     duns_number         VARCHAR(20),
     tax_number          VARCHAR(50),
     website             VARCHAR(255),
-    supplier_type       VARCHAR(30) NOT NULL
-        CONSTRAINT chk_supplier_type CHECK (supplier_type IN ('manufacturer', 'recycler', 'trader', 'miner')),
+    provider_type       VARCHAR(30) NOT NULL
+        CONSTRAINT chk_provider_type CHECK (provider_type IN ('manufacturer', 'recycler', 'trader', 'miner')),
     parent_supplier_id  UUID REFERENCES suppliers(supplier_id),
     established_year    INT,
     employee_count      INT,
@@ -265,9 +279,15 @@ CREATE TABLE supplier_risk_profiles (
 CREATE TABLE supplier_audit_records (
     audit_record_id    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     supplier_id        UUID REFERENCES suppliers(supplier_id) ON DELETE CASCADE,
-    audit_date         DATE NOT NULL,
+    audit_date         DATE DEFAULT CURRENT_DATE,  -- [§5.3] POST 요청에 날짜 없음 → 자동 set (NOT NULL 완화)
     audit_type         VARCHAR(30) CONSTRAINT chk_audit_type CHECK (audit_type IN ('on_site', 'remote', 'document_review', 'third_party')),
     auditor            VARCHAR(255),
+
+    -- [§5 due_diligence 도메인] 실사명·대상 공장·점수·보고서 파일 연결
+    audit_name         VARCHAR(255),
+    factory_id         UUID REFERENCES supplier_factories(factory_id),
+    score              NUMERIC(5,2),
+    report_file_id     UUID REFERENCES files(file_id),
 
     -- [v_action_items 정합] 실사 워크플로우 진행 상태(audit_status)와 담당 검사관(inspector_id).
     -- result(최종 판정: pass/fail)와는 의미가 다른 별개 축이다.
@@ -406,6 +426,9 @@ CREATE TABLE products (
     product_name    VARCHAR(255),
     manufacturer_id UUID REFERENCES suppliers(supplier_id),
 
+    -- [테넌트 격리 §0.2] 원청 멀티테넌트 격리를 products까지 확장 (nullable — suppliers/batches.tenant_id 와 동일 정책)
+    tenant_id       UUID REFERENCES tenants(tenant_id),
+
     -- [3축 확장] 고객사(OEM)별 사양 분리 + 차종 + 용량(Ah, kWh 아님)
     customer_id     UUID REFERENCES customers(customer_id),
     model_name      VARCHAR(100),
@@ -423,7 +446,7 @@ CREATE TABLE products (
     updated_at      TIMESTAMPTZ DEFAULT now()
 );
 
--- [테이블 역할] 동일 제품의 생산 Lot/배치 유통 기간별 BOM 버전 이력. (결정 #1 ERP Ingest 일치)
+-- [테이블 역할] 동일 제품의 생산 Lot/배치 유통 기간별 BOM 버전 이력.
 -- [개명] effective_from/to(규제 발효일 성격) → production_from/to(제조·유통 기간 식별).
 --        설계 변경이 아닌 'Lot 추적' 목적임을 컬럼명으로 명확화.
 CREATE TABLE bom_versions (
@@ -523,8 +546,6 @@ CREATE TABLE supply_chain_map (
     child_supplier_id  UUID REFERENCES suppliers(supplier_id), -- 미발견 시 NULL 허용
     part_id            UUID REFERENCES parts(part_id),
     hop_level          INT,  -- 차수 SSOT: 원청(parent NULL)=0 기준 경로 순번(+1 연속). (구 suppliers.tier 대체)
-    po_number          VARCHAR(50),
-    invoice_number     VARCHAR(50),
     supply_period_from DATE,
     supply_period_to   DATE,
     
@@ -573,7 +594,7 @@ CREATE INDEX idx_factory_carbon_factory ON factory_carbon_declarations(factory_i
 
 
 -- ============================================================
--- 영역 9. 운영 / 배치 / DPP (A, E 담당)
+-- 영역 9. 운영 / 배치 (A, E 담당)
 -- ============================================================
 
 -- [테이블 역할] LangGraph 에이전트 실행 배치의 스냅샷 상태 저장소. (결정 #1 Ingest 보완 완료)
@@ -605,25 +626,6 @@ CREATE TABLE batches (
     external_id     VARCHAR(255),
     synced_at       TIMESTAMPTZ DEFAULT now()
 );
-
--- [테이블 역할] 발행이 완료된 디지털 여권 기록 대장. (issued 전이 시 UPDATE 불능화)
-CREATE TABLE dpp_records (
-    dpp_id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    batch_id         UUID REFERENCES batches(batch_id),
-    product_id       UUID REFERENCES products(product_id),
-    issued_at        TIMESTAMPTZ,
-    
-    -- [A-10 상태] dpp_status 접두어 일괄 적용
-    status           VARCHAR(20) DEFAULT 'dpp_issued'
-        CONSTRAINT chk_dpp_status CHECK (status IN ('dpp_issued', 'dpp_revoked')),
-        
-    carbon_footprint NUMERIC(10,4),
-    recycled_content JSONB,
-    qr_code_url      VARCHAR(500),
-    payload          JSONB, -- Annex XIII 80개 법적 연동 규격 전체
-    approved_by      UUID REFERENCES users(user_id)
-);
-
 
 
 -- ============================================================
@@ -675,7 +677,7 @@ CREATE TABLE regulation_applicability (
     severity                 VARCHAR(20) CONSTRAINT chk_app_severity CHECK (severity IN ('mandatory', 'recommended'))
 );
 
--- [테이블 역할 · W5 C1] 규제별 협력사 필수 제출 필드 명세. C2 gap 계산의 기준 데이터.
+-- [테이블 역할] 규제별 협력사 필수 제출 필드 명세. C2 gap 계산의 기준 데이터.
 -- regulation_id FK + field_name + field_type + provider_type_applicable(해당 업종 필터).
 CREATE TABLE regulation_required_fields (
     field_id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -694,12 +696,11 @@ CREATE TABLE onboarding_data_requirements (
     required_documents JSONB
 );
 
-
 -- ============================================================
 -- 영역 11. 데이터 흐름 추적 / Submission 상태머신 (E 담당)
 -- ============================================================
 
--- [테이블 역할] 데이터 요청 및 수령 SLA 추적 관리 대장. (결정 #10-5 Rework 반영)
+-- [테이블 역할] 데이터 요청 및 수령 SLA 추적 관리 대장
 CREATE TABLE data_request_log (
     request_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     requester_user_id   UUID REFERENCES users(user_id),
@@ -814,7 +815,7 @@ CREATE TABLE processed_jobs (
     queue_name       VARCHAR(50)
         CONSTRAINT chk_processed_queue CHECK (queue_name IN (
             'document_parse_queue', 'verification_queue', 'risk_queue',
-            'hitl_queue', 'notification_queue', 'dpp_publish_queue',
+            'hitl_queue', 'notification_queue',
             'batch_pipeline_queue', 'dead_letter_queue'
         )),
     job_id           VARCHAR(100), -- ARQ가 반환한 job_id
@@ -885,29 +886,6 @@ CREATE TABLE gap_analysis_results (
 
 
 -- ============================================================
--- 트리거 및 함수 정의 (Immutable Issued Lock)
--- ============================================================
-
--- [함수 역할] dpp_records가 UPDATE될 때 status가 'dpp_issued' 상태이면 예외를 발생시킨다.
-CREATE OR REPLACE FUNCTION prevent_issued_dpp_update()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF OLD.status = 'dpp_issued' THEN
-        RAISE EXCEPTION
-          'DPP record % is already issued and is strictly immutable. Modifying issued DPP is forbidden.',
-          OLD.dpp_id;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- [트리거 연결] BEFORE UPDATE trigger 장착
-CREATE TRIGGER trg_dpp_immutable
-    BEFORE UPDATE ON dpp_records
-    FOR EACH ROW EXECUTE FUNCTION prevent_issued_dpp_update();
-
-
--- ============================================================
 -- 뷰 (Views) 정의
 -- ============================================================
 
@@ -925,7 +903,7 @@ SELECT
     scm.link_status,
     s.company_name,
     s.company_name_en,
-    s.supplier_type,
+    s.provider_type,
     scm.hop_level,              -- 경로 순번(원청 0 기준 +1 연속)
     p.tier_level        AS bom_depth,   -- 부품 tier(0-base, Pack=0 … 광산=6)
     s.status            AS supplier_status,
@@ -1029,12 +1007,14 @@ FROM hitl_reviews;
 -- ============================================================
 
 -- 1) 협력사 및 지리 쿼리 인덱스
-CREATE INDEX idx_suppliers_type          ON suppliers(supplier_type);
+CREATE INDEX idx_suppliers_provider_type ON suppliers(provider_type);
 CREATE INDEX idx_scm_hop_level           ON supply_chain_map(hop_level);
 CREATE INDEX idx_suppliers_parent        ON suppliers(parent_supplier_id);
 CREATE INDEX idx_suppliers_status        ON suppliers(status);
 CREATE INDEX idx_suppliers_risk_level    ON suppliers(risk_level);
 CREATE INDEX idx_suppliers_feoc_status   ON suppliers(feoc_status);
+CREATE INDEX idx_audit_records_factory   ON supplier_audit_records(factory_id) WHERE factory_id IS NOT NULL;
+CREATE INDEX idx_files_tenant            ON files(tenant_id);
 CREATE INDEX idx_factories_location      ON supplier_factories USING GIST(location);
 CREATE INDEX idx_miner_coords            ON supplier_miner_details USING GIST(mine_coordinates);
 
@@ -1049,13 +1029,13 @@ CREATE INDEX idx_parts_hs_code           ON parts(hs_code);
 -- [신설] 제품 3축(고객사·생산기간·BOM버전) 다차원 룩업 인덱스 4종
 CREATE INDEX idx_products_customer       ON products(customer_id);
 CREATE INDEX idx_products_model          ON products(customer_id, model_name);
+CREATE INDEX idx_products_tenant         ON products(tenant_id);
 CREATE INDEX idx_bom_versions_product    ON bom_versions(product_id, status);
 CREATE INDEX idx_bom_versions_period     ON bom_versions(production_from, production_to);
 
 -- 3) 배치 및 벡터 RAG 코사인 인덱스
 CREATE INDEX idx_batches_status          ON batches(status);
 CREATE INDEX idx_batches_tenant_status   ON batches(tenant_id, status);
-CREATE INDEX idx_dpp_product             ON dpp_records(product_id);
 CREATE INDEX idx_regulations_embedding   ON regulations USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX idx_compliance_supplier     ON compliance_results(supplier_id);
 
@@ -1100,6 +1080,14 @@ CREATE TABLE reports (
     status          VARCHAR(30) DEFAULT 'draft'
         CONSTRAINT chk_report_status CHECK (status IN ('draft', 'approval_pending', 'fully_approved', 'returned')),
     current_step    INT DEFAULT 1,
+
+    -- [P3 §3.2·3.3 audit/report 확장]
+    type            VARCHAR(50) DEFAULT 'compliance',  -- 보고서 종류 (compliance / sustainability / due_diligence 등)
+    submitted_at    TIMESTAMPTZ,                       -- draft→approval_pending 전이 시점
+    severity        VARCHAR(20) DEFAULT 'medium',      -- 결재함 표시용 심각도
+    deadline        TIMESTAMPTZ,                       -- 결재 기한
+    key_points      JSONB DEFAULT '[]',                -- 결재함 표시용 핵심 포인트 배열
+
     created_at      TIMESTAMPTZ DEFAULT now(),
     updated_at      TIMESTAMPTZ DEFAULT now()
 );
@@ -1151,14 +1139,14 @@ CREATE TABLE reverification_logs (
 );
 
 -- ------------------------------------------------------------
--- [차윤-X] 외부 당국 시스템 제출 + 참조번호 (EUDR TRACES / IRA 30D / DPP Registry / CBP)
+-- [차윤-X] 외부 당국 시스템 제출 + 참조번호 (EUDR TRACES / IRA 30D / CBP)
 -- ------------------------------------------------------------
 CREATE TABLE authority_submissions (
     submission_id      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     batch_id           UUID REFERENCES batches(batch_id) ON DELETE CASCADE,
     product_id         UUID REFERENCES products(product_id) ON DELETE CASCADE,
     authority_type     VARCHAR(30) NOT NULL
-        CONSTRAINT chk_auth_type CHECK (authority_type IN ('TRACES_NT', 'IRA_30D', 'DPP_REGISTRY', 'CBP_DETENTION')),
+        CONSTRAINT chk_auth_type CHECK (authority_type IN ('TRACES_NT', 'IRA_30D', 'CBP_DETENTION')),
     reference_number   VARCHAR(100), -- TRACES-NT 고유 참조번호 / IRS Safe Harbor 등록번호 등
     status             VARCHAR(20) DEFAULT 'pending'
         CONSTRAINT chk_auth_submission_status CHECK (status IN ('pending', 'submitted', 'approved', 'failed')),
@@ -1179,7 +1167,7 @@ CREATE TABLE transmission_logs (
     recipient_email     VARCHAR(255) NOT NULL,
     transmission_type   VARCHAR(30) NOT NULL
         CONSTRAINT chk_trans_type CHECK (
-            transmission_type IN ('dpp_report', 'compliance_summary', 'rework_request', 'post_violation_notice', 'customs_response')
+            transmission_type IN ('compliance_summary', 'rework_request', 'post_violation_notice', 'customs_response')
         ),
     status              VARCHAR(20) DEFAULT 'sent'
         CONSTRAINT chk_trans_status CHECK (status IN ('sent', 'delivered', 'failed', 'acknowledged')),

@@ -21,25 +21,19 @@ def route(state: "BatchState") -> str:
         state["applicable_regulations"] = REGULATION_BY_DESTINATION.get(destination, [])
 
     er = state.get("error_reason")
-    if er in ("feoc_violation", "geographical_risk", "risk_escalated", "gray_zone", "low_confidence"):
+    if er in ("geographical_risk", "risk_escalated", "low_confidence"):
         return "hitl_interrupt"
 
     current_stage = state.get("current_stage")
     if current_stage == "stage_queued":
         return "data_gateway"
     if current_stage == "stage_extraction":
-        return "verification"
-    if current_stage == "stage_verification":
         return "geo_audit"
     if current_stage == "stage_geo":
         return "compliance"
     if current_stage == "stage_compliance":
         return "risk_scoring"
     if current_stage == "stage_risk":
-        return "readiness"
-    if current_stage == "stage_readiness":
-        return "issuance"
-    if current_stage == "stage_issuance":
         return "completed"
 
     return "completed"

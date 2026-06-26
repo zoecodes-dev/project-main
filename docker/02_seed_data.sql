@@ -14,7 +14,7 @@
 --             / 4 전구체 / 5 제련·정제 / 6 광산
 --
 -- [4대 시나리오]
---   ① BMW iX3 (108Ah 원통 NCM811) ── Happy: 한양셀→동성CAM→호주리튬, FEOC 통과 → DPP 발행
+--   ① BMW iX3 (108Ah 원통 NCM811) ── Happy: 한양셀→동성CAM→호주리튬, FEOC 통과 → 발행 완료
 --   ② BMW i4  (81Ah 각형)         ── Gray : 대성정밀 전구체 미확인(신뢰도 0.70) → HITL 대기
 --   ③ Mercedes GLC EV (94Ah 각형) ── Sad  : Lot1(2024)=청정전구체 정상 / Lot2(2025)=Global Mining 신장 위반·외국지분 25%↑ → 차단
 --   ④ Mercedes EQS (118Ah 각형)   ── Happy: 우진배터리→동성CAM→칠레리튬, 정상
@@ -40,6 +40,12 @@ INSERT INTO users (user_id, tenant_id, email, password_hash, name, role) VALUES
 ('11111111-0000-4000-8000-000000000006', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'esg@daesung.demo',      '$2b$12$XO1O./JYL5VKDkodX2RdpOZSfFA7PSkeViaPqiOSQG4szW7fGVjf.', 'Daesung ESG',     'supplier_esg'),
 ('11111111-0000-4000-8000-000000000007', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'ceo@woojin.demo',       '$2b$12$XO1O./JYL5VKDkodX2RdpOZSfFA7PSkeViaPqiOSQG4szW7fGVjf.', 'Woojin CEO',      'supplier_ceo');
 
+-- 데모 로그인 계정 (프론트 로그인 화면 기본값 — oem/supplier). password: demo1234
+-- (구 alembic 0004_demo_accounts 에서 이관 — DDL/데이터 모두 docker schema·seed 로 일원화)
+INSERT INTO users (user_id, tenant_id, email, password_hash, name, role) VALUES
+('11111111-0000-4000-8000-0000000000a1', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'oem@kira.demo',                '$2b$12$LdrfIceVZR7twTzU8rxKF.M0uqv9vmcUawZNKRoLjbjb9gAidiynS', 'Demo OEM',      'admin'),
+('11111111-0000-4000-8000-0000000000b1', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'supplier@sulawesi-nickel.com', '$2b$12$LdrfIceVZR7twTzU8rxKF.M0uqv9vmcUawZNKRoLjbjb9gAidiynS', 'Demo Supplier', 'supplier_ceo');
+
 
 -- ============================================================
 -- 2. 고객사 마스터 (영역 7 선행) — OEM 2개
@@ -53,35 +59,35 @@ INSERT INTO customers (customer_id, customer_code, customer_name, country, sourc
 -- 4. 협력사 마스터 (영역 2) — 원청 1 + 협력사 12개사
 -- ============================================================
 -- 원청 (OEM, tier0) — 공급망 트리 루트. supply_chain_map 최상위 parent로 사용.
--- 본질은 배터리 팩 '제조사'(supplier_type=manufacturer). 원청/협력사 구분은 tier0(hop0)로.
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, supplier_type, completeness_score, status, risk_level, feoc_status) VALUES
+-- 본질은 배터리 팩 '제조사'(provider_type=manufacturer). 원청/협력사 구분은 tier0(hop0)로.
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
 ('a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'KIRA Energy Solutions', 'KIRA Energy Solutions', '키라에너지솔루션(주)', 'KIRA CEO', 'manufacturer', 100, 'supplier_verified', 'low', 'eligible');
 
 -- 제조사/셀
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, supplier_type, completeness_score, status, risk_level, feoc_status) VALUES
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
 ('a1111111-1111-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '한양셀 제조(주)', 'Hanyang Cell Mfg',   '한양셀 제조(주)', 'Kim CEO',   'manufacturer', 92, 'supplier_verified',    'low',      'eligible'),
 ('a7777777-7777-4000-8000-000000000007', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '우진배터리(주)',  'Woojin Battery',     '우진배터리(주)',  'Park CEO',  'manufacturer', 90, 'supplier_verified',    'low',      'eligible'),
 ('a8888888-8888-4000-8000-000000000008', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '우진셀(주)',      'Woojin Cell',        '우진셀(주)',      'Park CTO',  'manufacturer', 88, 'supplier_verified',    'low',      'eligible');
 
 -- CAM/전구체 (활물질·전구체 tier 4~5)
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, supplier_type, completeness_score, status, risk_level, feoc_status) VALUES
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
 ('a2222222-2222-4000-8000-000000000002', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '동성머티리얼(주)', 'Dongsung Material', '동성머티리얼(주)', 'Choi CEO',  'manufacturer', 89, 'supplier_verified',    'low',      'eligible'),
 ('a4444444-4444-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '대성정밀(주)',     'Daesung Precision', '대성정밀(주)',     'Lee CEO',   'manufacturer', 55, 'supplier_review',      'medium',   'under_review'),
 ('a6666666-6666-4000-8000-000000000006', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '청정전구체(주)',   'Cheongjeong Precursor','청정전구체(주)', 'Jung CEO',  'manufacturer', 85, 'supplier_verified',    'low',      'eligible');
 
 -- 제련·정제 (tier 6)
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, supplier_type, completeness_score, status, risk_level, feoc_status) VALUES
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
 ('aaaaaaaa-aaaa-4000-8000-00000000000a', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '한중제련(주)',    'Hanjung Refinery',  '한중제련(주)',    'Yoon CEO',  'manufacturer', 80, 'supplier_verified',    'low',      'eligible'),
 ('acacacac-acac-4000-8000-0000000000ac', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Xinjiang Nickel Refinery', 'Xinjiang Nickel Refinery', NULL, 'Wang CEO', 'manufacturer', 60, 'supplier_review', 'high', 'under_review');
 
 -- 광산 (tier 7)
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, supplier_type, completeness_score, status, risk_level, feoc_status) VALUES
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
 ('a3333333-3333-4000-8000-000000000003', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '호주리튬광업', 'Australia Lithium Mining', NULL, 'Smith CEO', 'miner', 86, 'supplier_verified',  'low',      'eligible'),
 ('a9999999-9999-4000-8000-000000000009', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '칠레리튬광업', 'Chile Lithium Mining',     NULL, 'Garcia CEO','miner', 84, 'supplier_verified',  'low',      'eligible'),
 ('a5555555-5555-4000-8000-000000000005', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Global Mining Corp', 'Global Mining Corp', NULL, 'Zhang CEO', 'miner', 35, 'supplier_violation', 'critical', 'ineligible');
 
 -- 트레이더 (i4 Gray — 미확인 전구체)
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, supplier_type, completeness_score, status, risk_level, feoc_status) VALUES
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
 ('abababab-abab-4000-8000-0000000000ab', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Unverified Precursor Trading', 'Unverified Precursor Trading', 'trader', 40, 'supplier_in_progress', 'medium', 'under_review');
 
 
@@ -144,11 +150,11 @@ INSERT INTO supplier_certifications (supplier_id, certification_type, certificat
 -- ④ Mercedes EQS    — 118Ah 각형 NCM [Happy]
 -- [순서 이동 이유] products.manufacturer_id → suppliers FK 의존.
 --   suppliers 마스터(4번)와 공장(5번)이 모두 INSERT된 뒤에 와야 FK 위반이 안 난다.
-INSERT INTO products (product_id, product_code, product_name, manufacturer_id, customer_id, model_name, amperage_ah, type, source_system, external_id) VALUES
-('d1111111-0000-4000-8000-000000000001', 'BMW-IX3-NCM811-108', 'BMW iX3 Cylindrical NCM811 108Ah', 'a1111111-1111-4000-8000-000000000001', 'c0000000-0000-4000-8000-0000000000b1', 'iX3 50',  108.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-IX3'),
-('d2222222-0000-4000-8000-000000000002', 'BMW-I4-NCM-81',      'BMW i4 Prismatic NCM 81Ah',        'a1111111-1111-4000-8000-000000000001', 'c0000000-0000-4000-8000-0000000000b1', 'i4',       81.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-I4'),
-('d3333333-0000-4000-8000-000000000003', 'MB-GLC-NCM-94',      'Mercedes GLC EV Prismatic NCM 94Ah','a7777777-7777-4000-8000-000000000007', 'c0000000-0000-4000-8000-0000000000b2', 'GLC EV',   94.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-GLC'),
-('d4444444-0000-4000-8000-000000000004', 'MB-EQS-NCM-118',     'Mercedes EQS Prismatic NCM 118Ah', 'a7777777-7777-4000-8000-000000000007', 'c0000000-0000-4000-8000-0000000000b2', 'EQS',     118.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-EQS');
+INSERT INTO products (product_id, product_code, product_name, manufacturer_id, tenant_id, customer_id, model_name, amperage_ah, type, source_system, external_id) VALUES
+('d1111111-0000-4000-8000-000000000001', 'BMW-IX3-NCM811-108', 'BMW iX3 Cylindrical NCM811 108Ah', 'a1111111-1111-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b1', 'iX3 50',  108.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-IX3'),
+('d2222222-0000-4000-8000-000000000002', 'BMW-I4-NCM-81',      'BMW i4 Prismatic NCM 81Ah',        'a1111111-1111-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b1', 'i4',       81.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-I4'),
+('d3333333-0000-4000-8000-000000000003', 'MB-GLC-NCM-94',      'Mercedes GLC EV Prismatic NCM 94Ah','a7777777-7777-4000-8000-000000000007', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b2', 'GLC EV',   94.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-GLC'),
+('d4444444-0000-4000-8000-000000000004', 'MB-EQS-NCM-118',     'Mercedes EQS Prismatic NCM 118Ah', 'a7777777-7777-4000-8000-000000000007', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b2', 'EQS',     118.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-EQS');
 
 -- BOM 버전: ③ GLC만 기간별 2 Lot(2024 정상 / 2025 신장 위반), 나머지 단일
 INSERT INTO bom_versions (bom_version_id, product_id, version_number, production_from, production_to, status, source_system, external_id) VALUES
@@ -369,7 +375,7 @@ INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_
 ('54444444-0000-4000-8000-000000000004', 'e4444444-0000-4000-8000-000000000004', 'a2222222-2222-4000-8000-000000000002', 'a9999999-9999-4000-8000-000000000009', 'b1111111-0000-4000-8000-00000000000b', 3, 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified');
 
 -- 분할 납품 비율 (iX3 1차 납품: 한양셀→원청, hop1 — 한양 단일공장 100%)
---   DPP 최상위 납품 조인이 hop_level=1 엣지의 supply_ratio.volume 을 사용 → hop1(map ...002)에 연결.
+--   최상위 납품 조인이 hop_level=1 엣지의 supply_ratio.volume 을 사용 → hop1(map ...002)에 연결.
 INSERT INTO supply_ratio (map_id, factory_id, ratio_percentage, volume, unit) VALUES
 ('51111111-0000-4000-8000-000000000002', 'f1111111-0000-4000-8000-000000000001', 100.00, 10000, 'ea');
 
@@ -383,7 +389,7 @@ INSERT INTO factory_carbon_declarations (factory_id, carbon_intensity, methodolo
 
 
 -- ============================================================
--- 12. 운영 / 배치 / DPP (영역 9) — 4제품 배치
+-- 12. 운영 / 배치 (영역 9) — 4제품 배치
 -- ============================================================
 -- ① iX3 [Happy] EU向 발행완료
 INSERT INTO batches (batch_id, product_id, bom_version_id, tenant_id, destination, current_stage, status, confidence_score, source_system, external_id) VALUES
@@ -394,11 +400,6 @@ INSERT INTO batches (batch_id, product_id, bom_version_id, tenant_id, destinatio
 ('ba333333-0000-4000-8000-000000000003', 'd3333333-0000-4000-8000-000000000003', 'e3333333-0000-4000-8000-000000000032', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'US', 'stage_risk',       'batch_hitl_wait',  0.9100, 'MES', 'MES-LOT-GLC2'),
 -- ④ EQS [Happy] EU向 발행완료
 ('ba444444-0000-4000-8000-000000000004', 'd4444444-0000-4000-8000-000000000004', 'e4444444-0000-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'EU', 'stage_issuance',   'batch_completed', 0.9500, 'MES', 'MES-LOT-EQS');
-
--- DPP (Happy 2건 — iX3, EQS 발행완료)
-INSERT INTO dpp_records (dpp_id, batch_id, product_id, issued_at, status, carbon_footprint, recycled_content, qr_code_url, payload, approved_by) VALUES
-('dccc1111-0000-4000-8000-000000000001', 'ba111111-0000-4000-8000-000000000001', 'd1111111-0000-4000-8000-000000000001', now() - interval '1 day', 'dpp_issued', 12.3400, '{"Co":15,"Ni":12,"Li":8}'::jsonb, 'https://dpp.kira.demo/qr/ix3', '{"readiness_breakdown":{"all_tier_completion":true,"no_violation":true}}'::jsonb, '11111111-0000-4000-8000-000000000002'),
-('dccc4444-0000-4000-8000-000000000004', 'ba444444-0000-4000-8000-000000000004', 'd4444444-0000-4000-8000-000000000004', now() - interval '2 days', 'dpp_issued', 13.1000, '{"Co":16,"Ni":13,"Li":9}'::jsonb, 'https://dpp.kira.demo/qr/eqs', '{"readiness_breakdown":{"all_tier_completion":true,"no_violation":true}}'::jsonb, '11111111-0000-4000-8000-000000000002');
 
 
 -- ============================================================

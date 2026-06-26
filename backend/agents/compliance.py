@@ -1014,7 +1014,7 @@ async def compliance_node(state: BatchState) -> BatchState:
         dataclasses.asdict(ComplianceCompleted(batch_id=batch_id, verdicts=verdicts)),
     )
 
-    # dpp/service.py의 ESG Score 계산에 필요한 count 키 추가
+    # compliance_result 요약(passed/gray_zone)에 필요한 count 키 추가
     passed_count  = sum(1 for v in verdicts.values() if v == "compliance_passed")
     warning_count = sum(1 for v in verdicts.values() if v == "compliance_warning")
 

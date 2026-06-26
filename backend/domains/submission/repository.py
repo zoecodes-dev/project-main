@@ -22,7 +22,7 @@ from backend.domains.submission.models import (
     ProcessedJob,
 )
 # suppliers는 supplier 도메인 소유 테이블이라 ORM 모델을 import(약속 6번 위반)하지 않고,
-# provider_type만 읽기 위한 최소 Table 매핑을 둔다. (dpp/supplychain repo의 raw 조인과 동일 취지)
+# provider_type만 읽기 위한 최소 Table 매핑을 둔다. (supplychain repo의 raw 조인과 동일 취지)
 _supplier_meta = MetaData()
 _suppliers_tbl = Table(
     "suppliers", _supplier_meta,
