@@ -30,6 +30,7 @@ from backend.domains.submission.service import (
     get_submission_completeness,
     get_supplier_submission_timeline,
     check_and_record_pipeline_trigger,
+    send_overdue_reminders,
 )
 
 from backend.agents.graph import create_batch
@@ -268,3 +269,14 @@ async def get_supplier_timeline_endpoint(supplier_id: uuid.UUID, db: AsyncSessio
     [ACL] 협력사는 자기 자신 또는 직접 연결된 노드의 타임라인만 조회 가능.
     """
     return await get_supplier_submission_timeline(db, supplier_id)
+
+
+@router.post("/send-reminders", include_in_schema=False)
+async def send_reminders_endpoint(db: AsyncSession = Depends(get_db)):
+    """
+    [API] POST /data-requests/send-reminders
+    기한이 지났는데 아직 미제출인 협력사에게 수동으로 독촉 알림을 발송합니다.
+    원청 담당자가 긴급하게 즉시 발송할 때 사용합니다.
+    """
+    count = await send_overdue_reminders(db)
+    return {"status": "ok", "reminded_count": count}
