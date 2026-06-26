@@ -531,7 +531,10 @@ class SupplyChainRepository:
                     LIMIT 1
                 )                      AS factory_id,
                 p.tier_level,
-                scm.link_status
+                scm.link_status,
+                scm.supply_period_from,
+                scm.supply_period_to,
+                scm.created_at
             FROM supply_chain_map scm
             JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
             JOIN products pr     ON pr.product_id = bv.product_id
