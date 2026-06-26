@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import asdict
 from inspect import isawaitable, signature
 import logging
@@ -258,8 +259,27 @@ async def setup_graph() -> None:
     conn_string = config.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
     # setup() uses CREATE INDEX CONCURRENTLY which requires autocommit.
     # Advisory lock serializes concurrent workers so only one runs migrations.
+    #
+    # 블로킹 pg_advisory_lock 으로 대기하면 데드락이 난다: 락을 쥔 워커의
+    # CREATE INDEX CONCURRENTLY 는 "동시 트랜잭션이 모두 끝나기"를 기다리는데,
+    # 락을 못 얻어 SELECT pg_advisory_lock(...) 에서 블로킹된 워커는 그 대기 문장이
+    # 가상 트랜잭션을 연 채 잡혀 있어 CIC 가 영원히 기다리게 된다(서로 물림).
+    # → autocommit 으로 pg_try_advisory_lock 을 폴링한다. 패자 워커는 폴링 사이
+    #   idle 이라 CIC 가 기다릴 트랜잭션을 만들지 않아 데드락이 풀린다.
     async with AsyncPostgresSaver.from_conn_string(conn_string) as tmp:
-        await tmp.conn.execute("SELECT pg_advisory_lock(1990614)")
+        await tmp.conn.set_autocommit(True)
+        tries = 0
+        while True:
+            cur = await tmp.conn.execute("SELECT pg_try_advisory_lock(1990614) AS locked")
+            row = await cur.fetchone()
+            # saver 연결이 dict_row 팩토리라 fetchone()이 dict일 수 있다(튜플 아님).
+            locked = next(iter(row.values())) if isinstance(row, dict) else row[0]
+            if locked:
+                break
+            tries += 1
+            if tries % 20 == 0:  # 10초마다(0.5s*20) 한 번씩만 알림
+                logger.info("graph setup advisory lock 대기 중(다른 워커가 migration 수행 중)…")
+            await asyncio.sleep(0.5)
         try:
             await tmp.setup()
         finally:
