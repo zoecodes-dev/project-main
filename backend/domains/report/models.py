@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from backend.infrastructure.database import Base
 
@@ -17,15 +17,20 @@ class Report(Base):
         nullable=True,
     )
     title = Column(String(255), nullable=False)
-    description = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)  # 프론트에서 summary 로 노출
     requester_id = Column(
         UUID(as_uuid=True),
         ForeignKey("users.user_id"),
         nullable=False,
     )
+    type = Column(String(50), default="compliance")
     # schema.sql chk_report_status: draft | approval_pending | fully_approved | returned
     status = Column(String(30), default="draft")
     current_step = Column(Integer, default=1)
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
+    severity = Column(String(20), default="medium")
+    deadline = Column(DateTime(timezone=True), nullable=True)
+    key_points = Column(JSONB, default=list)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
