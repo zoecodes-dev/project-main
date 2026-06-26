@@ -1,6 +1,9 @@
 import uuid
 import dataclasses
-from typing import Any, Dict
+from datetime import datetime, timezone, timedelta
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy import text
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -232,6 +235,244 @@ async def generate_dpp_payload(
             "reliability": reliability_score
         },
         "annex_xiii_fields": cbam_80_fields
+    }
+
+
+# ── §6 프론트 계약 서비스 함수 ──────────────────────────────────────────────
+
+async def list_dpp_records_for_tenant(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    destination: Optional[str] = None,
+    approved_by: Optional[uuid.UUID] = None,
+    status: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    skip: int = 0,
+    limit: int = 100,
+) -> List[dict]:
+    """6.1a 목록: products/suppliers 조인 + 필터 + tenant 격리."""
+    filters = ["b.tenant_id = :tenant_id"]
+    params: Dict[str, Any] = {"tenant_id": str(tenant_id), "limit": limit, "skip": skip}
+    if destination:
+        filters.append("b.destination = :destination")
+        params["destination"] = destination
+    if approved_by:
+        filters.append("d.approved_by = :approved_by")
+        params["approved_by"] = str(approved_by)
+    if status:
+        filters.append("d.status = :status")
+        params["status"] = status
+    if start_date:
+        filters.append("d.issued_at >= :start_date")
+        params["start_date"] = start_date
+    if end_date:
+        filters.append("d.issued_at <= :end_date")
+        params["end_date"] = end_date
+
+    where = " AND ".join(filters)
+    rows = (await db.execute(
+        text(f"""
+            SELECT
+                d.dpp_id, d.product_id, p.product_code, p.model_name,
+                s.company_name AS manufacturer,
+                b.destination, d.approved_by, d.status, d.issued_at,
+                d.carbon_footprint,
+                d.recycled_content
+            FROM dpp_records d
+            JOIN batches b ON b.batch_id = d.batch_id
+            JOIN products p ON p.product_id = d.product_id
+            LEFT JOIN suppliers s ON s.supplier_id = p.manufacturer_id
+            WHERE {where}
+            ORDER BY d.issued_at DESC NULLS LAST
+            LIMIT :limit OFFSET :skip
+        """),
+        params,
+    )).mappings().fetchall()
+
+    result = []
+    for r in rows:
+        row = dict(r)
+        rc = row.get("recycled_content") or {}
+        row["recycled_content"] = {"co": rc.get("Co"), "ni": rc.get("Ni"), "li": rc.get("Li")}
+        result.append(row)
+    return result
+
+
+async def count_dpp_records_for_tenant(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    destination: Optional[str] = None,
+    status: Optional[str] = None,
+) -> int:
+    """6.1a X-Total-Count."""
+    filters = ["b.tenant_id = :tenant_id"]
+    params: Dict[str, Any] = {"tenant_id": str(tenant_id)}
+    if destination:
+        filters.append("b.destination = :destination")
+        params["destination"] = destination
+    if status:
+        filters.append("d.status = :status")
+        params["status"] = status
+    where = " AND ".join(filters)
+    row = (await db.execute(
+        text(f"""
+            SELECT COUNT(d.dpp_id)
+            FROM dpp_records d
+            JOIN batches b ON b.batch_id = d.batch_id
+            WHERE {where}
+        """),
+        params,
+    )).scalar()
+    return int(row or 0)
+
+
+async def get_dpp_status_counts(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
+    """6.2a: ready/hold/hitl/blocker/issued 카운트."""
+    row = (await db.execute(
+        text("""
+            SELECT
+                COUNT(*) FILTER (WHERE b.readiness_score >= 1.0 AND d.status IS NULL) AS ready_count,
+                COUNT(*) FILTER (WHERE b.readiness_score < 1.0 AND d.status IS NULL)  AS hold_count,
+                COUNT(*) FILTER (WHERE b.status = 'batch_hitl_wait')                  AS hitl_count,
+                COUNT(*) FILTER (WHERE b.readiness_score < 1.0)                       AS blocker_count,
+                COUNT(*) FILTER (WHERE d.status = 'dpp_issued')                       AS issued_count
+            FROM batches b
+            LEFT JOIN dpp_records d ON d.batch_id = b.batch_id
+            WHERE b.tenant_id = :tenant_id
+        """),
+        {"tenant_id": str(tenant_id)},
+    )).mappings().fetchone()
+    return dict(row) if row else {}
+
+
+async def get_held_products(db: AsyncSession, tenant_id: uuid.UUID) -> List[dict]:
+    """6.2b / 6.3b: readiness < 1.0 제품 목록."""
+    rows = (await db.execute(
+        text("""
+            SELECT
+                p.product_id, p.product_name, b.destination,
+                b.readiness_score AS readiness,
+                b.received_at    AS last_updated_at,
+                d.status
+            FROM batches b
+            JOIN products p ON p.product_id = b.product_id
+            LEFT JOIN dpp_records d ON d.batch_id = b.batch_id
+            WHERE b.tenant_id = :tenant_id
+              AND (b.readiness_score IS NULL OR b.readiness_score < 1.0)
+            ORDER BY b.readiness_score ASC NULLS FIRST
+        """),
+        {"tenant_id": str(tenant_id)},
+    )).mappings().fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_dpp_blockers(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
+    """6.2c: 도메인별 블로커 건수."""
+    row = (await db.execute(
+        text("""
+            SELECT
+                COUNT(*) FILTER (WHERE cr.verdict IN ('compliance_violation','compliance_reject')
+                    AND r.regulation_code = 'IRA') AS feoc,
+                COUNT(*) FILTER (WHERE cr.verdict IN ('compliance_violation','compliance_reject')
+                    AND r.regulation_code != 'IRA') AS origin,
+                COUNT(*) FILTER (WHERE b.status = 'batch_hitl_wait') AS hitl,
+                COUNT(*) FILTER (WHERE sar.audit_status IN ('requested','assigned','in_progress')) AS audit
+            FROM batches b
+            LEFT JOIN compliance_results cr ON cr.batch_id = b.batch_id
+            LEFT JOIN regulations r ON r.regulation_id = cr.regulation_id
+            LEFT JOIN supplier_audit_records sar
+                   ON sar.supplier_id IN (
+                       SELECT target_supplier_id FROM data_request_log WHERE batch_id = b.batch_id LIMIT 1
+                   )
+            WHERE b.tenant_id = :tenant_id
+        """),
+        {"tenant_id": str(tenant_id)},
+    )).mappings().fetchone()
+    return dict(row) if row else {"feoc": 0, "origin": 0, "hitl": 0, "audit": 0}
+
+
+async def get_carbon_trend(db: AsyncSession, tenant_id: uuid.UUID, days: int = 30) -> dict:
+    """6.2d: 최근 N일 탄소발자국 일별 추이."""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (await db.execute(
+        text("""
+            SELECT
+                DATE(d.issued_at) AS label,
+                AVG(d.carbon_footprint) AS value
+            FROM dpp_records d
+            JOIN batches b ON b.batch_id = d.batch_id
+            WHERE b.tenant_id = :tenant_id
+              AND d.issued_at >= :since
+              AND d.carbon_footprint IS NOT NULL
+            GROUP BY DATE(d.issued_at)
+            ORDER BY label
+        """),
+        {"tenant_id": str(tenant_id), "since": since},
+    )).mappings().fetchall()
+    labels = [str(r["label"]) for r in rows]
+    points = [float(r["value"] or 0) for r in rows]
+    return {"labels": labels, "series": [{"name": "carbon_footprint", "points": points}]}
+
+
+async def get_recycled_content_avg(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
+    """6.2e: 재활용 함량 평균(Co/Ni/Li)."""
+    row = (await db.execute(
+        text("""
+            SELECT
+                AVG((d.recycled_content->>'Co')::float)   AS co_avg,
+                AVG((d.recycled_content->>'Ni')::float)   AS ni_avg,
+                AVG((d.recycled_content->>'Li')::float)   AS li_avg
+            FROM dpp_records d
+            JOIN batches b ON b.batch_id = d.batch_id
+            WHERE b.tenant_id = :tenant_id
+              AND d.recycled_content IS NOT NULL
+        """),
+        {"tenant_id": str(tenant_id)},
+    )).mappings().fetchone()
+    return dict(row) if row else {"co_avg": None, "ni_avg": None, "li_avg": None}
+
+
+async def get_readiness_for_frontend(db: AsyncSession, product_id: uuid.UUID) -> dict:
+    """6.3a: readiness를 프론트 계약 shape(checks[], blockers[])으로 반환."""
+    from backend.domains.dpp.repository import get_readiness_metrics
+
+    # 제품명 조회
+    product_row = (await db.execute(
+        text("SELECT product_name FROM products WHERE product_id = :pid"),
+        {"pid": str(product_id)},
+    )).mappings().fetchone()
+    product_name = product_row["product_name"] if product_row else None
+
+    breakdown = await get_readiness_metrics(db, product_id)
+    passed_count = sum(1 for v in breakdown.values() if v)
+    readiness = round(passed_count / len(breakdown), 2) if breakdown else 0.0
+
+    label_map = {
+        "all_tiers_completeness": ("required_data", "필수 데이터 완성도"),
+        "no_violations": ("compliance", "컴플라이언스 위반 없음"),
+        "origin_certs_valid": ("reliability", "원산지 증명서 유효"),
+        "certifications_valid": ("reliability", "인증서 유효"),
+        "training_completed": ("reliability", "교육 이수 완료"),
+        "no_open_human_rights": ("due_diligence", "인권 이슈 없음"),
+        "no_open_accidents": ("due_diligence", "산업재해 없음"),
+        "trader_disclosure_ok": ("hitl", "트레이더 공개율 충족"),
+    }
+
+    checks = []
+    blockers = []
+    for key, passed in breakdown.items():
+        check_key, label = label_map.get(key, (key, key))
+        checks.append({"key": check_key, "label": label, "passed": passed})
+        if not passed:
+            blockers.append({"name": label, "related_doc": None, "due_date": None, "severity": "high"})
+
+    return {
+        "product_id": product_id,
+        "product_name": product_name,
+        "readiness": readiness,
+        "checks": checks,
+        "blockers": blockers,
     }
 
 

@@ -10,13 +10,13 @@ due_diligence 도메인(§5) 스펙 대응:
 
 [멱등성] IF [NOT] EXISTS / IF EXISTS 사용 — 재적용 안전.
 
-Revision ID: 0004_due_diligence_columns
-Revises: 0003_files_table
+Revision ID: 0007_due_diligence_columns
+Revises: 0006_report_new_fields
 """
 from alembic import op
 
-revision = "0004_due_diligence_columns"
-down_revision = "0003_files_table"
+revision = "0007_due_diligence_columns"
+down_revision = "0006_report_new_fields"
 branch_labels = None
 depends_on = None
 
