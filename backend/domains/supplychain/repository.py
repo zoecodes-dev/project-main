@@ -43,7 +43,7 @@ class SupplyChainRepository:
                 -- 앵커: 트리 루트 = 원청 (parent_supplier_id IS NULL, child=원청 Pack, hop_level=0)
                 SELECT
                     scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
-                    scm.part_id, s.company_name, s.supplier_type, scm.hop_level,
+                    scm.part_id, s.company_name, s.provider_type, scm.hop_level,
                     sf.country,
                     ST_AsGeoJSON(sf.location) AS location_geojson,
                     0 AS depth,
@@ -62,7 +62,7 @@ class SupplyChainRepository:
 
                 SELECT
                     scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
-                    scm.part_id, s.company_name, s.supplier_type, scm.hop_level,
+                    scm.part_id, s.company_name, s.provider_type, scm.hop_level,
                     sf.country,
                     ST_AsGeoJSON(sf.location) AS location_geojson,
                     sct.depth + 1,
@@ -80,7 +80,7 @@ class SupplyChainRepository:
             )
             SELECT
                 map_id, parent_supplier_id, child_supplier_id, part_id,
-                company_name, supplier_type,
+                company_name, provider_type,
                 depth,           -- [F1 주축] 프론트 트리 표시 기준
                 hop_level,       -- [F1 보조] 엣지 메타 — 겸업 탐색·JOIN 조건용
                 is_root_anchor,  -- [F2] parent_supplier_id IS NULL 파생 — OEM/tier0 동적 판정
@@ -101,7 +101,7 @@ class SupplyChainRepository:
         query = text("""
             SELECT
                 scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
-                scm.part_id, s.company_name, s.supplier_type,
+                scm.part_id, s.company_name, s.provider_type,
                 scm.hop_level, p.tier_level AS bom_depth, scm.link_status
             FROM supply_chain_map scm
             JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
@@ -121,7 +121,7 @@ class SupplyChainRepository:
         query = text("""
             SELECT
                 scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
-                scm.part_id, s.company_name, s.supplier_type,
+                scm.part_id, s.company_name, s.provider_type,
                 scm.hop_level, p.tier_level AS bom_depth, scm.link_status
             FROM supply_chain_map scm
             JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
@@ -192,7 +192,7 @@ class SupplyChainRepository:
     async def get_supplier_master_and_gps_dto(self, supplier_id: str) -> dict:
         """HITL 컨텍스트용 협력사 마스터 및 공장 GPS 정보 조회"""
         master_query = text("""
-            SELECT supplier_id, company_name, company_name_en, supplier_type,
+            SELECT supplier_id, company_name, company_name_en, provider_type,
                    status, risk_level, feoc_status, completeness_score,
                    (SELECT sf.country FROM supplier_factories sf
                     WHERE sf.supplier_id = suppliers.supplier_id AND sf.is_active = TRUE
@@ -297,7 +297,7 @@ class SupplyChainRepository:
         """동일 part_id를 공급하는 다른 협력사 목록 (대체 공급망)."""
         query = text("""
             SELECT DISTINCT
-                s.supplier_id, s.company_name, s.supplier_type, scm.hop_level,
+                s.supplier_id, s.company_name, s.provider_type, scm.hop_level,
                 sr.ratio_percentage
             FROM supply_chain_map scm
             JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
@@ -319,7 +319,7 @@ class SupplyChainRepository:
         C2 gap 계산용: 제품 공급망 내 모든 고유 협력사와 각 규제 필수 필드의 보유 여부를 조회.
 
         반환 컬럼:
-          supplier_id, supplier_type, depth (트리 최소 depth)
+          supplier_id, provider_type, depth (트리 최소 depth)
           has_carbon_intensity          : manufacturer_details.carbon_intensity 존재 여부
           has_factory_carbon_decl       : factory_carbon_declarations 행 존재 여부
           has_recycled_content_ratio    : recycler_details.recycled_content_ratio 존재 여부
@@ -332,7 +332,7 @@ class SupplyChainRepository:
         query = text("""
             WITH RECURSIVE sc_tree AS (
                 SELECT
-                    scm.child_supplier_id, s.supplier_type,
+                    scm.child_supplier_id, s.provider_type,
                     0 AS depth
                 FROM supply_chain_map scm
                 JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
@@ -343,7 +343,7 @@ class SupplyChainRepository:
                 UNION ALL
 
                 SELECT
-                    scm.child_supplier_id, s.supplier_type,
+                    scm.child_supplier_id, s.provider_type,
                     sct.depth + 1
                 FROM supply_chain_map scm
                 JOIN sc_tree sct ON scm.parent_supplier_id = sct.child_supplier_id
@@ -352,7 +352,7 @@ class SupplyChainRepository:
             unique_suppliers AS (
                 SELECT DISTINCT ON (child_supplier_id)
                     child_supplier_id AS supplier_id,
-                    supplier_type,
+                    provider_type,
                     MIN(depth) OVER (PARTITION BY child_supplier_id) AS depth
                 FROM sc_tree
                 ORDER BY child_supplier_id, depth
@@ -364,7 +364,7 @@ class SupplyChainRepository:
             )
             SELECT
                 us.supplier_id,
-                us.supplier_type,
+                us.provider_type,
                 us.depth,
                 (rs.child_supplier_id IS NOT NULL) AS is_root_anchor,
                 -- Manufacturer: carbon_intensity
@@ -397,7 +397,7 @@ class SupplyChainRepository:
             LEFT JOIN supplier_recycler_details srd      ON srd.supplier_id = us.supplier_id
             LEFT JOIN supplier_miner_details smind       ON smind.supplier_id = us.supplier_id
             LEFT JOIN supplier_risk_profiles srp         ON srp.supplier_id = us.supplier_id
-            ORDER BY us.depth, us.supplier_type;
+            ORDER BY us.depth, us.provider_type;
         """)
         result = await self.session.execute(query, {"product_id": product_id})
         return [dict(row._mapping) for row in result]
