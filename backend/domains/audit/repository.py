@@ -109,6 +109,131 @@ async def list_gap_analysis_results(db: AsyncSession, regulation_id: UUID) -> li
     return [dict(row._mapping) for row in result.all()]
 
 
+# ── audit packages (2.5b · 2.5c) ───────────────────────────────────────────
+
+async def list_audit_packages(
+    db: AsyncSession,
+    tenant_id: UUID | None,
+    page: int,
+    size: int,
+) -> list[dict]:
+    """
+    batches 를 audit package 단위로 집계.
+    evidenceCount = audit_data_snapshots 건수.
+    gapCount      = compliance_results 중 compliance_passed 가 아닌 건수.
+    """
+    stmt = text(
+        """
+        SELECT
+            b.batch_id                                                     AS package_id,
+            COALESCE(p.name, b.batch_id::text)                            AS target,
+            b.destination                                                   AS type,
+            b.status,
+            COUNT(DISTINCT ads.snapshot_id)                                AS evidence_count,
+            COUNT(DISTINCT cr.result_id)
+                FILTER (WHERE cr.verdict != 'compliance_passed')           AS gap_count,
+            COALESCE(t.company_name, '')                                   AS owner,
+            b.received_at                                                  AS created_at
+        FROM batches b
+        LEFT JOIN products p        ON p.product_id  = b.product_id
+        LEFT JOIN tenants  t        ON t.tenant_id   = b.tenant_id
+        LEFT JOIN audit_data_snapshots ads ON ads.batch_id = b.batch_id
+        LEFT JOIN compliance_results   cr  ON cr.batch_id  = b.batch_id
+        WHERE (CAST(:tenant_id AS uuid) IS NULL OR b.tenant_id = CAST(:tenant_id AS uuid))
+        GROUP BY b.batch_id, p.name, b.destination, b.status, t.company_name, b.received_at
+        ORDER BY b.received_at DESC
+        LIMIT :size OFFSET :offset
+        """
+    )
+    result = await db.execute(
+        stmt,
+        {
+            "tenant_id": str(tenant_id) if tenant_id else None,
+            "size": size,
+            "offset": (page - 1) * size,
+        },
+    )
+    return [dict(row._mapping) for row in result.all()]
+
+
+async def count_audit_packages(db: AsyncSession, tenant_id: UUID | None) -> int:
+    stmt = text(
+        """
+        SELECT COUNT(*)
+        FROM batches
+        WHERE (CAST(:tenant_id AS uuid) IS NULL OR tenant_id = CAST(:tenant_id AS uuid))
+        """
+    )
+    result = await db.execute(
+        stmt, {"tenant_id": str(tenant_id) if tenant_id else None}
+    )
+    return result.scalar_one()
+
+
+async def get_audit_package(
+    db: AsyncSession, package_id: UUID, tenant_id: UUID | None
+) -> dict | None:
+    stmt = text(
+        """
+        SELECT
+            b.batch_id                                                     AS package_id,
+            COALESCE(p.name, b.batch_id::text)                            AS target,
+            b.destination                                                   AS type,
+            b.status,
+            COUNT(DISTINCT ads.snapshot_id)                                AS evidence_count,
+            COUNT(DISTINCT cr.result_id)
+                FILTER (WHERE cr.verdict != 'compliance_passed')           AS gap_count,
+            COALESCE(t.company_name, '')                                   AS owner,
+            b.received_at                                                  AS created_at,
+            d.dpp_id                                                       AS dpp_ref
+        FROM batches b
+        LEFT JOIN products p        ON p.product_id  = b.product_id
+        LEFT JOIN tenants  t        ON t.tenant_id   = b.tenant_id
+        LEFT JOIN audit_data_snapshots ads ON ads.batch_id = b.batch_id
+        LEFT JOIN compliance_results   cr  ON cr.batch_id  = b.batch_id
+        LEFT JOIN dpp_records          d   ON d.batch_id   = b.batch_id
+        WHERE b.batch_id = CAST(:package_id AS uuid)
+          AND (CAST(:tenant_id AS uuid) IS NULL OR b.tenant_id = CAST(:tenant_id AS uuid))
+        GROUP BY b.batch_id, p.name, b.destination, b.status,
+                 t.company_name, b.received_at, d.dpp_id
+        """
+    )
+    result = await db.execute(
+        stmt,
+        {
+            "package_id": str(package_id),
+            "tenant_id": str(tenant_id) if tenant_id else None,
+        },
+    )
+    row = result.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def list_package_trail(db: AsyncSession, package_id: UUID) -> list[dict]:
+    """audit_trail rows → AuditTrailItem 형태로 반환 (snake_case; 프론트 camelCase 변환)."""
+    stmt = text(
+        """
+        SELECT
+            step_number,
+            timestamp,
+            node_type,
+            node_name,
+            model_version  AS model,
+            prompt_version,
+            duration_ms,
+            input_hash,
+            output_hash,
+            decision_text  AS decision,
+            COALESCE(citations, '[]'::jsonb) AS citations
+        FROM audit_trail
+        WHERE batch_id = CAST(:package_id AS uuid)
+        ORDER BY step_number ASC
+        """
+    )
+    result = await db.execute(stmt, {"package_id": str(package_id)})
+    return [dict(row._mapping) for row in result.all()]
+
+
 async def create_pending_hitl_review(
     db: AsyncSession,
     batch_id: UUID,

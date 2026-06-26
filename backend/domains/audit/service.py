@@ -94,6 +94,51 @@ async def get_gap_analysis_results(db: AsyncSession, regulation_id: UUID) -> lis
     return await repository.list_gap_analysis_results(db, regulation_id)
 
 
+# ── audit packages (2.5b · 2.5c) ────────────────────────────────────────────
+
+async def list_audit_packages(
+    db: AsyncSession,
+    tenant_id: UUID | None,
+    page: int,
+    size: int,
+) -> list[dict]:
+    return await repository.list_audit_packages(db, tenant_id, page, size)
+
+
+async def count_audit_packages(db: AsyncSession, tenant_id: UUID | None) -> int:
+    return await repository.count_audit_packages(db, tenant_id)
+
+
+def _build_checklist(evidence_count: int, gap_count: int, dpp_ref: object, trail: list[dict]) -> list[dict]:
+    return [
+        {"key": "data_snapshot",  "label": "데이터 스냅샷", "status": "completed" if evidence_count > 0 else "pending"},
+        {"key": "gap_analysis",   "label": "갭 분석",       "status": "completed" if gap_count > 0 else "pending"},
+        {"key": "dpp_issued",     "label": "DPP 발행",      "status": "completed" if dpp_ref else "pending"},
+        {"key": "chain_verified", "label": "해시 체인",      "status": "completed" if trail else "pending"},
+    ]
+
+
+async def get_audit_package(
+    db: AsyncSession,
+    package_id: UUID,
+    tenant_id: UUID | None,
+) -> dict:
+    row = await repository.get_audit_package(db, package_id, tenant_id)
+    if not row:
+        raise BatchNotFound(package_id)
+
+    trail = await repository.list_package_trail(db, package_id)
+    checklist = _build_checklist(
+        row["evidence_count"], row["gap_count"], row["dpp_ref"], trail
+    )
+
+    return {
+        **row,
+        "checklist": checklist,
+        "hash_chain": trail,
+    }
+
+
 async def verify_chain(db: AsyncSession, batch_id: UUID) -> ChainVerification:
     """
     해시 체인 무결성 검증.

@@ -18,6 +18,12 @@ class HitlRepository:
         result = await self.db.execute(stmt)
         return result.scalars().first()
 
+    async def get_by_review_id(self, review_id: uuid.UUID) -> HitlReview | None:
+        """reviewId → HitlReview 조회 (batch_id 역방향 매핑용)."""
+        stmt = select(HitlReview).where(HitlReview.review_id == review_id)
+        result = await self.db.execute(stmt)
+        return result.scalars().first()
+
     async def get_queue_with_batch_info(self, status: str) -> list[dict]:
         """
         [도메인 격리 준수] batches 테이블을 조인하여 에이전트 신뢰도(confidence_score)를 가져옵니다.
