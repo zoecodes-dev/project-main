@@ -20,13 +20,34 @@ import os
 import httpx
 import pytest
 
+from backend.infrastructure.security import create_access_token
+
 BASE_URL = os.getenv("BASE_URL", "http://localhost")
 TIMEOUT = 15.0
 
+# 시드(02_seed_data.sql)의 원청 관리자 — suppliers를 소유한 테넌트.
+# 테넌트 격리(§0.2)로 /suppliers 등 보호 라우트는 Bearer 토큰이 필요해졌다.
+# SECRET_KEY는 서버(docker)와 동일한 .env를 공유하므로 여기서 발급한 토큰을 서버가 그대로 검증한다.
+SEED_USER_ID = "11111111-0000-4000-8000-000000000001"
+SEED_TENANT_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+SEED_ROLE = "admin"
+
 
 @pytest.fixture(scope="session")
-def client():
-    with httpx.Client(base_url=BASE_URL, timeout=TIMEOUT, follow_redirects=True) as c:
+def auth_token():
+    """시드 원청 유저로 JWT 발급(tenant_id 클레임 포함). get_current_user가 읽는 sub/role/tenant_id."""
+    return create_access_token(
+        {"sub": SEED_USER_ID, "role": SEED_ROLE, "tenant_id": SEED_TENANT_ID}
+    )
+
+
+@pytest.fixture(scope="session")
+def client(auth_token):
+    # 모든 요청에 Authorization 헤더를 기본 첨부 → /suppliers·master-form·factories 등 보호 라우트 통과.
+    headers = {"Authorization": f"Bearer {auth_token}"}
+    with httpx.Client(
+        base_url=BASE_URL, timeout=TIMEOUT, follow_redirects=True, headers=headers
+    ) as c:
         yield c
 
 
@@ -54,7 +75,7 @@ def test_masterform_atomic_distribution(client, a_supplier_id):
     (POINT 좌표 보존 포함) 왕복 확인한다.
     """
     payload = {
-        "company": {"company_name": "E2E 재활용", "supplier_type": "recycler"},
+        "company": {"company_name": "E2E 재활용", "provider_type": "recycler"},
         "factories": [{
             "factory_name": "E2E 처리장",
             "country": "KR",

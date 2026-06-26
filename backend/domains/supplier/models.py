@@ -55,7 +55,7 @@ class Supplier(Base):
     duns_number: Mapped[Optional[str]] = mapped_column(String(20))
     tax_number: Mapped[Optional[str]] = mapped_column(String(50))
     website: Mapped[Optional[str]] = mapped_column(String(255))
-    supplier_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    provider_type: Mapped[str] = mapped_column(String(30), nullable=False)
     parent_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("suppliers.supplier_id")
     )
@@ -451,7 +451,7 @@ class TrainingRecord(Base):
 class SupplierCreateRequest(BaseModel):
     tenant_id: uuid.UUID
     company_name: str
-    supplier_type: str
+    provider_type: str
     email: str
     # [G1] 협력사→협력사 초대 시 이동 주체(초대한 협력사). 원청 직접 등록이면 None.
     inviter_supplier_id: Optional[uuid.UUID] = None
@@ -461,7 +461,7 @@ class SupplierBrief(BaseModel):
     """목록·단건 응답용 직렬화 스키마(ORM relationship lazy load 직렬화 에러 방지)."""
     supplier_id: uuid.UUID
     company_name: str
-    supplier_type: str
+    provider_type: str
     status: str
     risk_level: str
 
@@ -516,11 +516,11 @@ class MinerDetailDTO(BaseModel):
 class SupplierDetailResponse(BaseModel):
     """
     단건 상세 — 기본 필드 + provider type에 해당하는 CTI 1종만 채워 반환.
-    supplier_type에 맞지 않는 detail은 None(예: manufacturer면 miner_detail=None).
+    provider_type에 맞지 않는 detail은 None(예: manufacturer면 miner_detail=None).
     """
     supplier_id: uuid.UUID
     company_name: str
-    supplier_type: str
+    provider_type: str
     status: str
     risk_level: str
     feoc_status: str
@@ -714,7 +714,7 @@ class MasterFormCompany(BaseModel):
     duns_number: Optional[str] = None
     tax_number: Optional[str] = None
     website: Optional[str] = None
-    supplier_type: str  # manufacturer / recycler / trader / miner (chk_supplier_type)
+    provider_type: str  # manufacturer / recycler / trader / miner (chk_provider_type)
     established_year: Optional[int] = None
     employee_count: Optional[int] = None
 

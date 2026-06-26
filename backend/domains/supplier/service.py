@@ -253,7 +253,7 @@ async def get_master_form_prefill(db: AsyncSession, supplier_id: UUID) -> Option
     merged_fields: dict = {}
     merged_conf: dict = {}
     unconfirmed = 0
-    for record, _supplier_type in results:
+    for record, _provider_type in results:
         parsed = record.parsed_fields or {}
         cmap = record.confidence_map or {}
         for key, value in parsed.items():
@@ -281,7 +281,7 @@ async def get_master_form_prefill(db: AsyncSession, supplier_id: UUID) -> Option
 # 원청(OEM, tier0) 노드 — manufacturer지만 CTI 수집 대상 아님 → 점검 예외.
 _OEM_SUPPLIER_ID = UUID("a0000000-0000-4000-8000-000000000000")
 
-# supplier_type → 채워야 할 CTI relationship 속성명 매핑
+# provider_type → 채워야 할 CTI relationship 속성명 매핑
 _CTI_ATTR_BY_TYPE = {
     "manufacturer": "manufacturer_detail",
     "recycler": "recycler_detail",
@@ -296,17 +296,17 @@ async def get_supplier_detail(
     """
     단건 상세 조회 (CTI 상세 포함). repository가 selectinload로 4종 CTI를 미리 로드한다.
     [목요일 연결 점검] provider type과 실제 적재된 CTI가 불일치하면 경고 로그를 남긴다
-    (예: supplier_type='manufacturer'인데 manufacturer_detail이 없음 = 자료 미수집).
+    (예: provider_type='manufacturer'인데 manufacturer_detail이 없음 = 자료 미수집).
     엣지 케이스를 삼키지 않고 드러내기 위한 점검이며, 응답 자체는 정상 반환한다.
     """
     supplier = await repository.get_supplier_by_id(db, supplier_id, tenant_id)
     if supplier is None:
         return None
 
-    expected_attr = _CTI_ATTR_BY_TYPE.get(supplier.supplier_type)
+    expected_attr = _CTI_ATTR_BY_TYPE.get(supplier.provider_type)
     if supplier_id != _OEM_SUPPLIER_ID and expected_attr is not None and getattr(supplier, expected_attr, None) is None:
         print(
-            f"[CTI 점검] supplier {supplier_id} type={supplier.supplier_type} "
+            f"[CTI 점검] supplier {supplier_id} type={supplier.provider_type} "
             f"이지만 {expected_attr} 미적재 (자료 미수집 가능)"
         )
     return supplier

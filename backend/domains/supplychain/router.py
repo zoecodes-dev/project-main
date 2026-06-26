@@ -134,7 +134,7 @@ async def get_supply_chain_gaps_endpoint(
         "nodes": [
           {
             "supplier_id": "...",
-            "supplier_type": "manufacturer",
+            "provider_type": "manufacturer",
             "depth": 0,
             "missing_fields": [
               {"field_name": "carbon_intensity", "regulation_code": "EU_BATTERY_ART7", ...}
