@@ -542,20 +542,35 @@ class SupplyChainRepository:
         map_rows = await self.session.execute(map_query, params)
         supply_chain_map = [dict(r._mapping) for r in map_rows]
 
-        # 비율 테이블
-        ratio_query = text(f"""
-            SELECT DISTINCT
-                scm.part_id,
-                scm.child_supplier_id AS supplier_id,
-                sr.ratio_percentage   AS ratio_percent
-            FROM supply_chain_map scm
-            JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
-            JOIN products pr     ON pr.product_id = bv.product_id
-            JOIN supply_ratio sr ON sr.map_id = scm.map_id
-            WHERE {where}
-        """)
-        ratio_rows = await self.session.execute(ratio_query, params)
-        supply_chain_ratios = [dict(r._mapping) for r in ratio_rows]
+        # 누적 기여도 트리 (루트→공장 경로 ratio 곱). 구조 필터(product/tenant/bom_version)만 적용 —
+        # period/po/factory 같은 행 단위 필터는 누적곱 경로를 끊으므로 여기선 제외(맵 배열엔 적용됨).
+        contributions = await self.get_supply_chain_contributions(
+            product_id=product_id,
+            tenant_id=tenant_id,
+            bom_version_id=bom_version_id,
+        )
+
+        # 비율 테이블 — 기존 계약({part_id, supplier_id, ratio_percent}) 유지 + 누적곱/매핑키 덧붙임.
+        # ratio_percent 가 실제로 있는(supply_ratio 존재) 엣지만 포함(기존 INNER JOIN 의미 보존).
+        supply_chain_ratios = [
+            {
+                "part_id":                 c["part_id"],
+                "supplier_id":             c["supplier_id"],
+                "ratio_percent":           c["ratio_percent"],
+                "map_id":                  c["map_id"],
+                "factory_id":              c["factory_id"],
+                "cumulative_contribution": c["cumulative_contribution"],
+            }
+            for c in contributions
+            if c["ratio_percent"] is not None
+        ]
+
+        # 계층별 합 100% 검증 (엣지별 공장합 / 공급사별 묶음합)
+        validation = await self.get_supply_chain_validation(
+            product_id=product_id,
+            tenant_id=tenant_id,
+            bom_version_id=bom_version_id,
+        )
 
         # 공급사 브리프 — 맵에 등장하는 고유 supplier_id
         supplier_ids = list({str(r["supplier_id"]) for r in supply_chain_map if r["supplier_id"]})
@@ -593,6 +608,8 @@ class SupplyChainRepository:
         return {
             "supply_chain_map": supply_chain_map,
             "supply_chain_ratios": supply_chain_ratios,
+            "supply_chain_contributions": contributions,
+            "validation": validation,
             "suppliers": suppliers,
             "supplier_factories": supplier_factories,
         }
@@ -623,6 +640,157 @@ class SupplyChainRepository:
         if row is None:
             return None
         return {"map_id": str(row[0]), "status": row[1]}
+
+    # -------------------------------------------------------------------------
+    # 10.2a 누적 기여도(곱셈 전파) + 계층별 합 100% 검증
+    #   ratio_percentage 는 "직속 부모 대비 상대값" (PM 확정) → 경로상 비율의 곱이 말단 기여도.
+    #   예) c=20×30%=6%, d=20×70%=14%, e=80×50%=40%, f=80×50%=40% (합 100%)
+    # -------------------------------------------------------------------------
+
+    @trace_tool("supply_chain_contributions")
+    async def get_supply_chain_contributions(
+        self,
+        product_id: str,
+        tenant_id: str,
+        bom_version_id: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        재귀 CTE로 원청(parent NULL, hop0)부터 말단 공장까지 전개하며
+        경로상 ratio_percentage(상대값)를 곱해 `cumulative_contribution`(말단 기여도 %)을 산출.
+
+        - 엣지에 supply_ratio 행이 여러 개면(공장 분할) 공장 단위로 행이 갈라진다.
+        - supply_ratio 가 없는 엣지는 100% 패스스루(×1.0)로 취급해 누적곱 경로가 0/NULL로 끊기지 않게 한다.
+        - 순환 판정: path 키 = (child_supplier_id, part_id) 복합키(겸업 self-edge 오판 방지, 기존 트리 CTE와 동일).
+        """
+        bom_filter = "AND bv.bom_version_id = :bom_version_id" if bom_version_id else ""
+        params: Dict[str, Any] = {"product_id": product_id, "tenant_id": tenant_id}
+        if bom_version_id:
+            params["bom_version_id"] = bom_version_id
+
+        query = text(f"""
+            WITH RECURSIVE sc_cum AS (
+                -- 앵커: 원청 루트 엣지 (parent_supplier_id IS NULL, hop0)
+                SELECT
+                    scm.map_id, scm.bom_version_id, scm.parent_supplier_id,
+                    scm.child_supplier_id, scm.part_id, scm.hop_level, scm.link_status,
+                    sr.factory_id,
+                    sr.ratio_percentage,
+                    COALESCE(sr.ratio_percentage / 100.0, 1.0) AS cum_ratio,
+                    ARRAY[scm.child_supplier_id::text || ':' || scm.part_id::text] AS path,
+                    FALSE AS is_cycle
+                FROM supply_chain_map scm
+                JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
+                JOIN products pr     ON pr.product_id = bv.product_id
+                LEFT JOIN supply_ratio sr ON sr.map_id = scm.map_id
+                WHERE bv.product_id = :product_id
+                  AND pr.tenant_id = :tenant_id
+                  AND scm.parent_supplier_id IS NULL
+                  {bom_filter}
+
+                UNION ALL
+
+                -- 재귀: 부모 child = 자식 parent, 같은 bom_version, hop_level +1 연속
+                SELECT
+                    scm.map_id, scm.bom_version_id, scm.parent_supplier_id,
+                    scm.child_supplier_id, scm.part_id, scm.hop_level, scm.link_status,
+                    sr.factory_id,
+                    sr.ratio_percentage,
+                    c.cum_ratio * COALESCE(sr.ratio_percentage / 100.0, 1.0) AS cum_ratio,
+                    c.path || (scm.child_supplier_id::text || ':' || scm.part_id::text),
+                    (scm.child_supplier_id::text || ':' || scm.part_id::text) = ANY(c.path)
+                FROM supply_chain_map scm
+                JOIN sc_cum c ON scm.parent_supplier_id = c.child_supplier_id
+                             AND scm.bom_version_id = c.bom_version_id
+                             AND scm.hop_level = c.hop_level + 1
+                LEFT JOIN supply_ratio sr ON sr.map_id = scm.map_id
+                WHERE NOT c.is_cycle
+            )
+            SELECT
+                map_id,
+                part_id,
+                child_supplier_id      AS supplier_id,
+                parent_supplier_id,
+                factory_id,
+                hop_level,
+                link_status,
+                ratio_percentage       AS ratio_percent,
+                ROUND((cum_ratio * 100.0)::numeric, 4) AS cumulative_contribution
+            FROM sc_cum
+            WHERE NOT is_cycle
+            ORDER BY hop_level, map_id;
+        """)
+        result = await self.session.execute(query, params)
+        return [dict(row._mapping) for row in result]
+
+    @trace_tool("supply_chain_validation")
+    async def get_supply_chain_validation(
+        self,
+        product_id: str,
+        tenant_id: str,
+        bom_version_id: str | None = None,
+    ) -> Dict[str, Any]:
+        """
+        계층별 비율 합 100% 검증 (차단용 아님 — 프론트 경고 표시용).
+          - edges : 엣지(map_id)별 공장 분할 ratio 합 (공장 합 100% 대상)
+          - tiers : 같은 (parent_supplier_id, part_id) 묶음의 자식 엣지 비율 합 (공급사 분할 100% 대상)
+        합이 100 ±0.01 을 벗어나면 ok=false.
+        """
+        bom_filter = "AND bv.bom_version_id = :bom_version_id" if bom_version_id else ""
+        params: Dict[str, Any] = {"product_id": product_id, "tenant_id": tenant_id}
+        if bom_version_id:
+            params["bom_version_id"] = bom_version_id
+
+        edge_query = text(f"""
+            SELECT
+                scm.map_id,
+                SUM(sr.ratio_percentage) AS total
+            FROM supply_chain_map scm
+            JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
+            JOIN products pr     ON pr.product_id = bv.product_id
+            JOIN supply_ratio sr ON sr.map_id = scm.map_id
+            WHERE bv.product_id = :product_id
+              AND pr.tenant_id = :tenant_id
+              {bom_filter}
+            GROUP BY scm.map_id
+        """)
+        edge_rows = await self.session.execute(edge_query, params)
+        edges = [
+            {
+                "map_id": str(r._mapping["map_id"]),
+                "sum": float(r._mapping["total"] or 0),
+                "ok": abs(float(r._mapping["total"] or 0) - 100.0) <= 0.01,
+            }
+            for r in edge_rows
+        ]
+
+        tier_query = text(f"""
+            SELECT
+                scm.parent_supplier_id,
+                scm.part_id,
+                SUM(sr.ratio_percentage) AS total
+            FROM supply_chain_map scm
+            JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
+            JOIN products pr     ON pr.product_id = bv.product_id
+            JOIN supply_ratio sr ON sr.map_id = scm.map_id
+            WHERE bv.product_id = :product_id
+              AND pr.tenant_id = :tenant_id
+              AND scm.parent_supplier_id IS NOT NULL
+              {bom_filter}
+            GROUP BY scm.parent_supplier_id, scm.part_id
+        """)
+        tier_rows = await self.session.execute(tier_query, params)
+        tiers = [
+            {
+                "parent_supplier_id": str(r._mapping["parent_supplier_id"]),
+                "part_id": str(r._mapping["part_id"]),
+                "sum": float(r._mapping["total"] or 0),
+                "ok": abs(float(r._mapping["total"] or 0) - 100.0) <= 0.01,
+            }
+            for r in tier_rows
+        ]
+
+        all_valid = all(e["ok"] for e in edges) and all(t["ok"] for t in tiers)
+        return {"edges": edges, "tiers": tiers, "all_valid": all_valid}
 
     # [BYPASS:A3] 시연용 가상 산림훼손지(보르네오 박스 1개) — 운영 전환 시 GFW 등 실데이터 필요
     @trace_tool("check_eudr_deforestation")

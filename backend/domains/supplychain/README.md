@@ -89,8 +89,18 @@ HITL(Human-In-The-Loop) 검토 화면에서 지도에 핀을 꽂고 회색지대
 
 - **10.2a 응답 계약**(snake_case → 프론트 snakeToCamel):
   - `supply_chain_map[]`: `map_id, part_id, supplier_id, factory_id, tier_level, link_status` (`map_id`는 10.2b confirm 호출용)
-  - `supply_chain_ratios[]`: `part_id, supplier_id, ratio_percent`
+  - `supply_chain_ratios[]`: `part_id, supplier_id, ratio_percent` + (추가) `map_id, factory_id, cumulative_contribution`
+  - `supply_chain_contributions[]` (추가): 루트→공장 경로 누적곱 트리. `map_id, part_id, supplier_id, parent_supplier_id, factory_id, hop_level, link_status, ratio_percent, cumulative_contribution`
+  - `validation` (추가): `{ edges:[{map_id, sum, ok}], tiers:[{parent_supplier_id, part_id, sum, ok}], all_valid }`
   - `suppliers[]` = `SupplierBrief` 형태, `supplier_factories[]` = `SupplierFactory` 형태(`latitude`/`longitude` 분리)
+
+#### 14.2 누적 기여도(곱셈 전파) — §10.2a 핸드오프 반영 (2026-06-26)
+프론트 BOM 화면 `percentage`=0 문제의 실제 소스(담당C BOM 10.1b → D 이관, PM 확정). `supply_ratio.ratio_percentage`는
+**직속 부모 대비 상대값**이므로 원청→말단 공장까지 **경로상 비율을 곱해**(`cumulative_contribution`) 말단 기여도를 산출한다.
+- 알고리즘: `get_supply_chain_contributions` 재귀 CTE — `cum_ratio = 부모cum × (ratio/100)`, ratio 없는 엣지는 100% 패스스루(×1.0).
+  - 예) 공급사 20/80 × 공장 30/70·50/50 → 말단 6/14/40/40 (합 100%). (검증 완료)
+- 검증: `get_supply_chain_validation` — 엣지별 공장합(`edges`)·공급사 묶음합(`tiers`) 100±0.01. **차단 아님, 프론트 경고용**.
+- 구조 필터(product/tenant/bom_version)만 누적곱에 적용. period/po/factory 행 필터는 경로를 끊으므로 `supply_chain_map[]`에만 적용.
 - `linkStatus` enum(§A-4): `supplychain_declared | supplychain_confirmed`.
 - **10.2b**: 요청 `{ confirmed: true }`(false면 400). 타 테넌트/미존재면 404. 응답 `status`는 link_status enum 원본이 아니라 계약 고정값 `"confirmed"`.
 
