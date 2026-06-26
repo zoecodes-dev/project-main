@@ -111,9 +111,18 @@ async def create_supplier_and_invite(
     return supplier
 
 
-async def get_supplier(db: AsyncSession, supplier_id: UUID) -> Optional[Supplier]:
-    """단건 조회. 비즈니스 로직 없이 repository에 위임."""
-    return await repository.get_supplier_by_id(db, supplier_id)
+async def get_supplier(
+    db: AsyncSession, supplier_id: UUID, tenant_id: Optional[UUID] = None
+) -> Optional[Supplier]:
+    """단건 조회. 비즈니스 로직 없이 repository에 위임. tenant_id 지정 시 소유 테넌트만(§0.2)."""
+    return await repository.get_supplier_by_id(db, supplier_id, tenant_id)
+
+
+async def supplier_in_tenant(
+    db: AsyncSession, supplier_id: UUID, tenant_id: Optional[UUID]
+) -> bool:
+    """소유권 게이트(§0.2). 하위 리소스 조회 전 라우터가 호출. repository에 위임."""
+    return await repository.supplier_in_tenant(db, supplier_id, tenant_id)
 
 
 async def submit_master_form(
@@ -281,14 +290,16 @@ _CTI_ATTR_BY_TYPE = {
 }
 
 
-async def get_supplier_detail(db: AsyncSession, supplier_id: UUID) -> Optional[Supplier]:
+async def get_supplier_detail(
+    db: AsyncSession, supplier_id: UUID, tenant_id: Optional[UUID] = None
+) -> Optional[Supplier]:
     """
     단건 상세 조회 (CTI 상세 포함). repository가 selectinload로 4종 CTI를 미리 로드한다.
     [목요일 연결 점검] provider type과 실제 적재된 CTI가 불일치하면 경고 로그를 남긴다
     (예: supplier_type='manufacturer'인데 manufacturer_detail이 없음 = 자료 미수집).
     엣지 케이스를 삼키지 않고 드러내기 위한 점검이며, 응답 자체는 정상 반환한다.
     """
-    supplier = await repository.get_supplier_by_id(db, supplier_id)
+    supplier = await repository.get_supplier_by_id(db, supplier_id, tenant_id)
     if supplier is None:
         return None
 
@@ -308,10 +319,24 @@ async def list_suppliers(
     feoc_status: Optional[str] = None,
     page: int = 1,
     size: int = 20,
+    tenant_id: Optional[UUID] = None,
 ) -> List[Supplier]:
-    """목록 조회(필터 + 페이지네이션)."""
+    """목록 조회(필터 + 페이지네이션). tenant_id 지정 시 소유 테넌트만(§0.2)."""
     return await repository.get_suppliers(
-        db, status, risk_level, feoc_status, page, size
+        db, status, risk_level, feoc_status, page, size, tenant_id
+    )
+
+
+async def count_suppliers(
+    db: AsyncSession,
+    status: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    feoc_status: Optional[str] = None,
+    tenant_id: Optional[UUID] = None,
+) -> int:
+    """목록 전체 건수(필터 동일, 페이지 무관). X-Total-Count 헤더용(§0.6)."""
+    return await repository.count_suppliers(
+        db, status, risk_level, feoc_status, tenant_id
     )
 
 

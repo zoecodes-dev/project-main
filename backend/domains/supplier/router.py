@@ -9,11 +9,13 @@ Supplier 도메인 HTTP 진입점(얇은 라우팅 레이어).
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.database import get_db
+from backend.infrastructure.auth import CurrentUser, get_current_user
+from backend.infrastructure.pagination import set_total_count
 from backend.domains.supplier import service
 # 스키마 클래스들을 models 내부 하단에서 안전하게 import
 from backend.domains.supplier.models import (
@@ -34,14 +36,32 @@ from backend.domains.supplier.models import (
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
 
 
+async def authorized_supplier(
+    supplier_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UUID:
+    """
+    소유권 게이트(§0.2). 경로의 supplier_id 가 토큰 테넌트 소유인지 확인.
+    아니면(없거나 남의 테넌트) 404 — 존재 은닉(다른 테넌트 리소스의 존재를 숨김).
+    하위 리소스 엔드포인트(esg/training/factories/reliability/risk-profile/master-form)가
+    `Depends(authorized_supplier)` 로 재사용한다.
+    """
+    if not await service.supplier_in_tenant(db, supplier_id, current_user.tenant_id):
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return supplier_id
+
+
 @router.post("", status_code=201)
 async def create_supplier_endpoint(
     request: SupplierCreateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """협력사 등록 및 초대 이벤트 발행. (커밋·발행은 service가 처리)"""
+    # 테넌트는 토큰에서 강제(§0.2) — 클라이언트가 보낸 tenant_id 는 신뢰하지 않는다(교차생성 방지).
     supplier_data = {
-        "tenant_id": request.tenant_id,
+        "tenant_id": current_user.tenant_id,
         "company_name": request.company_name,
         "supplier_type": request.supplier_type,
     }
@@ -56,6 +76,7 @@ async def create_supplier_endpoint(
 async def submit_master_form_endpoint(
     supplier_id: UUID,
     form: MasterFormRequest,
+    _auth: UUID = Depends(authorized_supplier),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -72,6 +93,7 @@ async def submit_master_form_endpoint(
 @router.get("/{supplier_id}/master-form/prefill", response_model=MasterFormPrefillResponse)
 async def get_master_form_prefill_endpoint(
     supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -88,10 +110,11 @@ async def get_master_form_prefill_endpoint(
 @router.get("/{supplier_id}", response_model=SupplierBrief)
 async def get_supplier_endpoint(
     supplier_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """협력사 단건 상세 조회."""
-    supplier = await service.get_supplier(db, supplier_id)
+    """협력사 단건 상세 조회. 내 테넌트 소유가 아니면 404(존재 은닉)."""
+    supplier = await service.get_supplier(db, supplier_id, current_user.tenant_id)
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return supplier  # response_model(SupplierBrief)이 ORM→스키마 변환
@@ -100,13 +123,14 @@ async def get_supplier_endpoint(
 @router.get("/{supplier_id}/detail", response_model=SupplierDetailResponse)
 async def get_supplier_detail_endpoint(
     supplier_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     협력사 단건 + CTI 상세(provider type별) 조회.
-    supplier_type에 해당하는 detail 1종만 채워져 반환된다.
+    supplier_type에 해당하는 detail 1종만 채워져 반환된다. 내 테넌트 소유만(아니면 404).
     """
-    supplier = await service.get_supplier_detail(db, supplier_id)
+    supplier = await service.get_supplier_detail(db, supplier_id, current_user.tenant_id)
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return supplier
@@ -114,24 +138,35 @@ async def get_supplier_detail_endpoint(
 
 @router.get("", response_model=List[SupplierBrief])
 async def list_suppliers_endpoint(
+    response: Response,
     status: Optional[str] = None,
     risk_level: Optional[str] = None,
     feoc_status: Optional[str] = None,
     page: int = 1,
     size: int = 20,
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """협력사 목록 필터링 조회 (status / risk_level / feoc_status + 페이지)."""
-    return await service.list_suppliers(
-        db, status, risk_level, feoc_status, page, size
+    """
+    협력사 목록 필터링 조회 (status / risk_level / feoc_status + 페이지). 내 테넌트만(§0.2).
+    전체 건수는 X-Total-Count 헤더로 전달(§0.6) — 본문은 bare array 유지.
+    """
+    items = await service.list_suppliers(
+        db, status, risk_level, feoc_status, page, size, current_user.tenant_id
     )
+    total = await service.count_suppliers(
+        db, status, risk_level, feoc_status, current_user.tenant_id
+    )
+    set_total_count(response, total)
+    return items
  
 @router.get("/{supplier_id}/risk-profile", response_model=RiskProfileResponse)
 async def get_risk_profile_endpoint(
     supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
     db: AsyncSession = Depends(get_db),
 ):
-    """협력사 리스크 프로필 조회."""
+    """협력사 리스크 프로필 조회. 내 테넌트 소유만(아니면 404)."""
     profile = await service.get_risk_profile(supplier_id, db)
     if not profile:
         raise HTTPException(status_code=404, detail="Risk profile not found")
@@ -142,6 +177,7 @@ async def get_risk_profile_endpoint(
 async def update_risk_score_endpoint(
     supplier_id: UUID,
     request: RiskScoreUpdateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -153,8 +189,8 @@ async def update_risk_score_endpoint(
         raise HTTPException(
             status_code=422, detail="score must be between 0 and 100"
         )
-    # 존재하지 않는 협력사면 404 (없는 supplier_id로 프로필 생성 방지)
-    if not await service.get_supplier(db, supplier_id):
+    # 존재하지 않거나 내 테넌트 소유가 아니면 404 (교차 테넌트 수정·프로필 생성 방지)
+    if not await service.get_supplier(db, supplier_id, current_user.tenant_id):
         raise HTTPException(status_code=404, detail="Supplier not found")
 
     profile = await service.upsert_risk_score(supplier_id, request.score, db)
@@ -167,9 +203,10 @@ async def update_risk_score_endpoint(
 @router.get("/{supplier_id}/esg", response_model=SupplierEsgResponse)
 async def get_supplier_esg_endpoint(
     supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
     db: AsyncSession = Depends(get_db),
 ):
-    """ESG 탭 — 인증서(E) + 인권 이슈/산업재해(S) + 실사 기록(G) 조회."""
+    """ESG 탭 — 인증서(E) + 인권 이슈/산업재해(S) + 실사 기록(G) 조회. 내 테넌트 소유만."""
     data = await service.get_esg(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
@@ -179,9 +216,10 @@ async def get_supplier_esg_endpoint(
 @router.get("/{supplier_id}/training", response_model=SupplierTrainingResponse)
 async def get_supplier_training_endpoint(
     supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
     db: AsyncSession = Depends(get_db),
 ):
-    """Training 탭 — 교육 이수 기록(교육 자료 메타 포함) 조회."""
+    """Training 탭 — 교육 이수 기록(교육 자료 메타 포함) 조회. 내 테넌트 소유만."""
     data = await service.get_training(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
@@ -191,9 +229,10 @@ async def get_supplier_training_endpoint(
 @router.get("/{supplier_id}/reliability", response_model=SupplierReliabilityResponse)
 async def get_supplier_reliability_endpoint(
     supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
     db: AsyncSession = Depends(get_db),
 ):
-    """Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약 조회."""
+    """Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약 조회. 내 테넌트 소유만."""
     data = await service.get_reliability(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
@@ -203,9 +242,10 @@ async def get_supplier_reliability_endpoint(
 @router.get("/{supplier_id}/factories", response_model=SupplierFactoriesResponse)
 async def get_supplier_factories_endpoint(
     supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
     db: AsyncSession = Depends(get_db),
 ):
-    """사업장 탭 — 공장/광산 목록(PostGIS 좌표 lat/lng 포함) 조회."""
+    """사업장 탭 — 공장/광산 목록(PostGIS 좌표 lat/lng 포함) 조회. 내 테넌트 소유만."""
     data = await service.get_factories(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
