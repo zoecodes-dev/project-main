@@ -228,7 +228,7 @@ class DueDiligenceRepository:
                 SELECT jsonb_agg(
                     CASE
                         WHEN item->>'capa_id' = :capa_id
-                        THEN jsonb_set(item, '{status}', to_jsonb(:new_status::text))
+                        THEN jsonb_set(item, '{status}', to_jsonb(CAST(:new_status AS text)))
                         ELSE item
                     END
                 )
