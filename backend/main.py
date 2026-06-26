@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from starlette.responses import PlainTextResponse
 
 from backend.infrastructure.database import verify_extensions
-from backend.agents.graph import resume_graph, setup_graph, teardown_graph
+from backend.agents.graph import setup_graph, teardown_graph
 from backend.infrastructure.event_bus import start_event_listener, stop_event_listener, subscribe
 from backend.domains.supplychain.router import router as supplychain_router
 from backend.domains.submission.router import router as submission_router
@@ -28,13 +28,6 @@ from backend.domains.batches.router import batches_router, dashboard_router
 from backend.domains.acl.router import router as acl_router
 from backend.domains.regulation.router import router as regulation_router
 
-async def _on_hitl_resolved(payload: dict) -> None:
-    batch_id = payload.get("batch_id", "")
-    resolution = payload.get("resolution", "")
-    if batch_id and resolution:
-        await resume_graph(batch_id, resolution)
-
-
 async def _register_subscriptions() -> None:
     """
     이벤트 구독 슬롯 (담당: 팀원 B — 인프라/골격).
@@ -48,9 +41,6 @@ async def _register_subscriptions() -> None:
         import해서 subscribe()로 등록만 한다.
       - 같은 event_name에 여러 핸들러를 붙일 수 있다(event_bus는 다중 핸들러 지원).
     """
-    # HITL 재개 (A) — interrupt 해소 시 그래프 resume
-    await subscribe("hitl.resolved", _on_hitl_resolved)
-
     # ── A1: 배치 생성 + graph 트리거 ─────────────────────────────────
     from backend.handlers.batch_trigger import on_submission_approved
     await subscribe("SubmissionApproved", on_submission_approved)

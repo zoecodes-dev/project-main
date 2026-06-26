@@ -90,14 +90,7 @@ class HitlService:
         review = HitlStateMachine.resolve_review(review, resolution, decision_text, user_id)
         # Session commit 은 이 서비스를 호출한 router(의 Depends) 쪽에서 일괄 처리된다고 가정해요.
 
-        # 2. LangGraph 재개(resume) 신호 비동기 발행 (지혜 graph 트리거용)
-        await publish(
-            event_name="hitl.resolved",
-            payload={
-                "batch_id": str(batch_id),
-                "resolution": resolution
-            }
-        )
+        # 2. LangGraph 재개(resume) — enqueue는 router의 commit 직후로 이동 (commit 타이밍 보장)
 
         # 3. 반려 시 연관 제출 건 처리를 위해 Submission 도메인으로 신호 발행 (직접 SQL 수정 금지)
         if resolution == 'reject':
