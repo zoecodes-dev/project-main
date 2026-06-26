@@ -5,7 +5,7 @@ backend/domains/regulation/service.py  (담당: 팀원 C — 은지)
 
 [Wave 0 → Wave 1 교체 이력]
   Wave 0: 더미 데이터 반환 스텁 (D 언블락용)
-  Wave 1: 실제 DB 조회로 교체 
+  Wave 1: 실제 DB 조회로 교체
 
 [이 파일의 역할]
   규제 관련 비즈니스 로직을 담당한다.
@@ -24,10 +24,15 @@ backend/domains/regulation/service.py  (담당: 팀원 C — 은지)
   search_regulations(db, query, code, top_k)   → list[dict]
   save_origin_certificates(db, sid, certs)     → list[str]
 
+  ── [신규 §2.3a / §7.1 — 공유 서비스] ──
+  list_violations(db, tenant_id, supplier_id, limit)  → list[dict]
+  count_violations(db, tenant_id, supplier_id)         → int
+  list_regulation_results(db, tenant_id, page, size)  → list[dict]
+  count_regulation_results(db, tenant_id)              → int
+
 [함수 시그니처 변경 안내]
   Wave 0 스텁 대비 db: AsyncSession 파라미터가 추가됐다.
   D(영수) C2 코드에서 호출 시 db 세션을 넘겨줘야 한다.
-  이것은 Wave 0 docstring에 예고된 변경이다.
 """
 
 from __future__ import annotations
@@ -64,22 +69,6 @@ async def get_applicable_regulations(
          (현재는 TODO — A1 머지 후 배치 진입점으로 연동)
       2. destination → get_regulations_by_destination() 호출
       3. Regulation ORM 리스트 → dict 리스트로 변환
-
-    [파라미터]
-      db         : SQLAlchemy 비동기 세션
-      product_id : 제품 UUID 문자열
-
-    [반환]
-      규제 정보 dict 리스트. 각 항목:
-        regulation_id, regulation_code, name, description,
-        region, version, effective_from
-
-    [사용 예시 — D(영수) C2 맵 gap 계산]
-      from backend.domains.regulation.service import get_applicable_regulations
-
-      regulations = await get_applicable_regulations(db, product_id=str(product_id))
-      for reg in regulations:
-          fields = await get_required_fields(db, reg["regulation_code"])
     """
     # ── TODO: product_id → destination 조회 ──
     # A1(배치 생성 진입점) 머지 후 아래 로직 활성화:
@@ -117,18 +106,6 @@ async def get_regulations_by_destination(
 ) -> list[dict[str, Any]]:
     """
     destination(출하 시장)에 적용되는 규제 목록을 DB에서 조회한다.
-
-    [기존 compliance.py REGULATION_BY_DESTINATION 하드코딩 대체]
-      기존: 파이썬 딕셔너리에 규제 코드 목록을 하드코딩
-      신규: regulations.region 컬럼 기반 DB 쿼리
-            규제가 추가되면 시드 데이터만 INSERT하면 됨
-
-    [파라미터]
-      destination : 'EU' / 'US' / 'BOTH' / 'KR'
-
-    [반환]
-      규제 정보 dict 리스트. compliance.py에서 사용하는
-      "destination" 키는 DB의 region 컬럼 값으로 채운다.
     """
     regulations: list[Regulation] = await reg_repo.get_by_destination(
         db, destination,
@@ -154,17 +131,6 @@ async def get_required_fields(
     [현재 상태]
       D의 regulation_required_fields DDL 머지 전까지
       repository의 임시 더미 데이터를 반환한다.
-
-    [D 머지 후]
-      repository.get_required_fields()가 DB에서 실제 조회.
-      이 service 함수는 수정 불필요 (repository만 교체).
-
-    [파라미터]
-      regulation_code : 'EU_BATTERY', 'UFLPA' 등
-
-    [반환]
-      필수 필드 dict 리스트. 각 항목:
-        field_name, field_type, is_mandatory, provider_type_applicable
     """
     return await reg_repo.get_required_fields(db, regulation_code)
 
@@ -181,21 +147,6 @@ async def search_regulations(
 ) -> list[dict[str, Any]]:
     """
     pgvector 코사인 유사도로 관련 규제 조항을 검색한다.
-
-    [기존 위치] compliance.py search_regulations()
-    [이관 후]   regulation 도메인 service → repository 위임
-
-    compliance.py의 judge 함수들이 이 함수를 호출한다:
-      from backend.domains.regulation.service import search_regulations
-      clauses = await search_regulations(db, "FEOC ownership ...", "IRA", top_k=5)
-
-    [파라미터]
-      query_text      : 검색 쿼리 (자연어)
-      regulation_code : 검색 범위 한정 규제 코드
-      top_k           : 반환할 최대 결과 수
-
-    [반환]
-      규제 조항 dict 리스트 (similarity 점수 포함)
     """
     return await reg_repo.search_by_embedding(
         db, query_text, regulation_code, top_k,
@@ -212,12 +163,7 @@ async def get_regulation_by_code(
 ) -> Optional[dict[str, Any]]:
     """
     regulation_code로 규제 단건을 조회한다.
-
-    [파라미터]
-      regulation_code : 'EU_BATTERY' 등
-
-    [반환]
-      규제 정보 dict. 없으면 None.
+    없으면 None.
     """
     reg = await reg_repo.get_by_code(db, regulation_code)
     if reg is None:
@@ -242,25 +188,6 @@ async def save_origin_certificates(
         → 이 함수 호출
           → repository.write_origin_certificates() 위임
       commit은 B의 service가 일괄 수행 (atomic 보장).
-
-    [파라미터]
-      db            : SQLAlchemy 비동기 세션
-      supplier_id   : 협력사 UUID 문자열
-      certificates  : MasterFormOriginCert.model_dump() 리스트
-
-    [반환]
-      생성된 cert_id 문자열 리스트
-
-    [사용 예시 — B의 service에서]
-      from backend.domains.regulation.service import save_origin_certificates
-
-      if form.origin and form.origin.origin_certificates:
-          cert_ids = await save_origin_certificates(
-              db=db,
-              supplier_id=str(supplier_id),
-              certificates=[c.model_dump() for c in form.origin.origin_certificates],
-          )
-          sections_saved.append("origin_certificates")
     """
     if not certificates:
         logger.debug("save_origin_certificates: 저장할 인증서가 없습니다.")
@@ -272,18 +199,106 @@ async def save_origin_certificates(
 
 
 # ============================================================
+# 7. [신규 §2.3a] 위반 목록 조회 — 공유 서비스 (1벌)
+#
+#    ★ 이 함수가 "단일 출처(Single Source of Truth)"다.
+#       - GET /regulation/violations            (regulation router)
+#       - GET /suppliers/{id}/violations §13.1  (supplier router — 위임받아 호출)
+#    중복 쿼리 없이 supplier_id 파라미터 하나로 양쪽을 커버한다.
+# ============================================================
+
+async def list_violations(
+    db: AsyncSession,
+    tenant_id: UUID,
+    supplier_id: Optional[UUID] = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    compliance_results(verdict=compliance_violation) 위반 목록을 반환한다.
+
+    [보안]
+      repository 계층에서 batches JOIN으로 tenant 격리.
+      이 함수는 tenant_id를 그대로 repository에 위임할 뿐이다.
+
+    [파라미터]
+      db          : AsyncSession
+      tenant_id   : 현재 사용자 테넌트 (router에서 current_user.tenant_id 주입)
+      supplier_id : 선택 필터. None이면 전체 테넌트, UUID 지정 시 해당 공급사만.
+      limit       : 최대 반환 건수
+
+    [§13.1 위임 예시 — supplier router에서]
+      from backend.domains.regulation.service import list_violations, count_violations
+
+      items = await list_violations(db, current_user.tenant_id, supplier_id=supplier_id)
+      total = await count_violations(db, current_user.tenant_id, supplier_id=supplier_id)
+    """
+    return await reg_repo.get_violations(
+        db,
+        tenant_id=tenant_id,
+        supplier_id=supplier_id,
+        limit=limit,
+    )
+
+
+async def count_violations(
+    db: AsyncSession,
+    tenant_id: UUID,
+    supplier_id: Optional[UUID] = None,
+) -> int:
+    """
+    list_violations와 동일한 필터 기준 전체 건수를 반환한다.
+    X-Total-Count 헤더 계산용.
+    """
+    return await reg_repo.count_violations(
+        db,
+        tenant_id=tenant_id,
+        supplier_id=supplier_id,
+    )
+
+
+# ============================================================
+# 8. [신규 §7.1] 규제 판정 전체 목록 조회
+# ============================================================
+
+async def list_regulation_results(
+    db: AsyncSession,
+    tenant_id: UUID,
+    page: int = 1,
+    size: int = 20,
+) -> list[dict[str, Any]]:
+    """
+    /materials/regulation-results 응답 데이터를 반환한다.
+
+    [HITL 후보]
+      confidence < 0.85 이거나 compliance_results.needs_human_review = TRUE 인 경우
+      needs_human_review = True로 응답.
+      판단 로직은 repository에서 수행.
+    """
+    return await reg_repo.get_regulation_results(
+        db,
+        tenant_id=tenant_id,
+        page=page,
+        size=size,
+    )
+
+
+async def count_regulation_results(
+    db: AsyncSession,
+    tenant_id: UUID,
+) -> int:
+    """
+    list_regulation_results 전체 건수. X-Total-Count 헤더용.
+    """
+    return await reg_repo.count_regulation_results(db, tenant_id=tenant_id)
+
+
+# ============================================================
 # 내부 헬퍼
 # ============================================================
 
 def _regulation_to_dict(reg: Regulation) -> dict[str, Any]:
     """
     Regulation ORM 객체를 dict로 변환한다.
-
-    [키 이름 설계]
-      - regulation_id  : str (UUID → 문자열 변환)
-      - destination    : DB 컬럼명은 region이지만, 호출자 관점에서
-                         '적용 시장'이라는 의미의 destination으로 노출.
-                         compliance.py REGULATION_BY_DESTINATION 키와 일치.
     """
     return {
         "regulation_id":   str(reg.regulation_id),
