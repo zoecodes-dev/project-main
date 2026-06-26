@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Column, String, Numeric, ForeignKey, DateTime, text, Text
@@ -106,3 +106,114 @@ class ReadinessResponse(BaseModel):
     product_id: uuid.UUID
     readiness_score: float
     breakdown: Dict[str, bool]
+
+
+# ==============================================================================
+# §6 프론트 계약 DTO
+# ==============================================================================
+
+class RecycledContentOut(BaseModel):
+    co: Optional[float] = None
+    ni: Optional[float] = None
+    li: Optional[float] = None
+
+
+class DppRecordBriefOut(BaseModel):
+    """6.1a 목록 응답"""
+    dpp_id: Optional[uuid.UUID] = None
+    product_id: Optional[uuid.UUID] = None
+    product_code: Optional[str] = None
+    model_name: Optional[str] = None
+    manufacturer: Optional[str] = None
+    destination: Optional[str] = None
+    approved_by: Optional[uuid.UUID] = None
+    status: Optional[str] = None
+    issued_at: Optional[datetime] = None
+    carbon_footprint: Optional[float] = None
+    recycled_content: Optional[RecycledContentOut] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DppRecordDetailOut(DppRecordBriefOut):
+    """6.1b 단건 상세 응답"""
+    serial_number: Optional[str] = None
+    produced_at_factory_id: Optional[str] = None
+    produced_at: Optional[datetime] = None
+    capacity: Optional[float] = None
+    supply_chain_version: Optional[str] = None
+    dpp_version: Optional[str] = None
+
+
+class ReadinessCheckOut(BaseModel):
+    key: str
+    label: str
+    passed: bool
+
+
+class ReadinessBlockerOut(BaseModel):
+    name: str
+    related_doc: Optional[str] = None
+    due_date: Optional[datetime] = None
+    severity: Optional[str] = None
+
+
+class ReadinessBriefOut(BaseModel):
+    """6.3a readiness 응답 (프론트 계약)"""
+    product_id: uuid.UUID
+    product_name: Optional[str] = None
+    readiness: float
+    checks: List[ReadinessCheckOut] = []
+    blockers: List[ReadinessBlockerOut] = []
+
+
+class HeldProductOut(BaseModel):
+    """6.3b / 6.2b 보류 제품 목록"""
+    product_id: uuid.UUID
+    product_name: Optional[str] = None
+    destination: Optional[str] = None
+    readiness: Optional[float] = None
+    blocker_count: int = 0
+    status: Optional[str] = None
+    blocker_key: Optional[str] = None
+    last_updated_at: Optional[datetime] = None
+
+
+class DppStatusOut(BaseModel):
+    """6.2a 카운트 요약"""
+    ready_count: int = 0
+    hold_count: int = 0
+    hitl_count: int = 0
+    blocker_count: int = 0
+    issued_count: int = 0
+
+
+class DppBlockersOut(BaseModel):
+    """6.2c 블로커 건수"""
+    feoc: int = 0
+    origin: int = 0
+    hitl: int = 0
+    audit: int = 0
+
+
+class CarbonTrendSeriesOut(BaseModel):
+    name: str
+    points: List[float] = []
+
+
+class CarbonTrendOut(BaseModel):
+    """6.2d 탄소발자국 트렌드"""
+    labels: List[str] = []
+    series: List[CarbonTrendSeriesOut] = []
+
+
+class RecycledContentAvgOut(BaseModel):
+    """6.2e 재활용 함량 평균"""
+    co_avg: Optional[float] = None
+    ni_avg: Optional[float] = None
+    li_avg: Optional[float] = None
+
+
+class IssueRequest(BaseModel):
+    """6.3c issue 요청 바디"""
+    approver: Optional[str] = None

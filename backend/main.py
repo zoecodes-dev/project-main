@@ -14,7 +14,7 @@ from backend.agents.graph import setup_graph, teardown_graph
 from backend.infrastructure.event_bus import start_event_listener, stop_event_listener, subscribe
 from backend.domains.supplychain.router import router as supplychain_router, product_supply_chain_router
 from backend.domains.due_diligence.router import router as due_diligence_router
-from backend.domains.submission.router import router as submission_router
+from backend.domains.submission.router import router as submission_router, submissions_router
 from backend.domains.verification.router import router as verification_router
 
 from backend.domains.users.router import router as users_router
@@ -76,6 +76,7 @@ app.include_router(supplychain_router)
 app.include_router(product_supply_chain_router)
 app.include_router(due_diligence_router)
 app.include_router(submission_router)
+app.include_router(submissions_router)
 app.include_router(verification_router)
 
 app.include_router(users_router)
