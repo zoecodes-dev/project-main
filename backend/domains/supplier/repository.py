@@ -205,6 +205,21 @@ async def upsert_risk_profile(
     return result.scalars().first()
  
  
+async def set_self_reported_risk_level(
+    db: AsyncSession,
+    supplier_id: UUID,
+    level: str,
+) -> None:
+    """협력사 실사 자가진단 결과 갱신(supplier_risk_profiles.self_reported_risk_level).
+    프로필 row는 초대 시점에 생성돼 존재하므로 UPDATE. flush만 — 커밋은 service."""
+    await db.execute(
+        update(SupplierRiskProfile)
+        .where(SupplierRiskProfile.supplier_id == supplier_id)
+        .values(self_reported_risk_level=level)
+    )
+    await db.flush()
+
+
 async def update_supplier_risk_level(
     db: AsyncSession,
     supplier_id: UUID,

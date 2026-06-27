@@ -213,6 +213,13 @@ async def submit_master_form(
             await e_masterform.write_supplier_certifications(db, supplier_id, form.certifications)
             sections_saved.append("certifications")
 
+        # ── 규제: 실사 자가진단 결과 → supplier_risk_profiles.self_reported_risk_level ──
+        if form.self_reported_risk_level is not None:
+            await repository.set_self_reported_risk_level(
+                db, supplier_id, form.self_reported_risk_level
+            )
+            sections_saved.append("self_assessment")
+
         # ── 단일 커밋 (atomic) — 여기 도달해야만 영속화 ───────────────────────
         await db.commit()
     except Exception:
