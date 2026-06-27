@@ -56,6 +56,7 @@ class Supplier(Base):
     tax_number: Mapped[Optional[str]] = mapped_column(String(50))
     website: Mapped[Optional[str]] = mapped_column(String(255))
     provider_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    smelter_type: Mapped[Optional[str]] = mapped_column(String(20))  # [REVERT-NON-SUPPLIER] smelter 세부 구분(rmi/private)
     parent_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("suppliers.supplier_id")
     )
@@ -817,7 +818,8 @@ class MasterFormCompany(BaseModel):
     duns_number: Optional[str] = None
     tax_number: Optional[str] = None
     website: Optional[str] = None
-    provider_type: str  # manufacturer / recycler / trader / miner (chk_provider_type)
+    provider_type: str  # [REVERT-NON-SUPPLIER] manufacturer/recycler/trader/miner/smelter (chk_provider_type)
+    smelter_type: Optional[str] = None  # [REVERT-NON-SUPPLIER] provider_type='smelter'일 때 rmi/private
     established_year: Optional[int] = None
     employee_count: Optional[int] = None
 
