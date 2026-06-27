@@ -20,8 +20,24 @@ from backend.domains.submission.repository import (
     list_data_requests,
     get_missing_counts,  # [REVERT-NON-SUPPLIER] 이 import 줄 제거
     get_completeness_by_supplier,
-    get_timeline_by_supplier
+    get_timeline_by_supplier,
+    list_extractions_for_review,  # [REVERT-NON-SUPPLIER] HITL AI 추출 조회
 )
+
+
+async def list_ai_extractions(db: AsyncSession) -> list[dict]:
+    """[REVERT-NON-SUPPLIER] HITL 협력사 승인 — AI 추출(parsed_fields+confidence) + 협력사·요청 정보."""
+    rows = await list_extractions_for_review(db)
+    return [{
+        "request_id": str(r["request_id"]),
+        "supplier_id": str(r["target_supplier_id"]) if r.get("target_supplier_id") else None,
+        "supplier_name": r.get("company_name"),
+        "requested_data_type": r.get("requested_data_type"),
+        "submission_status": r.get("submission_status"),
+        "parsed_fields": r.get("parsed_fields") or {},
+        "confidence_map": r.get("confidence_map") or {},
+        "unparsed_fields": r.get("unparsed_fields") or [],
+    } for r in rows]
 from backend.domains.submission.state_machine import transition_submission
 from backend.domains.submission.models import DataCompletenessStatus, SubmissionStatusHistory
 from backend.events.types import (

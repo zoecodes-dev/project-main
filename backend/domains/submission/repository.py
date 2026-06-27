@@ -28,6 +28,7 @@ _suppliers_tbl = Table(
     "suppliers", _supplier_meta,
     Column("supplier_id", PG_UUID(as_uuid=True), primary_key=True),
     Column("provider_type", String(30)),
+    Column("company_name", String(255)),  # [REVERT-NON-SUPPLIER] HITL 추출 목록 협력사명용
 )
 
 async def create_data_request(db: AsyncSession, log_record: DataRequestLog) -> DataRequestLog:
@@ -167,6 +168,30 @@ async def list_extraction_results_by_suppliers(
     )
     result = await db.execute(stmt)
     return list(result.all())
+
+
+# [REVERT-NON-SUPPLIER:BEGIN] HITL 협력사 승인 — AI 추출(parsed_fields+confidence)을 자료요청·협력사와 함께.
+#   submission 도메인(비-supplier). 최종 작업 시 이 함수 + 엔드포인트 원복.
+async def list_extractions_for_review(db: AsyncSession) -> list[dict]:
+    """AI가 파싱한 자료요청 추출결과 + 협력사명 + 요청유형/상태. HITL 검토(입력+AI분석+신뢰도) 표시용."""
+    stmt = (
+        select(
+            DocumentExtractionResult.request_id,
+            DocumentExtractionResult.parsed_fields,
+            DocumentExtractionResult.confidence_map,
+            DocumentExtractionResult.unparsed_fields,
+            DataRequestLog.target_supplier_id,
+            DataRequestLog.requested_data_type,
+            DataRequestLog.submission_status,
+            _suppliers_tbl.c.company_name,
+        )
+        .join(DataRequestLog, DataRequestLog.request_id == DocumentExtractionResult.request_id)
+        .join(_suppliers_tbl, _suppliers_tbl.c.supplier_id == DataRequestLog.target_supplier_id)
+        .order_by(DocumentExtractionResult.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    return [dict(r._mapping) for r in result.all()]
+# [REVERT-NON-SUPPLIER:END]
 
 # ============================================================================
 # [동작] idempotency_key를 PK로 INSERT 시도 →
