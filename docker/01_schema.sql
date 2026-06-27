@@ -718,7 +718,9 @@ CREATE TABLE data_request_log (
     reminder_count      INT DEFAULT 0,
     last_reminder_at    TIMESTAMPTZ,
     responded_at        TIMESTAMPTZ,
-    
+    -- submit 시 생성된 batch_id 보관(파이프라인 enqueue 키). ORM DataRequestLog.batch_id 와 정합(미적용 DDL 반영).
+    batch_id            UUID,
+
     -- [A-2 상태] submission_status 접두어 일괄 적용, rework 추가, 제약조건
     submission_status   VARCHAR(30) DEFAULT 'submission_requested'
         CONSTRAINT chk_submission_status CHECK (
