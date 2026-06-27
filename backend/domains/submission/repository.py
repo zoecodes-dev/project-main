@@ -170,27 +170,25 @@ async def list_extraction_results_by_suppliers(
     return list(result.all())
 
 
-# [REVERT-NON-SUPPLIER:BEGIN] HITL 협력사 승인 — AI 추출(parsed_fields+confidence)을 자료요청·협력사와 함께.
+# [REVERT-NON-SUPPLIER:BEGIN] HITL 협력사 승인 — AI 추출(parsed_fields+confidence) + 협력사 + hitl_reviews 연결.
 #   submission 도메인(비-supplier). 최종 작업 시 이 함수 + 엔드포인트 원복.
 async def list_extractions_for_review(db: AsyncSession) -> list[dict]:
-    """AI가 파싱한 자료요청 추출결과 + 협력사명 + 요청유형/상태. HITL 검토(입력+AI분석+신뢰도) 표시용."""
-    stmt = (
-        select(
-            DocumentExtractionResult.request_id,
-            DocumentExtractionResult.parsed_fields,
-            DocumentExtractionResult.confidence_map,
-            DocumentExtractionResult.unparsed_fields,
-            DataRequestLog.target_supplier_id,
-            DataRequestLog.requested_data_type,
-            DataRequestLog.submission_status,
-            _suppliers_tbl.c.company_name,
-        )
-        .join(DataRequestLog, DataRequestLog.request_id == DocumentExtractionResult.request_id)
-        .join(_suppliers_tbl, _suppliers_tbl.c.supplier_id == DataRequestLog.target_supplier_id)
-        .order_by(DocumentExtractionResult.created_at.desc())
-    )
-    result = await db.execute(stmt)
-    return [dict(r._mapping) for r in result.all()]
+    """AI 파싱 추출결과 + 협력사명 + 요청유형/상태 + (연결된 경우) hitl_reviews 검토 상태."""
+    q = text("""
+        SELECT e.request_id, e.parsed_fields, e.confidence_map, e.unparsed_fields,
+               d.target_supplier_id, d.requested_data_type, d.submission_status, d.batch_id,
+               s.company_name,
+               h.review_id  AS hitl_review_id,
+               h.status     AS hitl_status,
+               h.reason     AS hitl_reason
+        FROM document_extraction_results e
+        JOIN data_request_log d ON d.request_id = e.request_id
+        JOIN suppliers s        ON s.supplier_id = d.target_supplier_id
+        LEFT JOIN hitl_reviews h ON h.batch_id = d.batch_id
+        ORDER BY e.created_at DESC
+    """)
+    result = await db.execute(q)
+    return [dict(r) for r in result.mappings().all()]
 # [REVERT-NON-SUPPLIER:END]
 
 # ============================================================================
