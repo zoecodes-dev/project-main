@@ -30,6 +30,8 @@ from backend.domains.supplier.models import (
     SupplierFactoriesResponse,
     SupplierContactsResponse,
     SupplierCompletenessResponse,
+    SupplierOriginCertsResponse,
+    SupplierSuppliedItemsResponse,
     MasterFormRequest,
     MasterFormResponse,
     MasterFormPrefillResponse,
@@ -275,6 +277,32 @@ async def get_supplier_completeness_endpoint(
 ):
     """입력 완성도 — data_completeness_status(completion_rate·missing_fields) 조회. 내 테넌트 소유만."""
     data = await service.get_completeness(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
+
+
+@router.get("/{supplier_id}/origin-certificates", response_model=SupplierOriginCertsResponse)
+async def get_supplier_origin_certificates_endpoint(
+    supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
+    db: AsyncSession = Depends(get_db),
+):
+    """원산지/규제 증빙 — origin_certificates 목록 조회. 내 테넌트 소유만."""
+    data = await service.get_origin_certificates(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
+
+
+@router.get("/{supplier_id}/supplied-items", response_model=SupplierSuppliedItemsResponse)
+async def get_supplier_supplied_items_endpoint(
+    supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
+    db: AsyncSession = Depends(get_db),
+):
+    """공급 품목 — 공급망 맵에서 이 협력사가 공급하는 부품 목록 조회. 내 테넌트 소유만."""
+    data = await service.get_supplied_items(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return data

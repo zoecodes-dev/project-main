@@ -688,6 +688,40 @@ class SupplierCompletenessResponse(BaseModel):
     last_updated_at: Optional[datetime] = None
 
 
+# 원산지/규제 증빙 — origin_certificates.
+class OriginCertDTO(BaseModel):
+    cert_id: uuid.UUID
+    cert_type: Optional[str] = None
+    cert_number: Optional[str] = None
+    issuing_authority: Optional[str] = None
+    issued_at: Optional[date] = None
+    expires_at: Optional[date] = None
+    origin_country: Optional[str] = None
+    status: Optional[str] = None
+    document_url: Optional[str] = None
+    model_config = {"from_attributes": True}
+
+
+class SupplierOriginCertsResponse(BaseModel):
+    supplier_id: uuid.UUID
+    origin_certificates: list[OriginCertDTO] = []
+
+
+# 공급 품목 — supply_chain_map에서 이 협력사가 공급하는 부품.
+class SuppliedItemDTO(BaseModel):
+    part_id: uuid.UUID
+    part_code: Optional[str] = None
+    part_name: Optional[str] = None
+    tier_level: Optional[int] = None
+    material_type: Optional[str] = None
+    model_config = {"from_attributes": True}
+
+
+class SupplierSuppliedItemsResponse(BaseModel):
+    supplier_id: uuid.UUID
+    items: list[SuppliedItemDTO] = []
+
+
 # Reliability(신뢰도) 탭: 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.
 class SupplierReliabilityResponse(BaseModel):
     supplier_id: uuid.UUID
