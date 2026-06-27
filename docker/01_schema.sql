@@ -184,6 +184,55 @@ CREATE TABLE supplier_onboarding (
     reminder_count      INT DEFAULT 0
 );
 
+-- [테이블 역할] 제3자 정보제공 동의서 = 데이터 계약(Data Contract). [담당: 은지/supplier]
+--   원청(consumer)이 협력사(provider)에게 동의서를 메일 발송 → 일정 양식으로 회신 → DB 영속.
+--   Catena-X 데이터 주권 모델 정렬: 데이터 계약은 (1) 어떤 데이터(data_scope), (2) 어떤 목적
+--   (purpose=ODRL), (3) 누구에게 재공유 가능(third_party_sharing/allowed_recipients=usage policy),
+--   (4) 기간/철회(valid_from·to/revocable), (5) 협상 상태(status=계약 협상 로그),
+--   (6) 회신 양식 데이터(form_data) + 서명 증빙(document_file_id) + 무결성(agreement_hash)을 담는다.
+--   ※ supplier_onboarding.consent_status(단순 동의 플래그)와 달리, 계약 '내용'과 회신 데이터를 보존.
+CREATE TABLE data_provision_consents (
+    consent_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    supplier_id         UUID NOT NULL REFERENCES suppliers(supplier_id) ON DELETE CASCADE,  -- 데이터 제공자(협력사)
+    tenant_id           UUID REFERENCES tenants(tenant_id),                                  -- 데이터 소비자(원청)
+
+    -- 데이터 계약 조건 (ODRL usage policy 유사) ----------------------------------------
+    data_scope          JSONB NOT NULL,        -- 동의 데이터 자산: ["company","contacts","factories","carbon_epd","origin","sub_suppliers"]
+    purpose             VARCHAR(50) NOT NULL,  -- 사용 목적(use case): EU_BATTERY / SUPPLY_CHAIN_DD / CSDDD / CONFLICT_MINERALS
+    third_party_sharing BOOLEAN DEFAULT FALSE, -- 원청이 제3자(고객사·규제기관)에 재공유 허용 여부
+    allowed_recipients  JSONB,                 -- 재공유 허용 대상(고객사/규제기관 식별자 배열)
+    valid_from          DATE,
+    valid_to            DATE,
+    revocable           BOOLEAN DEFAULT TRUE,
+
+    -- 라이프사이클 (Catena-X 계약 협상 상태 = agreement log) ----------------------------
+    status              VARCHAR(20) NOT NULL DEFAULT 'requested'
+        CONSTRAINT chk_data_consent_status CHECK (status IN ('requested','returned','agreed','rejected','revoked','expired')),
+    requested_at        TIMESTAMPTZ,    -- 동의서 메일 발송
+    returned_at         TIMESTAMPTZ,    -- 양식 회신 수신
+    agreed_at           TIMESTAMPTZ,    -- 서명/동의 체결
+    revoked_at          TIMESTAMPTZ,
+
+    -- 서명자(협력사 측) -----------------------------------------------------------------
+    signer_name         VARCHAR(100),
+    signer_title        VARCHAR(100),
+    signer_email        VARCHAR(255),
+    signature_method    VARCHAR(20)
+        CONSTRAINT chk_consent_sig_method CHECK (signature_method IN ('email_form','e_sign','wet_signature')),
+
+    -- 증빙 + 무결성 ---------------------------------------------------------------------
+    form_version        VARCHAR(20),    -- 동의서 양식(데이터 계약) 버전
+    form_data           JSONB,          -- 회신받은 구조화 양식 데이터(SSOT 저장)
+    document_file_id    UUID REFERENCES files(file_id),  -- 서명된 동의서 PDF
+    agreement_hash      VARCHAR(64),    -- 합의 무결성 해시(Catena-X agreement log 유사)
+    requested_by        UUID REFERENCES users(user_id),
+
+    created_at          TIMESTAMPTZ DEFAULT now(),
+    updated_at          TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX idx_data_consent_supplier ON data_provision_consents(supplier_id);
+CREATE INDEX idx_data_consent_status   ON data_provision_consents(status);
+
 -- [테이블 역할] ISO 14001, Bettercoal 등 일반 품질/환경/안전 인증서 마스터.
 CREATE TABLE supplier_certifications (
     cert_id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

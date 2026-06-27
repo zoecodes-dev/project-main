@@ -560,3 +560,15 @@ INSERT INTO users (user_id, tenant_id, email, password_hash, name, role, manager
 -- 2) ESG 담당(002)의 상급자를 ESG 부서장(008)으로 지정 (기안→부서장 결재 2단계).
 UPDATE users SET manager_id = '11111111-0000-4000-8000-000000000008'
 WHERE user_id = '11111111-0000-4000-8000-000000000002';
+-- ============================================================
+-- 제3자 정보제공 동의서 = 데이터 계약(Data Contract) — 한양셀 동의 완료 샘플
+-- ============================================================
+INSERT INTO data_provision_consents
+  (supplier_id, tenant_id, data_scope, purpose, third_party_sharing, allowed_recipients, valid_from, valid_to, revocable,
+   status, requested_at, returned_at, agreed_at, signer_name, signer_title, signer_email, signature_method, form_version, form_data, agreement_hash)
+VALUES
+  ('a1111111-1111-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+   '["company","contacts","factories","carbon_epd","origin"]'::jsonb, 'EU_BATTERY', TRUE, '["BMW AG"]'::jsonb,
+   '2026-01-01', '2027-12-31', TRUE, 'agreed', now() - interval '20 days', now() - interval '14 days', now() - interval '13 days',
+   '김철수', 'ESG팀장', 'cs.kim@hanyangmfg.com', 'email_form', 'v1.0',
+   '{"data_subject":"한양셀 제조(주)","sub_supplier_consent":true,"retention_years":7}'::jsonb, 'a3f5c9e1d2b4');

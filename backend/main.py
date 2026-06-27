@@ -28,6 +28,7 @@ from backend.domains.batches.router import batches_router, dashboard_router
 from backend.domains.acl.router import router as acl_router
 from backend.domains.regulation.router import router as regulation_router, compliance_router
 from backend.domains.files.router import router as files_router
+from backend.domains.data_consent.router import router as data_consent_router
 
 async def _register_subscriptions() -> None:
     """
@@ -93,6 +94,7 @@ app.include_router(acl_router)
 app.include_router(regulation_router)
 app.include_router(compliance_router)
 app.include_router(files_router)
+app.include_router(data_consent_router)
 
 @app.get("/health")
 async def health_check():
