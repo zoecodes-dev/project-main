@@ -407,7 +407,7 @@ async def get_violations(
         FROM compliance_results cr
         INNER JOIN batches b
             ON cr.batch_id = b.batch_id
-           AND b.tenant_id = :tenant_id::uuid      -- ★ tenant 격리 핵심
+           AND b.tenant_id = CAST(:tenant_id AS uuid)      -- ★ tenant 격리 핵심
         LEFT JOIN regulations r
             ON cr.regulation_id = r.regulation_id
         WHERE
@@ -457,7 +457,7 @@ async def count_violations(
         FROM compliance_results cr
         INNER JOIN batches b
             ON cr.batch_id = b.batch_id
-           AND b.tenant_id = :tenant_id::uuid
+           AND b.tenant_id = CAST(:tenant_id AS uuid)
         WHERE
             cr.verdict = 'compliance_violation'
             {supplier_filter}
@@ -528,7 +528,7 @@ async def get_regulation_results(
         FROM compliance_results cr
         INNER JOIN batches b
             ON cr.batch_id = b.batch_id
-           AND b.tenant_id = :tenant_id::uuid      -- ★ tenant 격리 핵심
+           AND b.tenant_id = CAST(:tenant_id AS uuid)      -- ★ tenant 격리 핵심
         LEFT JOIN regulations r
             ON cr.regulation_id = r.regulation_id
         LEFT JOIN suppliers s
@@ -572,7 +572,7 @@ async def count_regulation_results(
         FROM compliance_results cr
         INNER JOIN batches b
             ON cr.batch_id = b.batch_id
-           AND b.tenant_id = :tenant_id::uuid
+           AND b.tenant_id = CAST(:tenant_id AS uuid)
     """)
     result = await db.execute(sql, {"tenant_id": str(tenant_id)})
     return result.scalar() or 0
