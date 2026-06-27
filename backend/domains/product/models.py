@@ -1049,6 +1049,7 @@ class ProductBrief(BaseModel):
     type: Optional[str] = None
     manufacturer_id: Optional[uuid.UUID] = None
     customer_id: Optional[uuid.UUID] = None      # W4 추가
+    customer_name: Optional[str] = None          # [REVERT-NON-SUPPLIER] 고객사명(제출 export용)
     model_name: Optional[str] = None             # W4 추가
     amperage_ah: Optional[float] = None          # W4 추가
     source_system: Optional[str] = None          # 결정 #1
