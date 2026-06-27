@@ -34,6 +34,7 @@ from backend.domains.submission.service import (
     list_submissions_for_tenant,
     count_submissions_for_tenant,
     get_submission_detail_for_tenant,
+    list_ai_extractions,
 )
 from backend.domains.submission.models import (
     SubmissionBriefOut,
@@ -118,6 +119,17 @@ async def create_data_request_endpoint(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
+
+# [REVERT-NON-SUPPLIER:BEGIN] HITL 협력사 승인 — AI 추출 목록(입력+AI분석+신뢰도). /{request_id}보다 먼저 등록.
+@router.get("/ai-extractions")
+async def list_ai_extractions_endpoint(
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """협력사 자료요청 AI 파싱 결과(parsed_fields + confidence) 목록. HITL 검토·승인용."""
+    return await list_ai_extractions(db)
+# [REVERT-NON-SUPPLIER:END]
+
 
 @router.get("/{request_id}", response_model=DataRequestResponse)
 async def get_data_request_endpoint(request_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
