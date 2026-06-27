@@ -97,6 +97,8 @@ CREATE TABLE suppliers (
         CONSTRAINT chk_provider_type CHECK (provider_type IN ('manufacturer', 'recycler', 'trader', 'miner', 'smelter')),
     smelter_type        VARCHAR(20) CONSTRAINT chk_smelter_type CHECK (smelter_type IN ('rmi', 'private')),  -- smelter 세부 구분(RMI/private)
     core_minerals       JSONB,  -- 소재 구성: 핵심광물 함량(%) {"Li":12.5,"Co":8.0,"Ni":60.0}
+    business_reg_doc_url    VARCHAR(500),  -- 필요문서: 사업자등록증(기업정보 서류) 업로드 URL
+    environmental_report_url VARCHAR(500),  -- 필요문서: 환경성적서(회원가입 시 수집) 업로드 URL
     parent_supplier_id  UUID REFERENCES suppliers(supplier_id),
     established_year    INT,
     employee_count      INT,
