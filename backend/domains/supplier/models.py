@@ -289,6 +289,8 @@ class SupplierRiskProfile(Base):
     # 가점식 0~100 (↑위험). 대역: 0~29 low / 30~49 medium / 50~69 high / 70~100 critical
     overall_risk_score: Mapped[int] = mapped_column(Integer, default=0)
     risk_level: Mapped[str] = mapped_column(String(20), default="low")
+    # 협력사 실사 자가진단(self-assessed) 결과 — low/medium/high/critical/unknown. (시스템 risk_level과 별개)
+    self_reported_risk_level: Mapped[str] = mapped_column(String(20), default="unknown")
     feoc_status: Mapped[str] = mapped_column(String(20), default="unknown")
     feoc_direct_ownership: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
     feoc_indirect_ownership: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
@@ -474,6 +476,7 @@ class RiskProfileResponse(BaseModel):
     supplier_id: uuid.UUID
     overall_risk_score: int
     risk_level: str
+    self_reported_risk_level: Optional[str] = "unknown"  # 협력사 실사 자가진단 결과
     feoc_status: Optional[str] = "unknown"
 
     model_config = {"from_attributes": True}
@@ -1014,6 +1017,8 @@ class MasterFormRequest(BaseModel):
     ownership: Optional[MasterFormOwnership] = None             # 섹션 4
     social: Optional[MasterFormSocial] = None                   # 섹션 5
     certifications: Optional[MasterFormCertifications] = None    # 섹션 6
+    # 규제 — 실사 자가진단 결과(협력사 자가신고). low/medium/high (→ risk_profiles.self_reported_risk_level)
+    self_reported_risk_level: Optional[str] = None
 
 
 class MasterFormResponse(BaseModel):
