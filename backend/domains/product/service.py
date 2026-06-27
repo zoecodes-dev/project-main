@@ -306,6 +306,7 @@ async def list_products(
             "manufacturer_id": str(p.manufacturer_id) if p.manufacturer_id else None,
             "type":            p.type,
             "customer_id":     str(p.customer_id) if p.customer_id else None,
+            "customer_name":   p.customer.customer_name if p.customer else None,  # [REVERT-NON-SUPPLIER] 고객사명(export용)
             "model_name":      p.model_name,
             "amperage_ah":     float(p.amperage_ah) if p.amperage_ah else None,
             "source_system":   p.source_system,

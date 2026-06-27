@@ -35,6 +35,7 @@ from uuid import UUID
 from sqlalchemy import and_, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload  # [REVERT-NON-SUPPLIER] 이 import 제거 (customer eager load용)
 
 from backend.domains.product.models import (
     BomVersion,
@@ -360,6 +361,7 @@ class ProductRepository:
         """
         result = await self.session.execute(
             select(Product)
+            .options(selectinload(Product.customer))  # [REVERT-NON-SUPPLIER] customer eager load(고객사명용)
             .order_by(
                 Product.synced_at.desc().nulls_last(),
                 Product.created_at.desc(),
