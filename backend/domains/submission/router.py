@@ -86,22 +86,28 @@ async def list_data_requests_endpoint(
     )
 
 @router.post("", response_model=DataRequestResponse, status_code=status.HTTP_201_CREATED)
-async def create_data_request_endpoint(req: DataRequestCreateRequest, db: AsyncSession = Depends(get_db)):
+async def create_data_request_endpoint(
+    req: DataRequestCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     """
     [API] POST /data-requests
     새로운 공급망 데이터 제출 요청을 생성하고, 초기 상태(submission_requested)로 설정합니다.
     - 비즈니스 로직(service.py)에 처리를 위임하여 컨트롤러 역할을 수행합니다.
-    - 도메인 계층에서 발생한 ValueError(무결성 위반 등)를 HTTP 422 상태 코드로 매핑하여
-      도메인 계층이 웹 프레임워크(FastAPI)에 의존하지 않고 안전하게 에러를 처리하도록 설계되었습니다.
+    - requester_user_id/actor_id 미제공 시 토큰의 현재 사용자로 자동 채움(프론트는 대상·유형만 보내면 됨).
+    - 도메인 계층에서 발생한 ValueError(무결성 위반 등)를 HTTP 422 상태 코드로 매핑한다.
     """
+    requester = req.requester_user_id or current_user.user_id
+    actor = req.actor_id or current_user.user_id
     try:
         return await create_and_request_submission(
             db=db,
-            requester_user_id=req.requester_user_id,
+            requester_user_id=requester,
             target_supplier_id=req.target_supplier_id,
             requested_data_type=req.requested_data_type,
             due_date=req.due_date,
-            actor_id=req.actor_id
+            actor_id=actor,
         )
     except ValueError as e:
         # 비즈니스 규칙 위반 또는 DB 참조 무결성 위반 시 422 반환
