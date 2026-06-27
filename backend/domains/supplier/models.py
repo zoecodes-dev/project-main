@@ -520,6 +520,16 @@ class SupplierDetailResponse(BaseModel):
     """
     supplier_id: uuid.UUID
     company_name: str
+    # 기업 기본정보 섹션용 — suppliers 테이블 컬럼(있으면 채움).
+    company_name_en: Optional[str] = None
+    company_name_ko: Optional[str] = None
+    ceo_name: Optional[str] = None
+    business_reg_no: Optional[str] = None
+    duns_number: Optional[str] = None
+    website: Optional[str] = None
+    established_year: Optional[int] = None
+    employee_count: Optional[int] = None
+    completeness_score: Optional[int] = None
     provider_type: str
     status: str
     risk_level: str
