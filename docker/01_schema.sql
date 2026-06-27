@@ -96,6 +96,7 @@ CREATE TABLE suppliers (
     provider_type       VARCHAR(30) NOT NULL
         CONSTRAINT chk_provider_type CHECK (provider_type IN ('manufacturer', 'recycler', 'trader', 'miner', 'smelter')),
     smelter_type        VARCHAR(20) CONSTRAINT chk_smelter_type CHECK (smelter_type IN ('rmi', 'private')),  -- smelter 세부 구분(RMI/private)
+    core_minerals       JSONB,  -- 소재 구성: 핵심광물 함량(%) {"Li":12.5,"Co":8.0,"Ni":60.0}
     parent_supplier_id  UUID REFERENCES suppliers(supplier_id),
     established_year    INT,
     employee_count      INT,
