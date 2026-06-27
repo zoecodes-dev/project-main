@@ -719,8 +719,8 @@ CREATE TABLE data_request_log (
     last_reminder_at    TIMESTAMPTZ,
     responded_at        TIMESTAMPTZ,
     -- submit 시 생성된 batch_id 보관(파이프라인 enqueue 키). ORM DataRequestLog.batch_id 와 정합(미적용 DDL 반영).
-    -- [REVERT-NON-SUPPLIER] supplier 외(schema) — 자료요청 목록 500 수정용. 최종작업 시 주석처리(소유자 적용 전제).
-    batch_id            UUID,
+    -- [REVERT-NON-SUPPLIER] supplier 외(schema) — 자료요청 목록 500 수정용. 소유자 적용 전제.
+    batch_id            UUID,  -- [REVERT-NON-SUPPLIER] 이 줄 주석처리
 
     -- [A-2 상태] submission_status 접두어 일괄 적용, rework 추가, 제약조건
     submission_status   VARCHAR(30) DEFAULT 'submission_requested'
