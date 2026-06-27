@@ -32,6 +32,8 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     name = Column(String(100), nullable=True)
     role = Column(String(50), nullable=True)
+    # 협력사 계정이 대표하는 supplier (§0.5). 로그인 supplier_id 클레임/포털 스코프의 소스. OEM 계정은 None.
+    supplier_id = Column(UUID(as_uuid=True), nullable=True)
     is_active = Column(Boolean, default=True)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     # 자기참조 FK — 직속 상관. 결재선 체인 순회의 출발점.

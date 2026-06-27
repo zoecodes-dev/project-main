@@ -24,10 +24,11 @@ def _get_service(db: AsyncSession = Depends(get_db)) -> UserService:
 
 def _supplier_id_for(user) -> str | None:
     """
-    협력사 계정의 본인 supplier_id (§0.5). 현재 users↔suppliers 매핑 컬럼이
-    스키마에 없어 항상 None. 매핑 도입(예: users.supplier_id) 시 여기만 고친다.
+    협력사 계정의 본인 supplier_id (§0.5). users.supplier_id 매핑을 사용한다.
+    OEM 계정(admin·owner_*)은 매핑이 없어 None.
     """
-    return None
+    sid = getattr(user, "supplier_id", None)
+    return str(sid) if sid else None
 
 
 @router.post("/auth/login")

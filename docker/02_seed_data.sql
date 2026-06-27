@@ -43,8 +43,13 @@ INSERT INTO users (user_id, tenant_id, email, password_hash, name, role) VALUES
 -- 데모 로그인 계정 (프론트 로그인 화면 기본값 — oem/supplier). password: demo1234
 -- (구 alembic 0004_demo_accounts 에서 이관 — DDL/데이터 모두 docker schema·seed 로 일원화)
 INSERT INTO users (user_id, tenant_id, email, password_hash, name, role) VALUES
-('11111111-0000-4000-8000-0000000000a1', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'oem@kira.demo',                '$2b$12$LdrfIceVZR7twTzU8rxKF.M0uqv9vmcUawZNKRoLjbjb9gAidiynS', 'Demo OEM',      'admin'),
-('11111111-0000-4000-8000-0000000000b1', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'supplier@sulawesi-nickel.com', '$2b$12$LdrfIceVZR7twTzU8rxKF.M0uqv9vmcUawZNKRoLjbjb9gAidiynS', 'Demo Supplier', 'supplier_ceo');
+('11111111-0000-4000-8000-0000000000a1', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'oem@kira.demo',              '$2b$12$LdrfIceVZR7twTzU8rxKF.M0uqv9vmcUawZNKRoLjbjb9gAidiynS', 'Demo OEM',          'admin'),
+('11111111-0000-4000-8000-0000000000b1', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'supplier@hanyang-cell.com',  '$2b$12$LdrfIceVZR7twTzU8rxKF.M0uqv9vmcUawZNKRoLjbjb9gAidiynS', '한양셀 데모 협력사', 'supplier_ceo');
+
+-- 협력사 계정 ↔ 본인 supplier 매핑 (§0.5 — 로그인 supplier_id 클레임 / 협력사 포털 스코프 소스).
+-- 데모 협력사 = 한양셀 제조(주)(a1111111). ceo@hanyang.demo 도 동일 회사로 매핑.
+UPDATE users SET supplier_id = 'a1111111-1111-4000-8000-000000000001'
+ WHERE email IN ('supplier@hanyang-cell.com', 'ceo@hanyang.demo');
 
 
 -- ============================================================
