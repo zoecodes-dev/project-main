@@ -83,6 +83,14 @@ async def supplier_in_tenant(
     result = await db.execute(stmt)
     return result.scalars().first() is not None
 
+# 원청(자기 회사) 제외 조건 — 공급망 루트(hop_level=0)에 오는 협력사는 원청이므로 협력사 목록에서 뺀다.
+_EXCLUDE_OEM_ROOT = text(
+    "suppliers.supplier_id NOT IN "
+    "(SELECT child_supplier_id FROM supply_chain_map "
+    "WHERE hop_level = 0 AND child_supplier_id IS NOT NULL)"
+)
+
+
 async def get_suppliers(
     db: AsyncSession,
     status: Optional[str] = None,
@@ -92,8 +100,12 @@ async def get_suppliers(
     size: int = 20,
     tenant_id: Optional[UUID] = None,
 ) -> List[Supplier]:
-    """목록 조회(필터 + 페이지네이션). 기본값 None 인자는 Optional로 명시."""
-    stmt = select(Supplier)
+    """목록 조회(필터 + 페이지네이션). 기본값 None 인자는 Optional로 명시.
+
+    원청(자기 회사)은 supply_chain_map hop_level=0(공급망 루트)으로 존재하므로 협력사 목록에서 제외한다.
+    (협력사 = 우리를 제외한 공급사. KIRA Energy Solutions 같은 자기 자신이 목록에 뜨지 않게.)
+    """
+    stmt = select(Supplier).where(_EXCLUDE_OEM_ROOT)
     if tenant_id is not None:
         stmt = stmt.where(Supplier.tenant_id == tenant_id)
     if status:
@@ -122,8 +134,8 @@ async def count_suppliers(
     feoc_status: Optional[str] = None,
     tenant_id: Optional[UUID] = None,
 ) -> int:
-    """목록 전체 건수(필터 적용, 페이지 무관). X-Total-Count 헤더용(§0.6)."""
-    stmt = select(func.count()).select_from(Supplier)
+    """목록 전체 건수(필터 적용, 페이지 무관). X-Total-Count 헤더용(§0.6). 원청(hop0) 제외."""
+    stmt = select(func.count()).select_from(Supplier).where(_EXCLUDE_OEM_ROOT)
     if tenant_id is not None:
         stmt = stmt.where(Supplier.tenant_id == tenant_id)
     if status:
