@@ -668,6 +668,16 @@ class SupplierContactsResponse(BaseModel):
     contacts: list[ContactDTO] = []
 
 
+# 입력 완성도 — data_completeness_status(entity_type='supplier').
+class SupplierCompletenessResponse(BaseModel):
+    supplier_id: uuid.UUID
+    required_field_count: Optional[int] = None
+    filled_field_count: Optional[int] = None
+    completion_rate: Optional[float] = None
+    missing_fields: list[str] = []
+    last_updated_at: Optional[datetime] = None
+
+
 # Reliability(신뢰도) 탭: 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.
 class SupplierReliabilityResponse(BaseModel):
     supplier_id: uuid.UUID

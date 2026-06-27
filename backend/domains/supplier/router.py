@@ -29,6 +29,7 @@ from backend.domains.supplier.models import (
     SupplierReliabilityResponse,
     SupplierFactoriesResponse,
     SupplierContactsResponse,
+    SupplierCompletenessResponse,
     MasterFormRequest,
     MasterFormResponse,
     MasterFormPrefillResponse,
@@ -261,6 +262,19 @@ async def get_supplier_contacts_endpoint(
 ):
     """담당자 연락처 탭 — supplier_contacts 목록(대표 우선) 조회. 내 테넌트 소유만."""
     data = await service.get_contacts(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
+
+
+@router.get("/{supplier_id}/completeness", response_model=SupplierCompletenessResponse)
+async def get_supplier_completeness_endpoint(
+    supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
+    db: AsyncSession = Depends(get_db),
+):
+    """입력 완성도 — data_completeness_status(completion_rate·missing_fields) 조회. 내 테넌트 소유만."""
+    data = await service.get_completeness(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return data

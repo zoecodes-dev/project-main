@@ -341,6 +341,36 @@ async def get_contacts(db: AsyncSession, supplier_id: UUID) -> List[dict]:
     return [dict(row._mapping) for row in result]
 
 
+async def get_completeness(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """
+    입력 완성도 — data_completeness_status(entity_type='supplier') 단건.
+    completion_rate / missing_fields(JSONB) / filled·required count 반환. 미집계면 None.
+    """
+    stmt = text(
+        """
+        SELECT required_field_count, filled_field_count, completion_rate,
+               missing_fields, last_updated_at
+        FROM data_completeness_status
+        WHERE entity_type = 'supplier' AND entity_id = :sid
+        LIMIT 1
+        """
+    )
+    row = (await db.execute(stmt, {"sid": str(supplier_id)})).mappings().first()
+    if row is None:
+        return None
+    data = dict(row)
+    mf = data.get("missing_fields")
+    if isinstance(mf, str):
+        import json
+        try:
+            data["missing_fields"] = json.loads(mf)
+        except Exception:
+            data["missing_fields"] = []
+    elif mf is None:
+        data["missing_fields"] = []
+    return data
+
+
 # ============================================================
 # 마스터폼 섹션 0~2 write (담당: 팀원 B / KIRA W5 §4)
 #
