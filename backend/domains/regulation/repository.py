@@ -518,7 +518,7 @@ async def get_regulation_results(
     sql = text("""
         SELECT
             cr.result_id,
-            b.product_id                    AS material,   -- 현재 product_id를 material 식별자로 사용
+            COALESCE(p.product_name, b.product_id::text) AS material,  -- 자재명(제품명). 미연결 시 product_id 폴백
             cr.supplier_id,
             s.company_name                  AS supplier_name,
             r.regulation_code               AS regulation,
@@ -533,6 +533,8 @@ async def get_regulation_results(
             ON cr.regulation_id = r.regulation_id
         LEFT JOIN suppliers s
             ON cr.supplier_id = s.supplier_id
+        LEFT JOIN products p
+            ON p.product_id = b.product_id                 -- 자재명(제품명) 조인
         ORDER BY cr.created_at DESC
         LIMIT :limit OFFSET :offset
     """)
