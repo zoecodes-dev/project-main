@@ -91,6 +91,26 @@ async def get_file_meta(
     }
 
 
+# [REVERT-NON-SUPPLIER:BEGIN] context별 파일 목록(환경성적서 첨부 조회). files=공통(비-supplier) 도메인.
+async def list_files(
+    db: AsyncSession, context: str, tenant_id: Optional[uuid.UUID]
+) -> list[dict]:
+    """context 태그로 업로드된 파일 목록(메타). 환경성적서 첨부 표시용."""
+    objs = await FileRepository(db).list_by_context(context, tenant_id)
+    return [
+        {
+            "file_id": str(o.file_id),
+            "file_name": o.file_name,
+            "size_bytes": o.size_bytes,
+            "content_type": o.content_type,
+            "context": o.context,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+        }
+        for o in objs
+    ]
+# [REVERT-NON-SUPPLIER:END]
+
+
 async def delete_file(
     db: AsyncSession, file_id: uuid.UUID, tenant_id: Optional[uuid.UUID]
 ) -> bool:

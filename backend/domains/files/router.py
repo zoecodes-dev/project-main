@@ -49,6 +49,18 @@ async def upload_file_endpoint(
         raise HTTPException(status_code=422, detail=str(e))
 
 
+# [REVERT-NON-SUPPLIER:BEGIN] context별 파일 목록 — 환경성적서 첨부 조회용. files=공통(비-supplier).
+@router.get("")
+async def list_files_endpoint(
+    context: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """context 태그(예: 'carbon-epd:<supplierId>')로 업로드된 파일 목록 조회."""
+    return await service.list_files(db, context, current_user.tenant_id)
+# [REVERT-NON-SUPPLIER:END]
+
+
 @router.get("/{file_id}")
 async def get_file_endpoint(
     file_id: uuid.UUID,

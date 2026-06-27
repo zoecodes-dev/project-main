@@ -50,6 +50,19 @@ class FileRepository:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    # [REVERT-NON-SUPPLIER:BEGIN] context별 파일 목록(환경성적서 첨부 조회용). files=공통(비-supplier) 도메인.
+    async def list_by_context(
+        self, context: str, tenant_id: Optional[uuid.UUID] = None
+    ):
+        """context 태그로 파일 목록 조회(예: 'carbon-epd:<supplierId>'). 최신순."""
+        stmt = select(FileObject).where(FileObject.context == context)
+        if tenant_id is not None:
+            stmt = stmt.where(FileObject.tenant_id == tenant_id)
+        stmt = stmt.order_by(FileObject.created_at.desc())
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+    # [REVERT-NON-SUPPLIER:END]
+
     async def delete(self, obj: FileObject) -> None:
         await self.db.delete(obj)
         await self.db.flush()
