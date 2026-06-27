@@ -8,7 +8,7 @@ Submission 도메인 Data Access 계층 (Repository)
 """
 import uuid
 from typing import Optional
-from sqlalchemy import select, asc
+from sqlalchemy import select, asc, text
 from sqlalchemy import select, Table, Column, MetaData, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,6 +71,21 @@ async def list_data_requests(
     
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+# [REVERT-NON-SUPPLIER] supplier 외(submission) — 자료요청 누락 건수 계산(프론트 표시용). 최종작업 시 주석처리.
+async def get_missing_counts(db: AsyncSession, supplier_ids: list[uuid.UUID]) -> dict:
+    """대상 협력사들의 data_completeness_status.missing_fields 길이 맵 {supplier_id: 누락 수}."""
+    if not supplier_ids:
+        return {}
+    stmt = text(
+        """
+        SELECT entity_id, COALESCE(jsonb_array_length(missing_fields), 0) AS missing_count
+        FROM data_completeness_status
+        WHERE entity_type = 'supplier' AND entity_id::text = ANY(:ids)
+        """
+    )
+    rows = (await db.execute(stmt, {"ids": [str(s) for s in supplier_ids]})).mappings().all()
+    return {row["entity_id"]: row["missing_count"] for row in rows}
 
 async def get_completeness_by_supplier(db: AsyncSession, supplier_id: uuid.UUID) -> Optional[DataCompletenessStatus]:
     """[SELECT] 특정 협력사의 데이터 완성도 현황을 단건 조회합니다."""

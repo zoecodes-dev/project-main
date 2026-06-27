@@ -212,6 +212,8 @@ class DataRequestResponse(BaseModel):
     due_date: Optional[datetime] = None
     response_status: Optional[ResponseStatus] = None
     submission_status: Optional[SubmissionStatus] = None
+    # [REVERT-NON-SUPPLIER] supplier 외(submission) — 대상 협력사 완성도 누락 항목 수(프론트 자료요청 표시용). 최종작업 시 주석처리.
+    missing_count: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
