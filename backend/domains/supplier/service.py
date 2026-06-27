@@ -456,6 +456,26 @@ async def get_completeness(db: AsyncSession, supplier_id: UUID) -> Optional[dict
     return {"supplier_id": supplier_id, **comp}
 
 
+async def get_origin_certificates(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """원산지/규제 증빙 — origin_certificates 목록."""
+    if await repository.get_supplier_by_id(db, supplier_id) is None:
+        return None
+    return {
+        "supplier_id": supplier_id,
+        "origin_certificates": await repository.get_origin_certificates(db, supplier_id),
+    }
+
+
+async def get_supplied_items(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """공급 품목 — 이 협력사가 공급망 맵에서 공급하는 부품 distinct."""
+    if await repository.get_supplier_by_id(db, supplier_id) is None:
+        return None
+    return {
+        "supplier_id": supplier_id,
+        "items": await repository.get_supplied_items(db, supplier_id),
+    }
+
+
 async def get_reliability(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
     """
     Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.

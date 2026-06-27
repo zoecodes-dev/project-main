@@ -371,6 +371,39 @@ async def get_completeness(db: AsyncSession, supplier_id: UUID) -> Optional[dict
     return data
 
 
+async def get_origin_certificates(db: AsyncSession, supplier_id: UUID) -> List[dict]:
+    """원산지/규제 증빙 — origin_certificates 목록. 만료 임박 순(expires_at)."""
+    stmt = text(
+        """
+        SELECT cert_id, cert_type, cert_number, issuing_authority,
+               issued_at, expires_at, origin_country, status, document_url
+        FROM origin_certificates
+        WHERE supplier_id = :sid
+        ORDER BY expires_at ASC NULLS LAST
+        """
+    )
+    rows = (await db.execute(stmt, {"sid": str(supplier_id)})).mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def get_supplied_items(db: AsyncSession, supplier_id: UUID) -> List[dict]:
+    """
+    공급 품목 — 이 협력사(child_supplier_id)가 supply_chain_map에서 공급하는 부품(parts) distinct.
+    (supply_chain_map·parts는 타 도메인 테이블이지만 읽기 전용 SELECT만; 모델 import 없음.)
+    """
+    stmt = text(
+        """
+        SELECT DISTINCT p.part_id, p.part_code, p.part_name, p.tier_level, p.material_type
+        FROM supply_chain_map scm
+        JOIN parts p ON p.part_id = scm.part_id
+        WHERE scm.child_supplier_id = :sid
+        ORDER BY p.tier_level NULLS LAST, p.part_code
+        """
+    )
+    rows = (await db.execute(stmt, {"sid": str(supplier_id)})).mappings().all()
+    return [dict(r) for r in rows]
+
+
 # ============================================================
 # 마스터폼 섹션 0~2 write (담당: 팀원 B / KIRA W5 §4)
 #
