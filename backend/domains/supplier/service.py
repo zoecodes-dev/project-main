@@ -439,6 +439,23 @@ async def get_contacts(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
     }
 
 
+async def get_completeness(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """입력 완성도 — data_completeness_status 단건. 협력사 없으면 None,
+    집계 전이면 빈 기본값으로 안전 반환."""
+    if await repository.get_supplier_by_id(db, supplier_id) is None:
+        return None
+    comp = await repository.get_completeness(db, supplier_id)
+    if comp is None:
+        comp = {
+            "required_field_count": None,
+            "filled_field_count": None,
+            "completion_rate": None,
+            "missing_fields": [],
+            "last_updated_at": None,
+        }
+    return {"supplier_id": supplier_id, **comp}
+
+
 async def get_reliability(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
     """
     Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.
