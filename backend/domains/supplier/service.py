@@ -303,7 +303,16 @@ async def update_supplier_detail(
     supplier = await repository.get_supplier_by_id(db, supplier_id, tenant_id)
     if supplier is None:
         return None
-    await repository.update_supplier_fields(db, supplier_id, fields)
+    # 입력 양식 영속화 — 테이블별로 분배(보낸 필드만).
+    fields = dict(fields)
+    manuf = {k: fields.pop(k) for k in ("carbon_intensity", "energy_source") if k in fields}
+    self_risk = fields.pop("self_reported_risk_level", None)
+    if fields:                         # 나머지는 suppliers 컬럼(core_minerals 포함)
+        await repository.update_supplier_fields(db, supplier_id, fields)
+    if manuf:                          # 탄소발자국 → manufacturer_details
+        await repository.upsert_manufacturer_fields(db, supplier_id, manuf)
+    if self_risk is not None:          # 실사 자가진단 → risk_profiles
+        await repository.set_self_reported_risk_level(db, supplier_id, self_risk)
     await db.commit()
     return await get_supplier_detail(db, supplier_id, tenant_id)
 

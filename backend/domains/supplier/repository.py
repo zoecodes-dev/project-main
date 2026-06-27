@@ -205,6 +205,21 @@ async def upsert_risk_profile(
     return result.scalars().first()
  
  
+async def upsert_manufacturer_fields(db: AsyncSession, supplier_id: UUID, fields: dict) -> None:
+    """탄소발자국 등 manufacturer_details 부분 갱신(공급사당 1행). 행이 없으면 INSERT.
+    제공된 필드만 갱신해 다른 컬럼(공정·capacity)은 보존. flush만 — 커밋은 service."""
+    if not fields:
+        return
+    res = await db.execute(
+        update(SupplierManufacturerDetail)
+        .where(SupplierManufacturerDetail.supplier_id == supplier_id)
+        .values(**fields)
+    )
+    if res.rowcount == 0:
+        db.add(SupplierManufacturerDetail(supplier_id=supplier_id, **fields))
+    await db.flush()
+
+
 async def set_self_reported_risk_level(
     db: AsyncSession,
     supplier_id: UUID,
