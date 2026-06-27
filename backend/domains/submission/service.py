@@ -18,6 +18,7 @@ from backend.domains.submission.repository import (
     create_data_request, 
     get_data_request, 
     list_data_requests,
+    get_missing_counts,
     get_completeness_by_supplier,
     get_timeline_by_supplier
 )
@@ -153,12 +154,29 @@ async def get_submissions_list(
     status: Optional[str] = None,
     skip: int = 0,
     limit: int = 100
-) -> list[DataRequestLog]:
+) -> list[dict]:
     """
     [조회 도구] 목록 필터링 조회
     - 협력사(supplier_id)나 현재 진행 상태(status)를 기준으로 다건을 조회합니다.
+    - [REVERT-NON-SUPPLIER] 각 요청 대상 협력사의 누락 항목 수(missing_count)를 함께 채움(프론트 표시용).
     """
-    return await list_data_requests(db, supplier_id, status, skip, limit)
+    logs = await list_data_requests(db, supplier_id, status, skip, limit)
+    sids = list({l.target_supplier_id for l in logs if l.target_supplier_id})
+    missing_map = await get_missing_counts(db, sids)
+    return [
+        {
+            "request_id": l.request_id,
+            "requester_user_id": l.requester_user_id,
+            "target_supplier_id": l.target_supplier_id,
+            "requested_data_type": l.requested_data_type,
+            "requested_at": l.requested_at,
+            "due_date": l.due_date,
+            "response_status": l.response_status,
+            "submission_status": l.submission_status,
+            "missing_count": missing_map.get(l.target_supplier_id),
+        }
+        for l in logs
+    ]
 
 @trace_node("update_submission_status", node_type="agent")
 async def update_submission_status(
