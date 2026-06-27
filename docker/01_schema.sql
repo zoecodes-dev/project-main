@@ -42,6 +42,7 @@ CREATE TABLE users (
     is_active      BOOLEAN DEFAULT TRUE,
     last_login_at  TIMESTAMPTZ,
     manager_id     UUID REFERENCES users(user_id) ON DELETE SET NULL, -- [다단계 결재] 상급자 자기참조 (결재선 자동 구성)
+    supplier_id    UUID,  -- [협력사 본인 식별 §0.5] 협력사 계정이 대표하는 supplier. 로그인 supplier_id 클레임/포털 스코프 소스. OEM 계정은 NULL.
     created_at     TIMESTAMPTZ DEFAULT now()
 );
 
