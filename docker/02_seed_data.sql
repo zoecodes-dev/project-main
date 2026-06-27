@@ -348,7 +348,7 @@ INSERT INTO manufacturing_process (part_id, sequence_no, process_name, is_outsou
 --     예) 한양셀 = Module(hop1) + Cell(hop2).
 -- ------------------------------------------------------------
 -- ① BMW iX3 [Happy] 원청→한양셀(Module→Cell 겸업)→동성CAM→한중제련→호주리튬
-INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status, supply_period_from, supply_period_to) VALUES
+INSERT INTO supply_chain_map (edge_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status, supply_period_from, supply_period_to) VALUES
 ('51111111-0000-4000-8000-000000000001', 'e1111111-0000-4000-8000-000000000001', NULL,                                     'a0000000-0000-4000-8000-000000000000', 'b1111111-0000-4000-8000-000000000001', 0, 'supplychain_confirmed', 'ERP', 'verified', '2025-01-01', '2025-12-31'),
 ('51111111-0000-4000-8000-000000000002', 'e1111111-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000000', 'a1111111-1111-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000002', 1, 'supplychain_confirmed', 'ERP', 'verified', '2025-01-01', '2025-12-31'),
 ('51111111-0000-4000-8000-000000000003', 'e1111111-0000-4000-8000-000000000001', 'a1111111-1111-4000-8000-000000000001', 'a1111111-1111-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000003', 2, 'supplychain_confirmed', 'ERP', 'verified', '2025-01-01', '2025-12-31'),
@@ -357,7 +357,7 @@ INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_
 ('51111111-0000-4000-8000-000000000006', 'e1111111-0000-4000-8000-000000000001', 'aaaaaaaa-aaaa-4000-8000-00000000000a', 'a3333333-3333-4000-8000-000000000003', 'b1111111-0000-4000-8000-000000000008', 5, 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified', '2025-01-01', '2025-12-31');
 
 -- ② BMW i4 [Gray] 원청→한양셀(Module→Cell 겸업)→동성CAM→미확인트레이더(전구체, 선언만)
-INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status, supply_period_from, supply_period_to) VALUES
+INSERT INTO supply_chain_map (edge_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status, supply_period_from, supply_period_to) VALUES
 ('52222222-0000-4000-8000-000000000001', 'e2222222-0000-4000-8000-000000000002', NULL,                                     'a0000000-0000-4000-8000-000000000000', 'b1111111-0000-4000-8000-000000000001', 0, 'supplychain_confirmed', 'ERP', 'verified', '2025-01-01', '2025-12-31'),
 ('52222222-0000-4000-8000-000000000002', 'e2222222-0000-4000-8000-000000000002', 'a0000000-0000-4000-8000-000000000000', 'a1111111-1111-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000002', 1, 'supplychain_confirmed', 'ERP', 'verified', '2025-01-01', '2025-12-31'),
 ('52222222-0000-4000-8000-000000000003', 'e2222222-0000-4000-8000-000000000002', 'a1111111-1111-4000-8000-000000000001', 'a1111111-1111-4000-8000-000000000001', 'b1111111-0000-4000-8000-000000000003', 2, 'supplychain_confirmed', 'ERP', 'verified', '2025-01-01', '2025-12-31'),
@@ -365,20 +365,20 @@ INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_
 ('52222222-0000-4000-8000-000000000005', 'e2222222-0000-4000-8000-000000000002', 'a2222222-2222-4000-8000-000000000002', 'abababab-abab-4000-8000-0000000000ab', 'b1111111-0000-4000-8000-000000000004', 4, 'supplychain_declared',  'SUPPLIER_DECLARED', 'unverified', '2025-01-01', '2025-12-31');
 
 -- ③ Mercedes GLC Lot1 2024 [Sad-정상] 원청→우진셀→청정전구체 (CAM 계층 건너뜀: hop 연속, tier 점프)
-INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status, supply_period_from, supply_period_to) VALUES
+INSERT INTO supply_chain_map (edge_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status, supply_period_from, supply_period_to) VALUES
 ('53111111-0000-4000-8000-000000000001', 'e3333333-0000-4000-8000-000000000031', NULL,                                     'a0000000-0000-4000-8000-000000000000', 'b1111111-0000-4000-8000-000000000001', 0, 'supplychain_confirmed', 'ERP', 'verified', '2024-01-01', '2024-12-31'),
 ('53111111-0000-4000-8000-000000000002', 'e3333333-0000-4000-8000-000000000031', 'a0000000-0000-4000-8000-000000000000', 'a8888888-8888-4000-8000-000000000008', 'b1111111-0000-4000-8000-000000000003', 1, 'supplychain_confirmed', 'ERP', 'verified', '2024-01-01', '2024-12-31'),
 ('53111111-0000-4000-8000-000000000003', 'e3333333-0000-4000-8000-000000000031', 'a8888888-8888-4000-8000-000000000008', 'a6666666-6666-4000-8000-000000000006', 'b1111111-0000-4000-8000-000000000004', 2, 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified', '2024-01-01', '2024-12-31');
 
 -- ③ Mercedes GLC Lot2 2025 [Sad-위반] 원청→우진셀→신장니켈제련(전구체)→Global Mining(신장 니켈광산)
-INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status, supply_period_from, supply_period_to) VALUES
+INSERT INTO supply_chain_map (edge_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status, supply_period_from, supply_period_to) VALUES
 ('53222222-0000-4000-8000-000000000001', 'e3333333-0000-4000-8000-000000000032', NULL,                                     'a0000000-0000-4000-8000-000000000000', 'b1111111-0000-4000-8000-000000000001', 0, 'supplychain_confirmed', 'ERP', 'verified', '2025-01-01', '2025-12-31'),
 ('53222222-0000-4000-8000-000000000002', 'e3333333-0000-4000-8000-000000000032', 'a0000000-0000-4000-8000-000000000000', 'a8888888-8888-4000-8000-000000000008', 'b1111111-0000-4000-8000-000000000003', 1, 'supplychain_confirmed', 'ERP', 'verified', '2025-01-01', '2025-12-31'),
 ('53222222-0000-4000-8000-000000000003', 'e3333333-0000-4000-8000-000000000032', 'a8888888-8888-4000-8000-000000000008', 'acacacac-acac-4000-8000-0000000000ac', 'b1111111-0000-4000-8000-000000000004', 2, 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified', '2025-01-01', '2025-12-31'),
 ('53222222-0000-4000-8000-000000000004', 'e3333333-0000-4000-8000-000000000032', 'acacacac-acac-4000-8000-0000000000ac', 'a5555555-5555-4000-8000-000000000005', 'b1111111-0000-4000-8000-000000000008', 3, 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified', '2025-01-01', '2025-12-31');
 
 -- ④ Mercedes EQS [Happy] 원청→우진배터리→동성CAM→칠레리튬
-INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status, supply_period_from, supply_period_to) VALUES
+INSERT INTO supply_chain_map (edge_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level, link_status, source_system, verification_status, supply_period_from, supply_period_to) VALUES
 ('54444444-0000-4000-8000-000000000001', 'e4444444-0000-4000-8000-000000000004', NULL,                                     'a0000000-0000-4000-8000-000000000000', 'b1111111-0000-4000-8000-000000000001', 0, 'supplychain_confirmed', 'ERP', 'verified', '2025-01-01', '2025-12-31'),
 ('54444444-0000-4000-8000-000000000002', 'e4444444-0000-4000-8000-000000000004', 'a0000000-0000-4000-8000-000000000000', 'a7777777-7777-4000-8000-000000000007', 'b1111111-0000-4000-8000-000000000003', 1, 'supplychain_confirmed', 'ERP', 'verified', '2025-01-01', '2025-12-31'),
 ('54444444-0000-4000-8000-000000000003', 'e4444444-0000-4000-8000-000000000004', 'a7777777-7777-4000-8000-000000000007', 'a2222222-2222-4000-8000-000000000002', 'b1111111-0000-4000-8000-000000000006', 2, 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified', '2025-01-01', '2025-12-31'),
@@ -386,9 +386,17 @@ INSERT INTO supply_chain_map (map_id, bom_version_id, parent_supplier_id, child_
 -- hop4: 한중제련(smelter)→칠레리튬(광산). 광산은 무조건 상위 제련소(smelter)와 엮여야 함(정보관리 주체=smelter).
 ('54444444-0000-4000-8000-000000000005', 'e4444444-0000-4000-8000-000000000004', 'aaaaaaaa-aaaa-4000-8000-00000000000a', 'a9999999-9999-4000-8000-000000000009', 'b1111111-0000-4000-8000-00000000000b', 4, 'supplychain_confirmed', 'SUPPLIER_DECLARED', 'verified', '2025-01-01', '2025-12-31');
 
+-- 공급망 맵 헤더(supply_chain_maps): bom_version(제품×Lot)당 1개. 엣지의 map_id(헤더 FK) 백필.
+INSERT INTO supply_chain_maps (map_id, bom_version_id, product_id, status)
+SELECT gen_random_uuid(), bv.bom_version_id, bv.product_id, 'completed'
+FROM bom_versions bv
+WHERE EXISTS (SELECT 1 FROM supply_chain_map scm WHERE scm.bom_version_id = bv.bom_version_id);
+UPDATE supply_chain_map scm SET map_id = h.map_id
+FROM supply_chain_maps h WHERE h.bom_version_id = scm.bom_version_id;
+
 -- 분할 납품 비율 (iX3 1차 납품: 한양셀→원청, hop1 — 한양 단일공장 100%)
---   최상위 납품 조인이 hop_level=1 엣지의 supply_ratio.volume 을 사용 → hop1(map ...002)에 연결.
-INSERT INTO supply_ratio (map_id, factory_id, ratio_percentage, volume, unit) VALUES
+--   최상위 납품 조인이 hop_level=1 엣지의 supply_ratio.volume 을 사용 → hop1(edge ...002)에 연결.
+INSERT INTO supply_ratio (edge_id, factory_id, ratio_percentage, volume, unit) VALUES
 ('51111111-0000-4000-8000-000000000002', 'f1111111-0000-4000-8000-000000000001', 100.00, 10000, 'ea');
 
 -- 공장별 탄소발자국 선언 (EU 배터리법 ART7)

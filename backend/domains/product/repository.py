@@ -461,7 +461,8 @@ class ProductRepository:
         #   5계층(Pack=0 ~ 광물=4) 초과는 데이터 오염으로 간주.
         # ------------------------------------------------------------------
         # [결정 #2] link_status 필터 문자열 생성
-        # scm.map_id IS NULL 조건: supply_chain_map에 매핑이 없는 부품(직접 BOM 항목)도 포함.
+        # [REVERT-NON-SUPPLIER] supplier 외 — supply_chain_map 엣지 PK가 edge_id로 개명됨(주석 참고용).
+        # scm.edge_id IS NULL 조건: supply_chain_map에 매핑이 없는 부품(직접 BOM 항목)도 포함.
         # 허용값은 schema chk_link_status 그대로 사용 ('supplychain_confirmed').
         link_status_filter = ""
         
