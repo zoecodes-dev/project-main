@@ -595,16 +595,39 @@ class ProductRepository:
         #       root_nodes[0]만 쓰면 나머지 2개 서브트리가 누락된다. 완전 수정은
         #       다중 루트 반환이 필요(응답 계약 변경) — 백엔드 담당자 검토 요망.
         # ───────────────────────────────────────────────────────────────
+        # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(product) — BOM 트리 404 수정(공급망 맵 노드 표시용).
+        #   원인: parent_part_id IS NULL 루트가 0건 → 404. 앵커(depth=0) 기준으로 수정.
+        #   최종작업 시 아래 블록을 원복:
+        #       root_nodes = [n for n in node_map.values() if n["parent_part_id"] is None]
+        #       if not root_nodes: return None
+        #       root_node = root_nodes[0]
         root_nodes = [
             n for n in node_map.values()
-            if n["parent_part_id"] is None
+            if n["depth"] == 0
         ]
-
         if not root_nodes:
             return None
-
-        # 루트가 여러 개인 경우(데이터 오염 방어): 첫 번째 사용
-        root_node = root_nodes[0]
+        if len(root_nodes) == 1:
+            root_node = root_nodes[0]
+        else:
+            # forest(루트 여러 개) → 제품을 합성 루트로 묶어 모든 1차 부품을 children으로 노출.
+            root_node = {
+                "part_id":                str(product_row["product_id"]),
+                "part_code":              product_row["product_code"],
+                "part_name":              product_row["product_name"],
+                "tier_level":             0,
+                "parent_part_id":         None,
+                "hs_code":                None,
+                "material_type":          None,
+                "unit_price":             None,
+                "required_quantity":      None,
+                "required_quantity_unit": None,
+                "origin_country":         None,
+                "direct_material_cost":   None,
+                "depth":                  0,
+                "children":               root_nodes,
+            }
+        # [REVERT-NON-SUPPLIER:END]
 
         # ------------------------------------------------------------------
         # 최종 응답 조립
