@@ -57,6 +57,7 @@ class Supplier(Base):
     website: Mapped[Optional[str]] = mapped_column(String(255))
     provider_type: Mapped[str] = mapped_column(String(30), nullable=False)
     smelter_type: Mapped[Optional[str]] = mapped_column(String(20))  # smelter 세부 구분(rmi/private)
+    core_minerals: Mapped[Optional[dict]] = mapped_column(JSONB)  # 소재 구성: 핵심광물 함량(%) {"Li":..,"Co":..,"Ni":..}
     parent_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("suppliers.supplier_id")
     )
@@ -540,6 +541,8 @@ class SupplierDetailResponse(BaseModel):
     employee_count: Optional[int] = None
     completeness_score: Optional[int] = None
     provider_type: str
+    smelter_type: Optional[str] = None  # provider_type='smelter'일 때 rmi/private
+    core_minerals: Optional[dict] = None  # 소재 구성: 핵심광물 함량(%)
     status: str
     risk_level: str
     feoc_status: str
@@ -820,6 +823,7 @@ class MasterFormCompany(BaseModel):
     website: Optional[str] = None
     provider_type: str  # manufacturer/recycler/trader/miner/smelter (chk_provider_type)
     smelter_type: Optional[str] = None  # provider_type='smelter'일 때 rmi/private
+    core_minerals: Optional[dict] = None  # 소재 구성: 핵심광물 함량(%) {"Li":..,"Co":..,"Ni":..}
     established_year: Optional[int] = None
     employee_count: Optional[int] = None
 
