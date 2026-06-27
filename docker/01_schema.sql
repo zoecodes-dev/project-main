@@ -593,9 +593,25 @@ CREATE TABLE manufacturing_process (
 -- 영역 8. 공급망 맵 (D 담당)
 -- ============================================================
 
--- [테이블 역할] N차 전방 공급망 흐름의 그래프 연결 대장. (결정 #2 / #9-여파4 반영)
+-- [테이블 역할] 공급망 맵 그 자체(헤더). 엣지(supply_chain_map)들을 묶는 1급 엔티티.
+--   맵 1개 = map_id 1개 = bom_version(제품×Lot) 1개. 완료/전송 상태를 여기서 관리.
+CREATE TABLE supply_chain_maps (
+    map_id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    bom_version_id UUID REFERENCES bom_versions(bom_version_id),
+    product_id     UUID REFERENCES products(product_id),
+    status         VARCHAR(20) DEFAULT 'building'
+        CONSTRAINT chk_scmap_status CHECK (status IN ('building', 'completed')),
+    completed_by   UUID REFERENCES users(user_id),
+    completed_at   TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(bom_version_id)   -- 1 Lot = 1 맵
+);
+
+-- [테이블 역할] N차 전방 공급망 흐름의 그래프 '연결(엣지)' 대장. 한 줄 = 1 엣지 = 1 hop.
+--   edge_id = 엣지(연결선) PK. map_id = 소속 맵 헤더(supply_chain_maps) FK.
 CREATE TABLE supply_chain_map (
-    map_id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    edge_id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    map_id             UUID REFERENCES supply_chain_maps(map_id),
     bom_version_id     UUID REFERENCES bom_versions(bom_version_id),
     parent_supplier_id UUID REFERENCES suppliers(supplier_id),
     child_supplier_id  UUID REFERENCES suppliers(supplier_id), -- 미발견 시 NULL 허용
@@ -617,7 +633,7 @@ CREATE TABLE supply_chain_map (
 -- [테이블 역할] 공동 납품 시 공장별 분할 기여도 관리 대장.
 CREATE TABLE supply_ratio (
     ratio_id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    map_id           UUID REFERENCES supply_chain_map(map_id) ON DELETE CASCADE,
+    edge_id          UUID REFERENCES supply_chain_map(edge_id) ON DELETE CASCADE,
     factory_id       UUID REFERENCES supplier_factories(factory_id),
     ratio_percentage NUMERIC(5,2),
     volume           NUMERIC(15,4),

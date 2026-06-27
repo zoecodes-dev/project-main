@@ -17,6 +17,11 @@ XINJIANG_REGION_WKT = (
 )
 
 
+# [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 맵 헤더(supply_chain_maps) 도입에 따른 개명.
+#   supply_chain_map.map_id(엣지 PK) → edge_id, supply_ratio.map_id → edge_id 로 전 쿼리 정합.
+#   프론트 응답 키는 보호 위해 최종 출력에서 'map_id' 별칭/CTE 컬럼명 유지(edge_id AS map_id).
+#   최종 작업 시 이 클래스의 map_id↔edge_id 관련 변경을 원복 대상으로 식별.
+# [REVERT-NON-SUPPLIER:END]
 class SupplyChainRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -42,7 +47,7 @@ class SupplyChainRepository:
             WITH RECURSIVE sc_tree AS (
                 -- 앵커: 트리 루트 = 원청 (parent_supplier_id IS NULL, child=원청 Pack, hop_level=0)
                 SELECT
-                    scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
+                    scm.edge_id AS map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
                     scm.part_id, s.company_name, s.provider_type, scm.hop_level,
                     sf.country,
                     ST_AsGeoJSON(sf.location) AS location_geojson,
@@ -61,7 +66,7 @@ class SupplyChainRepository:
                 UNION ALL
 
                 SELECT
-                    scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
+                    scm.edge_id AS map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
                     scm.part_id, s.company_name, s.provider_type, scm.hop_level,
                     sf.country,
                     ST_AsGeoJSON(sf.location) AS location_geojson,
@@ -100,7 +105,7 @@ class SupplyChainRepository:
         """
         query = text("""
             SELECT
-                scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
+                scm.edge_id AS map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
                 scm.part_id, s.company_name, s.provider_type,
                 scm.hop_level, p.tier_level AS bom_depth, scm.link_status
             FROM supply_chain_map scm
@@ -120,7 +125,7 @@ class SupplyChainRepository:
         """
         query = text("""
             SELECT
-                scm.map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
+                scm.edge_id AS map_id, scm.bom_version_id, scm.parent_supplier_id, scm.child_supplier_id,
                 scm.part_id, s.company_name, s.provider_type,
                 scm.hop_level, p.tier_level AS bom_depth, scm.link_status
             FROM supply_chain_map scm
@@ -146,7 +151,7 @@ class SupplyChainRepository:
                 (bom_version_id, parent_supplier_id, child_supplier_id, part_id)
             VALUES
                 (:bom_version_id, :parent_supplier_id, :child_supplier_id, :part_id)
-            RETURNING map_id, parent_supplier_id, child_supplier_id, part_id;
+            RETURNING edge_id AS map_id, parent_supplier_id, child_supplier_id, part_id;
         """)
         result = await self.session.execute(query, {
             "bom_version_id": bom_version_id,
@@ -177,7 +182,7 @@ class SupplyChainRepository:
                              AND bom_version_id = :bom_version_id
                            LIMIT 1), 1),
                  'supplychain_declared', 'SUPPLIER_DECLARED', 'unverified')
-            RETURNING map_id, parent_supplier_id, child_supplier_id, link_status, verification_status;
+            RETURNING edge_id AS map_id, parent_supplier_id, child_supplier_id, link_status, verification_status;
         """)
         result = await self.session.execute(query, {
             "bom_version_id": bom_version_id,
@@ -202,7 +207,7 @@ class SupplyChainRepository:
                SET verification_status = :status
              WHERE bom_version_id = :bom_version_id
                AND child_supplier_id = :child_supplier_id
-            RETURNING map_id;
+            RETURNING edge_id AS map_id;
         """)
         result = await self.session.execute(query, {
             "bom_version_id": bom_version_id,
@@ -309,7 +314,7 @@ class SupplyChainRepository:
         query = text("""
             SELECT COALESCE(SUM(ratio_percentage), 0) AS total
             FROM supply_ratio
-            WHERE map_id = :map_id;
+            WHERE edge_id = :map_id;
         """)
         result = await self.session.execute(query, {"map_id": map_id})
         return float(result.scalar() or 0)
@@ -328,7 +333,7 @@ class SupplyChainRepository:
             FROM supply_chain_map scm
             JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
             JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
-            LEFT JOIN supply_ratio sr ON sr.map_id = scm.map_id
+            LEFT JOIN supply_ratio sr ON sr.edge_id = scm.edge_id
             WHERE bv.product_id = :product_id
               AND scm.part_id = :part_id
             ORDER BY sr.ratio_percentage DESC NULLS LAST;
@@ -539,7 +544,7 @@ class SupplyChainRepository:
             filters.append("scm.supply_period_to <= :period_to")
             params["period_to"] = period_to
         if factory_id:
-            filters.append("EXISTS (SELECT 1 FROM supply_ratio sr2 WHERE sr2.map_id = scm.map_id AND sr2.factory_id = :factory_id)")
+            filters.append("EXISTS (SELECT 1 FROM supply_ratio sr2 WHERE sr2.edge_id = scm.edge_id AND sr2.factory_id = :factory_id)")
             params["factory_id"] = factory_id
 
         where = " AND ".join(filters)
@@ -547,12 +552,12 @@ class SupplyChainRepository:
         # 맵 노드 — 대표 factory_id는 첫 번째 supply_ratio에서 가져옴
         map_query = text(f"""
             SELECT DISTINCT
-                scm.map_id,
+                scm.edge_id AS map_id,
                 scm.part_id,
                 scm.child_supplier_id  AS supplier_id,
                 (
                     SELECT sr.factory_id FROM supply_ratio sr
-                    WHERE sr.map_id = scm.map_id
+                    WHERE sr.edge_id = scm.edge_id
                     ORDER BY sr.ratio_percentage DESC NULLS LAST
                     LIMIT 1
                 )                      AS factory_id,
@@ -570,7 +575,7 @@ class SupplyChainRepository:
             JOIN products pr     ON pr.product_id = bv.product_id
             LEFT JOIN parts p    ON p.part_id = scm.part_id
             WHERE {where}
-            ORDER BY p.tier_level NULLS LAST, scm.map_id
+            ORDER BY p.tier_level NULLS LAST, scm.edge_id
         """)
         map_rows = await self.session.execute(map_query, params)
         supply_chain_map = [dict(r._mapping) for r in map_rows]
@@ -663,9 +668,9 @@ class SupplyChainRepository:
             FROM bom_versions bv
             JOIN products pr ON pr.product_id = bv.product_id
             WHERE scm.bom_version_id = bv.bom_version_id
-              AND scm.map_id = :map_id
+              AND scm.edge_id = :map_id
               AND pr.tenant_id = :tenant_id
-            RETURNING scm.map_id, scm.link_status AS status
+            RETURNING scm.edge_id AS map_id, scm.link_status AS status
         """)
         result = await self.session.execute(query, {"map_id": map_id, "tenant_id": tenant_id})
         await self.session.flush()
@@ -704,7 +709,7 @@ class SupplyChainRepository:
             WITH RECURSIVE sc_cum AS (
                 -- 앵커: 원청 루트 엣지 (parent_supplier_id IS NULL, hop0)
                 SELECT
-                    scm.map_id, scm.bom_version_id, scm.parent_supplier_id,
+                    scm.edge_id AS map_id, scm.bom_version_id, scm.parent_supplier_id,
                     scm.child_supplier_id, scm.part_id, scm.hop_level, scm.link_status,
                     sr.factory_id,
                     sr.ratio_percentage,
@@ -714,7 +719,7 @@ class SupplyChainRepository:
                 FROM supply_chain_map scm
                 JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
                 JOIN products pr     ON pr.product_id = bv.product_id
-                LEFT JOIN supply_ratio sr ON sr.map_id = scm.map_id
+                LEFT JOIN supply_ratio sr ON sr.edge_id = scm.edge_id
                 WHERE bv.product_id = :product_id
                   AND pr.tenant_id = :tenant_id
                   AND scm.parent_supplier_id IS NULL
@@ -724,7 +729,7 @@ class SupplyChainRepository:
 
                 -- 재귀: 부모 child = 자식 parent, 같은 bom_version, hop_level +1 연속
                 SELECT
-                    scm.map_id, scm.bom_version_id, scm.parent_supplier_id,
+                    scm.edge_id AS map_id, scm.bom_version_id, scm.parent_supplier_id,
                     scm.child_supplier_id, scm.part_id, scm.hop_level, scm.link_status,
                     sr.factory_id,
                     sr.ratio_percentage,
@@ -735,7 +740,7 @@ class SupplyChainRepository:
                 JOIN sc_cum c ON scm.parent_supplier_id = c.child_supplier_id
                              AND scm.bom_version_id = c.bom_version_id
                              AND scm.hop_level = c.hop_level + 1
-                LEFT JOIN supply_ratio sr ON sr.map_id = scm.map_id
+                LEFT JOIN supply_ratio sr ON sr.edge_id = scm.edge_id
                 WHERE NOT c.is_cycle
             )
             SELECT
@@ -775,16 +780,16 @@ class SupplyChainRepository:
 
         edge_query = text(f"""
             SELECT
-                scm.map_id,
+                scm.edge_id AS map_id,
                 SUM(sr.ratio_percentage) AS total
             FROM supply_chain_map scm
             JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
             JOIN products pr     ON pr.product_id = bv.product_id
-            JOIN supply_ratio sr ON sr.map_id = scm.map_id
+            JOIN supply_ratio sr ON sr.edge_id = scm.edge_id
             WHERE bv.product_id = :product_id
               AND pr.tenant_id = :tenant_id
               {bom_filter}
-            GROUP BY scm.map_id
+            GROUP BY scm.edge_id
         """)
         edge_rows = await self.session.execute(edge_query, params)
         edges = [
@@ -804,7 +809,7 @@ class SupplyChainRepository:
             FROM supply_chain_map scm
             JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
             JOIN products pr     ON pr.product_id = bv.product_id
-            JOIN supply_ratio sr ON sr.map_id = scm.map_id
+            JOIN supply_ratio sr ON sr.edge_id = scm.edge_id
             WHERE bv.product_id = :product_id
               AND pr.tenant_id = :tenant_id
               AND scm.parent_supplier_id IS NOT NULL
