@@ -94,7 +94,8 @@ CREATE TABLE suppliers (
     tax_number          VARCHAR(50),
     website             VARCHAR(255),
     provider_type       VARCHAR(30) NOT NULL
-        CONSTRAINT chk_provider_type CHECK (provider_type IN ('manufacturer', 'recycler', 'trader', 'miner')),
+        CONSTRAINT chk_provider_type CHECK (provider_type IN ('manufacturer', 'recycler', 'trader', 'miner', 'smelter')),  -- [REVERT-NON-SUPPLIER] 'smelter' 추가
+    smelter_type        VARCHAR(20) CONSTRAINT chk_smelter_type CHECK (smelter_type IN ('rmi', 'private')),  -- [REVERT-NON-SUPPLIER] smelter 세부 구분(RMI/private)
     parent_supplier_id  UUID REFERENCES suppliers(supplier_id),
     established_year    INT,
     employee_count      INT,
