@@ -490,11 +490,25 @@ class RiskScoreUpdateRequest(BaseModel):
 
 
 class SupplierDetailUpdateRequest(BaseModel):
-    """협력사 '자료 제출' — 기업 기본정보 부분 수정. 보낸 필드만 갱신(None=값 비움)."""
+    """협력사 '자료 제출' — 입력 양식 영속화. 보낸 필드만 갱신(exclude_unset).
+    suppliers 컬럼 + 소재(core_minerals) + 규제(탄소→manufacturer_details,
+    실사 자가진단→risk_profiles)를 cross-table 로 저장한다(service가 분배)."""
+    # 기업 기본정보 (suppliers)
+    company_name: Optional[str] = None
     company_name_en: Optional[str] = None
     company_name_ko: Optional[str] = None
+    country: Optional[str] = None
     business_reg_no: Optional[str] = None
     duns_number: Optional[str] = None
+    provider_type: Optional[str] = None
+    smelter_type: Optional[str] = None
+    # 소재 구성 (suppliers.core_minerals)
+    core_minerals: Optional[dict] = None
+    # 규제 — 탄소발자국 (supplier_manufacturer_details)
+    carbon_intensity: Optional[float] = None
+    energy_source: Optional[str] = None
+    # 규제 — 실사 자가진단 (supplier_risk_profiles)
+    self_reported_risk_level: Optional[str] = None
 
 
 # ----- CTI 상세 응답 DTO (목요일: provider type별 상세 노출) -----
