@@ -145,6 +145,26 @@ class SupplyChainService:
             "message": "공급원 변경 자진신고가 접수되어 상위 파이프라인 재검증이 트리거되었습니다.",
             "data": payload
         }
+
+    # [REVERT-NON-SUPPLIER:BEGIN] 협력사 확인(verify) 상태 갱신 — supply_chain_map.verification_status.
+    #   supplier 외(supplychain) 도메인. 최종 작업 시 이 메서드 전체 주석/삭제.
+    async def set_supplier_verification(
+        self,
+        bom_version_id: str,
+        supplier_id: str,
+        verified: bool,
+    ) -> Dict[str, Any]:
+        """STEP3 협력사 '확인' — 해당 협력사 맵 엣지의 verification_status를 verified/unverified로."""
+        updated = await self.repository.set_supplier_verification(bom_version_id, supplier_id, verified)
+        await self.repository.session.commit()
+        return {
+            "bom_version_id": bom_version_id,
+            "supplier_id": supplier_id,
+            "verification_status": "verified" if verified else "unverified",
+            "updated_edges": updated,
+        }
+    # [REVERT-NON-SUPPLIER:END]
+
     async def get_gaps(self, product_id: str) -> Dict[str, Any]:
         """
         C2 맵 gap 계산: 제품 공급망 노드별로 규제 필수 필드 중 미보유 항목 목록 반환.

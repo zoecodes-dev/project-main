@@ -188,6 +188,32 @@ class SupplyChainRepository:
         await self.session.flush()
         return dict(result.first()._mapping)
 
+    # [REVERT-NON-SUPPLIER:BEGIN] 협력사 확인(verify) — supply_chain_map.verification_status 갱신.
+    #   supplier 외(supplychain) 도메인. 최종 작업 시 이 메서드 전체 주석/삭제.
+    async def set_supplier_verification(
+        self,
+        bom_version_id: str,
+        child_supplier_id: str,
+        verified: bool,
+    ) -> int:
+        """이 BOM 버전에서 해당 협력사로 연결된 맵 엣지들의 verification_status를 일괄 갱신."""
+        query = text("""
+            UPDATE supply_chain_map
+               SET verification_status = :status
+             WHERE bom_version_id = :bom_version_id
+               AND child_supplier_id = :child_supplier_id
+            RETURNING map_id;
+        """)
+        result = await self.session.execute(query, {
+            "bom_version_id": bom_version_id,
+            "child_supplier_id": child_supplier_id,
+            "status": "verified" if verified else "unverified",
+        })
+        rows = result.fetchall()
+        await self.session.flush()
+        return len(rows)
+    # [REVERT-NON-SUPPLIER:END]
+
     @trace_tool("get_supplier_master_and_gps_dto")
     async def get_supplier_master_and_gps_dto(self, supplier_id: str) -> dict:
         """HITL 컨텍스트용 협력사 마스터 및 공장 GPS 정보 조회"""
@@ -535,6 +561,7 @@ class SupplyChainRepository:
                 p.part_name,   -- [REVERT-NON-SUPPLIER] supplier 외(supplychain) — 프론트 맵 트리 부품명 표시용
                 p.part_code,   -- [REVERT-NON-SUPPLIER]
                 scm.link_status,
+                scm.verification_status,  -- [REVERT-NON-SUPPLIER] STEP3 협력사 '확인' 상태 하이드레이션용
                 scm.supply_period_from,
                 scm.supply_period_to,
                 scm.created_at

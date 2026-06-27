@@ -205,6 +205,29 @@ async def declare_source_change_endpoint(
     )
 
 
+# [REVERT-NON-SUPPLIER:BEGIN] STEP3 협력사 '확인'(verify) — supply_chain_map.verification_status 갱신.
+#   supplier 외(supplychain) 도메인. 최종 작업 시 이 모델 + 아래 /verify 엔드포인트 주석/삭제.
+class VerifySupplierBody(BaseModel):
+    bom_version_id: UUID
+    supplier_id: UUID
+    verified: bool = True
+
+
+@router.post("/verify", response_model=Dict[str, Any])
+@trace_tool("verify_supplier_link")
+async def verify_supplier_endpoint(
+    body: VerifySupplierBody,
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """원청이 연결 협력사를 '확인' 처리(verified) 또는 해제(unverified)한다."""
+    return await service.set_supplier_verification(
+        bom_version_id=str(body.bom_version_id),
+        supplier_id=str(body.supplier_id),
+        verified=body.verified,
+    )
+# [REVERT-NON-SUPPLIER:END]
+
+
 class TriggerDataRequestsBody(BaseModel):
     product_id: UUID
     supplier_ids: Optional[List[UUID]] = None  # None = gap 있는 노드 전체
