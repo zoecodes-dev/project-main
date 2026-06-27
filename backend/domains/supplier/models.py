@@ -715,6 +715,26 @@ class SupplierOriginCertsResponse(BaseModel):
     origin_certificates: list[OriginCertDTO] = []
 
 
+# 환경성적서(탄소발자국, EU 배터리법 Art7) — 공장별 factory_carbon_declarations.
+class CarbonDeclarationDTO(BaseModel):
+    declaration_id: uuid.UUID
+    factory_id: uuid.UUID
+    factory_name: Optional[str] = None
+    carbon_intensity: Optional[float] = None     # kg CO2e/kWh
+    methodology: Optional[str] = None            # 예: PEF
+    declared_at: Optional[date] = None
+    valid_from: Optional[date] = None
+    valid_to: Optional[date] = None
+    source: Optional[str] = None                 # supplier_declared / third_party_verified / estimated
+    is_active: Optional[bool] = None
+    model_config = {"from_attributes": True}
+
+
+class SupplierCarbonDeclsResponse(BaseModel):
+    supplier_id: uuid.UUID
+    declarations: list[CarbonDeclarationDTO] = []
+
+
 # 공급 품목 — supply_chain_map에서 이 협력사가 공급하는 부품.
 class SuppliedItemDTO(BaseModel):
     part_id: uuid.UUID

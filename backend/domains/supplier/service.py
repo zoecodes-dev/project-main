@@ -491,6 +491,16 @@ async def get_supplied_items(db: AsyncSession, supplier_id: UUID) -> Optional[di
     }
 
 
+async def get_carbon_declarations(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """환경성적서(탄소발자국) — 공장별 factory_carbon_declarations. 최종 검증(STEP4) 핵심 자료."""
+    if await repository.get_supplier_by_id(db, supplier_id) is None:
+        return None
+    return {
+        "supplier_id": supplier_id,
+        "declarations": await repository.get_carbon_declarations(db, supplier_id),
+    }
+
+
 async def get_reliability(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
     """
     Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.

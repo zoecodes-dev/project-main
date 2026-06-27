@@ -408,6 +408,23 @@ async def get_origin_certificates(db: AsyncSession, supplier_id: UUID) -> List[d
     return [dict(r) for r in rows]
 
 
+async def get_carbon_declarations(db: AsyncSession, supplier_id: UUID) -> List[dict]:
+    """환경성적서(EU 배터리법 Art7 탄소발자국) — 이 협력사 공장별 factory_carbon_declarations. 유효만료 임박 순."""
+    stmt = text(
+        """
+        SELECT c.declaration_id, c.factory_id, f.factory_name,
+               c.carbon_intensity, c.methodology, c.declared_at,
+               c.valid_from, c.valid_to, c.source, c.is_active
+        FROM factory_carbon_declarations c
+        JOIN supplier_factories f ON f.factory_id = c.factory_id
+        WHERE f.supplier_id = :sid AND c.is_active = TRUE
+        ORDER BY c.valid_to ASC NULLS LAST
+        """
+    )
+    rows = (await db.execute(stmt, {"sid": str(supplier_id)})).mappings().all()
+    return [dict(r) for r in rows]
+
+
 async def get_supplied_items(db: AsyncSession, supplier_id: UUID) -> List[dict]:
     """
     공급 품목 — 이 협력사(child_supplier_id)가 supply_chain_map에서 공급하는 부품(parts) distinct.

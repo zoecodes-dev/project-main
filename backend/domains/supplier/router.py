@@ -32,6 +32,7 @@ from backend.domains.supplier.models import (
     SupplierContactsResponse,
     SupplierCompletenessResponse,
     SupplierOriginCertsResponse,
+    SupplierCarbonDeclsResponse,
     SupplierSuppliedItemsResponse,
     MasterFormRequest,
     MasterFormResponse,
@@ -326,6 +327,19 @@ async def get_supplier_supplied_items_endpoint(
 ):
     """공급 품목 — 공급망 맵에서 이 협력사가 공급하는 부품 목록 조회. 내 테넌트 소유만."""
     data = await service.get_supplied_items(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
+
+
+@router.get("/{supplier_id}/carbon-declarations", response_model=SupplierCarbonDeclsResponse)
+async def get_supplier_carbon_declarations_endpoint(
+    supplier_id: UUID,
+    _auth: UUID = Depends(authorized_supplier),
+    db: AsyncSession = Depends(get_db),
+):
+    """환경성적서(탄소발자국, Art7) — 공장별 factory_carbon_declarations 조회. STEP4 최종 검증 핵심. 내 테넌트 소유만."""
+    data = await service.get_carbon_declarations(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return data
