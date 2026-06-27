@@ -531,6 +531,8 @@ class SupplyChainRepository:
                     LIMIT 1
                 )                      AS factory_id,
                 p.tier_level,
+                p.part_name,   -- [REVERT-NON-SUPPLIER] supplier 외(supplychain) — 프론트 맵 트리 부품명 표시용
+                p.part_code,   -- [REVERT-NON-SUPPLIER]
                 scm.link_status,
                 scm.supply_period_from,
                 scm.supply_period_to,
