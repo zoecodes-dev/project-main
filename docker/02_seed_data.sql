@@ -578,3 +578,6 @@ VALUES
    '2026-01-01', '2027-12-31', TRUE, 'agreed', now() - interval '20 days', now() - interval '14 days', now() - interval '13 days',
    '김철수', 'ESG팀장', 'cs.kim@hanyangmfg.com', 'email_form', 'v1.0',
    '{"data_subject":"한양셀 제조(주)","sub_supplier_consent":true,"retention_years":7}'::jsonb, 'a3f5c9e1d2b4');
+
+-- HITL 연동: 검토 필요 자료요청(da444444)을 gray_zone HITL 리뷰 batch에 연결(승인/반려가 hitl_reviews도 갱신).
+UPDATE data_request_log SET batch_id='ba222222-0000-4000-8000-000000000002' WHERE request_id='da444444-0000-4000-8000-000000000004';

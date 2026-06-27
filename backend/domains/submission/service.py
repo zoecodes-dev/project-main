@@ -37,6 +37,11 @@ async def list_ai_extractions(db: AsyncSession) -> list[dict]:
         "parsed_fields": r.get("parsed_fields") or {},
         "confidence_map": r.get("confidence_map") or {},
         "unparsed_fields": r.get("unparsed_fields") or [],
+        # hitl_reviews 연결 — 승인/반려가 백엔드 HITL 큐도 갱신할 수 있게.
+        "batch_id": str(r["batch_id"]) if r.get("batch_id") else None,
+        "hitl_review_id": str(r["hitl_review_id"]) if r.get("hitl_review_id") else None,
+        "hitl_status": r.get("hitl_status"),
+        "hitl_reason": r.get("hitl_reason"),
     } for r in rows]
 from backend.domains.submission.state_machine import transition_submission
 from backend.domains.submission.models import DataCompletenessStatus, SubmissionStatusHistory
