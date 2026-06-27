@@ -86,6 +86,8 @@ async def list_data_requests_endpoint(
     )
 
 @router.post("", response_model=DataRequestResponse, status_code=status.HTTP_201_CREATED)
+# [REVERT-NON-SUPPLIER] supplier 외(submission) — current_user 의존 + requester/actor 토큰 추론은 프론트 발송 배선용.
+#   최종작업 시 주석처리(원복: current_user 파라미터 제거, requester=req.requester_user_id, actor=req.actor_id 직접 사용).
 async def create_data_request_endpoint(
     req: DataRequestCreateRequest,
     db: AsyncSession = Depends(get_db),

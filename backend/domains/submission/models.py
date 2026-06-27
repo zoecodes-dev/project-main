@@ -191,6 +191,7 @@ class DataRequestCreateRequest(BaseModel):
     클라이언트(또는 다른 서비스)가 새로운 데이터 제출을 요청할 때 전달해야 하는 최소 필수 데이터입니다.
     """
     # requester_user_id/actor_id 미제공 시 라우터가 토큰의 현재 사용자로 채운다.
+    # [REVERT-NON-SUPPLIER] supplier 외(submission) — 프론트 발송 배선용. 최종작업 시 주석처리(원복: 둘 다 필수 uuid.UUID).
     requester_user_id: Optional[uuid.UUID] = None
     target_supplier_id: uuid.UUID
     requested_data_type: str
