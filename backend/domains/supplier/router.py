@@ -22,6 +22,7 @@ from backend.domains.supplier.models import (
     SupplierCreateRequest,
     SupplierBrief,
     SupplierDetailResponse,
+    SupplierDetailUpdateRequest,
     RiskProfileResponse,
     RiskScoreUpdateRequest,
     SupplierEsgResponse,
@@ -135,6 +136,28 @@ async def get_supplier_detail_endpoint(
     provider_type에 해당하는 detail 1종만 채워져 반환된다. 내 테넌트 소유만(아니면 404).
     """
     supplier = await service.get_supplier_detail(db, supplier_id, current_user.tenant_id)
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return supplier
+
+
+@router.patch("/{supplier_id}/detail", response_model=SupplierDetailResponse)
+async def update_supplier_detail_endpoint(
+    supplier_id: UUID,
+    request: SupplierDetailUpdateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    협력사 '자료 제출' — 기업 기본정보 수정. 내 테넌트 소유만(아니면 404).
+    협력사 계정은 본인(supplier_id) 것만 수정 가능(다른 협력사면 403).
+    """
+    if current_user.supplier_id is not None and current_user.supplier_id != supplier_id:
+        raise HTTPException(status_code=403, detail="본인 회사 정보만 수정할 수 있습니다.")
+    fields = request.model_dump(exclude_unset=True)
+    supplier = await service.update_supplier_detail(
+        db, supplier_id, current_user.tenant_id, fields
+    )
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return supplier

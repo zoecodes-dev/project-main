@@ -481,6 +481,14 @@ class RiskScoreUpdateRequest(BaseModel):
     score: int
 
 
+class SupplierDetailUpdateRequest(BaseModel):
+    """협력사 '자료 제출' — 기업 기본정보 부분 수정. 보낸 필드만 갱신(None=값 비움)."""
+    company_name_en: Optional[str] = None
+    company_name_ko: Optional[str] = None
+    business_reg_no: Optional[str] = None
+    duns_number: Optional[str] = None
+
+
 # ----- CTI 상세 응답 DTO (목요일: provider type별 상세 노출) -----
 class ManufacturerDetailDTO(BaseModel):
     manufacturing_process: Optional[str] = None

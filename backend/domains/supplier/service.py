@@ -286,6 +286,21 @@ _CTI_ATTR_BY_TYPE = {
 }
 
 
+async def update_supplier_detail(
+    db: AsyncSession, supplier_id: UUID, tenant_id: Optional[UUID], fields: dict
+) -> Optional[Supplier]:
+    """
+    협력사 '자료 제출' — 기업 기본정보 수정. 소유 테넌트만(§0.2, 아니면 None→404).
+    repository로 변경 후 여기서 커밋(서비스 일원화). 갱신된 상세를 반환한다.
+    """
+    supplier = await repository.get_supplier_by_id(db, supplier_id, tenant_id)
+    if supplier is None:
+        return None
+    await repository.update_supplier_fields(db, supplier_id, fields)
+    await db.commit()
+    return await get_supplier_detail(db, supplier_id, tenant_id)
+
+
 async def get_supplier_detail(
     db: AsyncSession, supplier_id: UUID, tenant_id: Optional[UUID] = None
 ) -> Optional[Supplier]:

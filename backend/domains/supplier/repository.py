@@ -42,6 +42,16 @@ async def create_supplier(db: AsyncSession, supplier_data: dict) -> Supplier:
     await db.flush()
     return supplier
 
+async def update_supplier_fields(db: AsyncSession, supplier_id: UUID, fields: dict) -> None:
+    """협력사 기본정보 부분 업데이트. flush까지만(커밋은 service)."""
+    if not fields:
+        return
+    await db.execute(
+        update(Supplier).where(Supplier.supplier_id == supplier_id).values(**fields)
+    )
+    await db.flush()
+
+
 async def get_supplier_by_id(
     db: AsyncSession,
     supplier_id: UUID,
