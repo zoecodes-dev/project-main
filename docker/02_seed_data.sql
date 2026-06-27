@@ -82,8 +82,12 @@ INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, co
 
 -- 제련·정제 (tier 6)
 INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
-('aaaaaaaa-aaaa-4000-8000-00000000000a', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '한중제련(주)',    'Hanjung Refinery',  '한중제련(주)',    'Yoon CEO',  'manufacturer', 80, 'supplier_verified',    'low',      'eligible'),
-('acacacac-acac-4000-8000-0000000000ac', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Xinjiang Nickel Refinery', 'Xinjiang Nickel Refinery', NULL, 'Wang CEO', 'manufacturer', 60, 'supplier_review', 'high', 'under_review');
+('aaaaaaaa-aaaa-4000-8000-00000000000a', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '한중제련(주)',    'Hanjung Refinery',  '한중제련(주)',    'Yoon CEO',  'smelter', 80, 'supplier_verified',    'low',      'eligible'),
+('acacacac-acac-4000-8000-0000000000ac', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Xinjiang Nickel Refinery', 'Xinjiang Nickel Refinery', NULL, 'Wang CEO', 'smelter', 60, 'supplier_review', 'high', 'under_review');
+
+-- 제련소 세부(RMI 기준): 검증완료 = RMAP conformant → rmi / 고위험 신장 = private.
+UPDATE suppliers SET smelter_type = 'rmi'     WHERE supplier_id = 'aaaaaaaa-aaaa-4000-8000-00000000000a';
+UPDATE suppliers SET smelter_type = 'private' WHERE supplier_id = 'acacacac-acac-4000-8000-0000000000ac';
 
 -- 광산 (tier 7)
 INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
