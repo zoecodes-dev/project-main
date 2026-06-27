@@ -647,6 +647,27 @@ class SupplierFactoriesResponse(BaseModel):
     factories: list[FactoryDTO] = []
 
 
+# 담당자 연락처 탭 — supplier_contacts 다건.
+class ContactDTO(BaseModel):
+    contact_id: uuid.UUID
+    factory_id: Optional[uuid.UUID] = None
+    name: Optional[str] = None
+    name_en: Optional[str] = None
+    role: Optional[str] = None
+    department: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    mobile: Optional[str] = None
+    is_primary: bool = False
+    language: Optional[str] = None
+    model_config = {"from_attributes": True}
+
+
+class SupplierContactsResponse(BaseModel):
+    supplier_id: uuid.UUID
+    contacts: list[ContactDTO] = []
+
+
 # Reliability(신뢰도) 탭: 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.
 class SupplierReliabilityResponse(BaseModel):
     supplier_id: uuid.UUID
