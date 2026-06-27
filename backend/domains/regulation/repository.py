@@ -524,7 +524,9 @@ async def get_regulation_results(
             r.regulation_code               AS regulation,
             cr.verdict,
             b.confidence_score              AS confidence,
-            cr.needs_human_review
+            cr.needs_human_review,
+            cr.cited_clauses,                              -- 대조한 규제 조항(jsonb 배열)
+            cr.reasoning_text                              -- AI 판단 근거(어느 근거↔조항 대조 결과)
         FROM compliance_results cr
         INNER JOIN batches b
             ON cr.batch_id = b.batch_id
@@ -556,6 +558,8 @@ async def get_regulation_results(
                 or (row.confidence is not None and float(row.confidence) < _HITL_THRESHOLD)
             ),
             "evidence":           [],  # TODO: submission_documents 연계 후 채움
+            "cited_clauses":      row.cited_clauses or [],   # 대조한 규제 조항
+            "reasoning_text":     row.reasoning_text,        # AI 판단 근거
         }
         for row in rows
     ]
