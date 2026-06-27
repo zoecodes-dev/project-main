@@ -28,8 +28,7 @@ from backend.infrastructure.database import get_db
 # 이 역할들은 공급망 ACL 적용 면제 (전체 데이터 접근 허용).
 # 원청(OEM)측 역할 — chk_user_role 정식 어휘(영문)와 정합. (기존 한글 값은 어떤 role과도 매칭되지 않던 버그)
 # [REVERT-NON-SUPPLIER] supplier 외(infrastructure) — 자료요청 기능 활성화용 수정. 최종작업 시 주석처리(소유자 적용 전제).
-#   원복본: _EXEMPT_ROLES = {"관리자", "원청", "감사자"}
-_EXEMPT_ROLES = {"admin", "owner_esg", "owner_purchasing"}
+_EXEMPT_ROLES = {"admin", "owner_esg", "owner_purchasing"}  # [REVERT-NON-SUPPLIER] 원복: {"관리자", "원청", "감사자"}
 
 
 async def get_supplier_id_for_user(user_id: UUID, db: AsyncSession) -> UUID | None:

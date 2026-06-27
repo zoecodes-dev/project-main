@@ -86,12 +86,13 @@ async def list_data_requests_endpoint(
     )
 
 @router.post("", response_model=DataRequestResponse, status_code=status.HTTP_201_CREATED)
-# [REVERT-NON-SUPPLIER] supplier 외(submission) — current_user 의존 + requester/actor 토큰 추론은 프론트 발송 배선용.
-#   최종작업 시 주석처리(원복: current_user 파라미터 제거, requester=req.requester_user_id, actor=req.actor_id 직접 사용).
+# [REVERT-NON-SUPPLIER:BEGIN] supplier 외(submission) — current_user 의존 + requester/actor 토큰 추론(프론트 발송 배선용).
+#   최종작업 시 아래 인라인 [REVERT-NON-SUPPLIER] 줄들을 원복: current_user 파라미터 제거,
+#   requester=req.requester_user_id / actor=req.actor_id 직접 사용.
 async def create_data_request_endpoint(
     req: DataRequestCreateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),  # [REVERT-NON-SUPPLIER] 이 줄 제거
 ):
     """
     [API] POST /data-requests
@@ -100,8 +101,8 @@ async def create_data_request_endpoint(
     - requester_user_id/actor_id 미제공 시 토큰의 현재 사용자로 자동 채움(프론트는 대상·유형만 보내면 됨).
     - 도메인 계층에서 발생한 ValueError(무결성 위반 등)를 HTTP 422 상태 코드로 매핑한다.
     """
-    requester = req.requester_user_id or current_user.user_id
-    actor = req.actor_id or current_user.user_id
+    requester = req.requester_user_id or current_user.user_id  # [REVERT-NON-SUPPLIER] 원복: requester = req.requester_user_id
+    actor = req.actor_id or current_user.user_id  # [REVERT-NON-SUPPLIER] 원복: actor = req.actor_id
     try:
         return await create_and_request_submission(
             db=db,
@@ -111,6 +112,7 @@ async def create_data_request_endpoint(
             due_date=req.due_date,
             actor_id=actor,
         )
+    # [REVERT-NON-SUPPLIER:END]
     except ValueError as e:
         # 비즈니스 규칙 위반 또는 DB 참조 무결성 위반 시 422 반환
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
