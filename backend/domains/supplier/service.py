@@ -429,6 +429,16 @@ async def get_factories(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
     }
 
 
+async def get_contacts(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """담당자 연락처 탭 — supplier_contacts 목록(대표 우선)."""
+    if await repository.get_supplier_by_id(db, supplier_id) is None:
+        return None
+    return {
+        "supplier_id": supplier_id,
+        "contacts": await repository.get_contacts(db, supplier_id),
+    }
+
+
 async def get_reliability(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
     """
     Reliability(신뢰도) 탭 — 완성도 + 리스크 프로필 + 온보딩 SLA + 실사 요약.

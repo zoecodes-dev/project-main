@@ -578,6 +578,23 @@ class ProductRepository:
                 node_map[parent_id]["children"].append(node)
 
         # 루트 노드 수집
+        # ───────────────────────────────────────────────────────────────
+        # ⚠️ [프론트엔드팀 조사노트 · 2026-06-27 · 담당 아님 → 주석만, 코드 미변경]
+        # 증상: GET /products/{id}/bom 이 active BOM 버전이 있는데도 404
+        #       ("해당 제품에 active BOM 버전이 존재하지 않습니다").
+        # 원인: 이 제품 BOM의 부품들은 parent_part_id 가 전부 non-null이다
+        #       (상위 tier 부품이 이 bom_version 의 bom_items 에 없어 BOM 밖을 가리킴).
+        #       → 아래 `parent_part_id IS None` 루트 수집이 0건 → return None → service 404.
+        #       반면 앵커 CTE(depth=0)는 루트를 정상 식별한다. 즉 앵커 정의(depth=0)와
+        #       여기 root_nodes 정의(parent IS NULL)가 서로 불일치하는 게 진짜 원인.
+        # 검증: bom_version e1111111-…-0001 재귀 CTE 직접 실행 →
+        #       parent_part_id IS NULL = 0건(현재→404),  depth=0 = 3건(수정시→200).
+        # 제안(아래 root_nodes 한 줄을 이걸로 교체하면 200 반환):
+        #       root_nodes = [n for n in node_map.values() if n["depth"] == 0]
+        # 주의: 이 BOM은 단일 트리가 아니라 forest(루트 3개: CELL/REF/MIN-LI)라
+        #       root_nodes[0]만 쓰면 나머지 2개 서브트리가 누락된다. 완전 수정은
+        #       다중 루트 반환이 필요(응답 계약 변경) — 백엔드 담당자 검토 요망.
+        # ───────────────────────────────────────────────────────────────
         root_nodes = [
             n for n in node_map.values()
             if n["parent_part_id"] is None
