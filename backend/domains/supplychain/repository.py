@@ -531,6 +531,7 @@ class SupplyChainRepository:
                     LIMIT 1
                 )                      AS factory_id,
                 p.tier_level,
+                scm.hop_level,  -- [REVERT-NON-SUPPLIER] supplier 외(supplychain) — 차수 SSOT(1차=hop 1). 프론트 1차 판정/트리 tier용
                 p.part_name,   -- [REVERT-NON-SUPPLIER] supplier 외(supplychain) — 프론트 맵 트리 부품명 표시용
                 p.part_code,   -- [REVERT-NON-SUPPLIER]
                 scm.link_status,
