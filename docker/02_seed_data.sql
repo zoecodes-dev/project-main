@@ -299,6 +299,24 @@ INSERT INTO parts (part_id, part_code, part_name, tier_level, parent_part_id, hs
 ('b1111111-0000-4000-8000-00000000000a', 'MIN-MN',       'Manganese Ore',           6, 'b1111111-0000-4000-8000-000000000013', '260200', 'mineral',             4.0000, 'ERP_PLM', 'ERP-PART-MN'),
 ('b1111111-0000-4000-8000-00000000000b', 'MIN-LI',       'Lithium Ore (Spodumene)', 6, 'b1111111-0000-4000-8000-000000000005', '253090', 'mineral',            12.0000, 'ERP_PLM', 'ERP-PART-LI');
 
+-- 부품 용도/기능(parts.function_purpose) 시드 — INSERT에 미포함이라 전부 null이던 것 보완(BOM 트리 표시용).
+UPDATE parts SET function_purpose = CASE part_code
+  WHEN 'PACK-NCM811'  THEN 'EV 구동용 배터리 팩 — 셀·모듈 통합 및 BMS 제어'
+  WHEN 'MOD-NCM811'   THEN '셀 직병렬 묶음 모듈 — 전압 구성·열 관리'
+  WHEN 'CELL-NCM811'  THEN '전기 저장·방출 단위 셀(NCM811)'
+  WHEN 'ANO-GRAPHITE' THEN '음극 활물질 — 리튬이온 흡장·방출(흑연)'
+  WHEN 'CAM-NCM811'   THEN '양극 활물질 — 에너지밀도 결정(NCM811)'
+  WHEN 'LIOH-REFINED' THEN '양극재 합성용 리튬 원료(수산화리튬)'
+  WHEN 'PRE-NCM'      THEN '양극 활물질 전구체(Ni·Co·Mn 수산화물)'
+  WHEN 'REF-CO'       THEN '전구체용 정제 코발트(황산코발트)'
+  WHEN 'REF-MN'       THEN '전구체용 정제 망간(황산망간)'
+  WHEN 'REF-NI'       THEN '전구체용 정제 니켈(황산니켈)'
+  WHEN 'MIN-CO'       THEN '코발트 원광 — 정제 전 원자재'
+  WHEN 'MIN-LI'       THEN '리튬 원광(스포듀민) — 수산화리튬 원자재'
+  WHEN 'MIN-MN'       THEN '망간 원광 — 정제 전 원자재'
+  WHEN 'MIN-NI'       THEN '니켈 원광 — 정제 전 원자재'
+  ELSE function_purpose END;
+
 -- ------------------------------------------------------------
 -- bom_items: 5개 BOM 버전에 동일 부품 트리 연결 (조성비 NCM811: Ni80/Co10/Mn10)
 --   GLC는 Lot1(2024)/Lot2(2025) 2버전 — 동일 부품, 공급사만 supply_chain_map에서 분기

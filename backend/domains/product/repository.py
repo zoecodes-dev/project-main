@@ -479,6 +479,7 @@ class ProductRepository:
                     p.parent_part_id,
                     p.hs_code,
                     p.material_type,
+                    p.function_purpose,  -- [REVERT-NON-SUPPLIER] product 외 지원 — 프론트 BOM 트리 '용도/기능' 표시용
                     p.unit_price,
                     bi.required_quantity,
                     bi.required_quantity_unit,
@@ -510,6 +511,7 @@ class ProductRepository:
                     p.parent_part_id,
                     p.hs_code,
                     p.material_type,
+                    p.function_purpose,  -- [REVERT-NON-SUPPLIER] product 외 지원 — 프론트 BOM 트리 '용도/기능' 표시용
                     p.unit_price,
                     NULL::numeric(15,4) AS required_quantity,
                     NULL::varchar(20) AS required_quantity_unit,
@@ -564,6 +566,7 @@ class ProductRepository:
                 "parent_part_id":         str(row["parent_part_id"]) if row["parent_part_id"] else None,
                 "hs_code":                row["hs_code"],
                 "material_type":          row["material_type"],
+                "function_purpose":       row["function_purpose"],  # [REVERT-NON-SUPPLIER] 용도/기능
                 "unit_price":             float(row["unit_price"]) if row["unit_price"] is not None else None,
                 "required_quantity":      float(row["required_quantity"]) if row["required_quantity"] is not None else None,
                 "required_quantity_unit": row["required_quantity_unit"],
@@ -622,6 +625,7 @@ class ProductRepository:
                 "parent_part_id":         None,
                 "hs_code":                None,
                 "material_type":          None,
+                "function_purpose":       None,  # [REVERT-NON-SUPPLIER] 제품 루트(부품 아님)
                 "unit_price":             None,
                 "required_quantity":      None,
                 "required_quantity_unit": None,
