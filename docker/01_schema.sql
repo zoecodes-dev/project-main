@@ -100,6 +100,7 @@ CREATE TABLE suppliers (
     country             VARCHAR(2),  -- 기본정보: 소재 국가(ISO 3166-1 alpha-2)
     business_reg_doc_url    VARCHAR(500),  -- 필요문서: 사업자등록증(기업정보 서류) 업로드 URL
     environmental_report_url VARCHAR(500),  -- 필요문서: 환경성적서(회원가입 시 수집) 업로드 URL
+    self_assessment_doc_url VARCHAR(500),  -- 규제: 실사 자가진단 보고서 업로드 URL(내 기업 정보에서 제출·확인)
     parent_supplier_id  UUID REFERENCES suppliers(supplier_id),
     established_year    INT,
     employee_count      INT,

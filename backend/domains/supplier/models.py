@@ -61,6 +61,7 @@ class Supplier(Base):
     country: Mapped[Optional[str]] = mapped_column(String(2))  # 소재 국가(ISO 3166-1 alpha-2)
     business_reg_doc_url: Mapped[Optional[str]] = mapped_column(String(500))  # 사업자등록증 업로드 URL
     environmental_report_url: Mapped[Optional[str]] = mapped_column(String(500))  # 환경성적서(회원가입 수집) 업로드 URL
+    self_assessment_doc_url: Mapped[Optional[str]] = mapped_column(String(500))  # 실사 자가진단 보고서 업로드 URL
     parent_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("suppliers.supplier_id")
     )
@@ -509,6 +510,10 @@ class SupplierDetailUpdateRequest(BaseModel):
     energy_source: Optional[str] = None
     # 규제 — 실사 자가진단 (supplier_risk_profiles)
     self_reported_risk_level: Optional[str] = None
+    # 필요문서 업로드 URL(확인용) — suppliers 컬럼. 파일명/URL을 저장해 '어떤 문서 올렸는지' 확인.
+    business_reg_doc_url: Optional[str] = None       # 사업자등록증
+    environmental_report_url: Optional[str] = None   # 환경성적서
+    self_assessment_doc_url: Optional[str] = None     # 실사 자가진단 보고서
 
 
 # ----- CTI 상세 응답 DTO (목요일: provider type별 상세 노출) -----
@@ -566,6 +571,7 @@ class SupplierDetailResponse(BaseModel):
     country: Optional[str] = None  # 소재 국가(ISO 3166-1 alpha-2)
     business_reg_doc_url: Optional[str] = None  # 사업자등록증 업로드 URL(확인용)
     environmental_report_url: Optional[str] = None  # 환경성적서 업로드 URL(확인용)
+    self_assessment_doc_url: Optional[str] = None  # 실사 자가진단 보고서 업로드 URL(확인용)
     status: str
     risk_level: str
     feoc_status: str
