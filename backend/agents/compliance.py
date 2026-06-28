@@ -579,7 +579,7 @@ async def judge_carbon_footprint(
                     / NULLIF(SUM(sr.ratio_percentage), 0) AS weighted_carbon_intensity
             FROM batches b
             JOIN supply_chain_map scm ON scm.bom_version_id = b.bom_version_id
-            JOIN supply_ratio sr      ON sr.edge_id = scm.edge_id  -- [REVERT-NON-SUPPLIER] supplier 외 — map_id→edge_id 개명
+            -- JOIN supply_ratio sr      ON sr.edge_id = scm.edge_id  [MARKER] supplier 외 — map_id→edge_id 개명
             JOIN factory_carbon_declarations fcd
                  ON fcd.factory_id = sr.factory_id AND fcd.is_active = TRUE
             WHERE b.batch_id = :batch_id
@@ -599,7 +599,7 @@ async def judge_carbon_footprint(
             SELECT COUNT(*) AS missing_declaration_count
             FROM batches b
             JOIN supply_chain_map scm ON scm.bom_version_id = b.bom_version_id
-            JOIN supply_ratio sr      ON sr.edge_id = scm.edge_id  -- [REVERT-NON-SUPPLIER] supplier 외 — map_id→edge_id 개명
+            -- JOIN supply_ratio sr      ON sr.edge_id = scm.edge_id  [MARKER] supplier 외 — map_id→edge_id 개명
             LEFT JOIN factory_carbon_declarations fcd
                  ON fcd.factory_id = sr.factory_id AND fcd.is_active = TRUE
             WHERE b.batch_id = :batch_id

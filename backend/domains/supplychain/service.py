@@ -146,24 +146,24 @@ class SupplyChainService:
             "data": payload
         }
 
-    # [REVERT-NON-SUPPLIER:BEGIN] 협력사 확인(verify) 상태 갱신 — supply_chain_map.verification_status.
+    # [MARKER:BEGIN] 협력사 확인(verify) 상태 갱신 — supply_chain_map.verification_status.
     #   supplier 외(supplychain) 도메인. 최종 작업 시 이 메서드 전체 주석/삭제.
-    async def set_supplier_verification(
-        self,
-        bom_version_id: str,
-        supplier_id: str,
-        verified: bool,
-    ) -> Dict[str, Any]:
-        """STEP3 협력사 '확인' — 해당 협력사 맵 엣지의 verification_status를 verified/unverified로."""
-        updated = await self.repository.set_supplier_verification(bom_version_id, supplier_id, verified)
-        await self.repository.session.commit()
-        return {
-            "bom_version_id": bom_version_id,
-            "supplier_id": supplier_id,
-            "verification_status": "verified" if verified else "unverified",
-            "updated_edges": updated,
-        }
-    # [REVERT-NON-SUPPLIER:END]
+    #     async def set_supplier_verification(
+    #         self,
+    #         bom_version_id: str,
+    #         supplier_id: str,
+    #         verified: bool,
+    #     ) -> Dict[str, Any]:
+    #         """STEP3 협력사 '확인' — 해당 협력사 맵 엣지의 verification_status를 verified/unverified로."""
+    #         updated = await self.repository.set_supplier_verification(bom_version_id, supplier_id, verified)
+    #         await self.repository.session.commit()
+    #         return {
+    #             "bom_version_id": bom_version_id,
+    #             "supplier_id": supplier_id,
+    #             "verification_status": "verified" if verified else "unverified",
+    #             "updated_edges": updated,
+    #         }
+    # [MARKER:END]
 
     async def get_gaps(self, product_id: str) -> Dict[str, Any]:
         """
@@ -286,23 +286,23 @@ class SupplyChainService:
         # DB에는 link_status='supplychain_confirmed'로 저장되지만 프론트 계약은 {mapId, status:"confirmed"}.
         return {"map_id": result["map_id"], "status": "confirmed"}
 
-    # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(맵 그 자체) 관리.
-    async def list_maps(self, tenant_id: str) -> List[Dict[str, Any]]:
-        """내 테넌트의 공급망 맵 목록(map_id 단위)."""
-        return await self.repository.list_map_headers(tenant_id)
-
-    async def get_map(self, map_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
-        """공급망 맵 단건(map_id). 소유 테넌트만."""
-        return await self.repository.get_map_header(map_id, tenant_id)
-
-    async def set_map_status(self, map_id: str, status: str, user_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
-        """맵 완료/전송 상태 변경 후 커밋."""
-        result = await self.repository.set_map_status(map_id, status, user_id, tenant_id)
-        if result is None:
-            return None
-        await self.repository.session.commit()
-        return result
-    # [REVERT-NON-SUPPLIER:END]
+    # [MARKER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(맵 그 자체) 관리.
+    #     async def list_maps(self, tenant_id: str) -> List[Dict[str, Any]]:
+    #         """내 테넌트의 공급망 맵 목록(map_id 단위)."""
+    #         return await self.repository.list_map_headers(tenant_id)
+    #
+    #     async def get_map(self, map_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    #         """공급망 맵 단건(map_id). 소유 테넌트만."""
+    #         return await self.repository.get_map_header(map_id, tenant_id)
+    #
+    #     async def set_map_status(self, map_id: str, status: str, user_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    #         """맵 완료/전송 상태 변경 후 커밋."""
+    #         result = await self.repository.set_map_status(map_id, status, user_id, tenant_id)
+    #         if result is None:
+    #             return None
+    #         await self.repository.session.commit()
+    #         return result
+    # [MARKER:END]
 
     async def get_hitl_geo_context(self, db: AsyncSession) -> Dict[str, Any]:
         """

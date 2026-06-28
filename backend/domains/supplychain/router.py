@@ -205,27 +205,27 @@ async def declare_source_change_endpoint(
     )
 
 
-# [REVERT-NON-SUPPLIER:BEGIN] STEP3 협력사 '확인'(verify) — supply_chain_map.verification_status 갱신.
+# [MARKER:BEGIN] STEP3 협력사 '확인'(verify) — supply_chain_map.verification_status 갱신.
 #   supplier 외(supplychain) 도메인. 최종 작업 시 이 모델 + 아래 /verify 엔드포인트 주석/삭제.
-class VerifySupplierBody(BaseModel):
-    bom_version_id: UUID
-    supplier_id: UUID
-    verified: bool = True
-
-
-@router.post("/verify", response_model=Dict[str, Any])
-@trace_tool("verify_supplier_link")
-async def verify_supplier_endpoint(
-    body: VerifySupplierBody,
-    service: SupplyChainService = Depends(get_supply_chain_service),
-):
-    """원청이 연결 협력사를 '확인' 처리(verified) 또는 해제(unverified)한다."""
-    return await service.set_supplier_verification(
-        bom_version_id=str(body.bom_version_id),
-        supplier_id=str(body.supplier_id),
-        verified=body.verified,
-    )
-# [REVERT-NON-SUPPLIER:END]
+# class VerifySupplierBody(BaseModel):
+#     bom_version_id: UUID
+#     supplier_id: UUID
+#     verified: bool = True
+#
+#
+# @router.post("/verify", response_model=Dict[str, Any])
+# @trace_tool("verify_supplier_link")
+# async def verify_supplier_endpoint(
+#     body: VerifySupplierBody,
+#     service: SupplyChainService = Depends(get_supply_chain_service),
+# ):
+#     """원청이 연결 협력사를 '확인' 처리(verified) 또는 해제(unverified)한다."""
+#     return await service.set_supplier_verification(
+#         bom_version_id=str(body.bom_version_id),
+#         supplier_id=str(body.supplier_id),
+#         verified=body.verified,
+#     )
+# [MARKER:END]
 
 
 class TriggerDataRequestsBody(BaseModel):
@@ -352,53 +352,53 @@ async def confirm_supply_chain_map_endpoint(
     return result
 
 
-# [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(맵 그 자체) 관리 API.
-class MapStatusUpdate(BaseModel):
-    status: str  # building / completed
-
-
-@router.get("/maps")
-async def list_maps_endpoint(
-    current_user: CurrentUser = Depends(get_current_user),
-    service: SupplyChainService = Depends(get_supply_chain_service),
-):
-    """내 테넌트의 공급망 맵 목록(map_id 단위 + 엣지 수·상태)."""
-    if current_user.tenant_id is None:
-        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
-    return await service.list_maps(str(current_user.tenant_id))
-
-
-@router.get("/maps/{map_id}")
-async def get_map_endpoint(
-    map_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
-    service: SupplyChainService = Depends(get_supply_chain_service),
-):
-    """공급망 맵 단건(map_id). 내 테넌트 소유만(아니면 404)."""
-    if current_user.tenant_id is None:
-        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
-    result = await service.get_map(str(map_id), str(current_user.tenant_id))
-    if result is None:
-        raise HTTPException(status_code=404, detail="Supply chain map not found")
-    return result
-
-
-@router.patch("/maps/{map_id}")
-async def update_map_status_endpoint(
-    map_id: UUID,
-    body: MapStatusUpdate,
-    current_user: CurrentUser = Depends(get_current_user),
-    service: SupplyChainService = Depends(get_supply_chain_service),
-):
-    """공급망 맵 완료/전송 상태 변경(building/completed). 내 테넌트 소유만."""
-    if body.status not in ("building", "completed"):
-        raise HTTPException(status_code=422, detail="status must be building or completed")
-    if current_user.tenant_id is None:
-        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
-    result = await service.set_map_status(
-        str(map_id), body.status, str(current_user.user_id), str(current_user.tenant_id)
-    )
-    if result is None:
-        raise HTTPException(status_code=404, detail="Supply chain map not found")
-    return result
-# [REVERT-NON-SUPPLIER:END]
+# [MARKER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(맵 그 자체) 관리 API.
+# class MapStatusUpdate(BaseModel):
+#     status: str  # building / completed
+#
+#
+# @router.get("/maps")
+# async def list_maps_endpoint(
+#     current_user: CurrentUser = Depends(get_current_user),
+#     service: SupplyChainService = Depends(get_supply_chain_service),
+# ):
+#     """내 테넌트의 공급망 맵 목록(map_id 단위 + 엣지 수·상태)."""
+#     if current_user.tenant_id is None:
+#         raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+#     return await service.list_maps(str(current_user.tenant_id))
+#
+#
+# @router.get("/maps/{map_id}")
+# async def get_map_endpoint(
+#     map_id: UUID,
+#     current_user: CurrentUser = Depends(get_current_user),
+#     service: SupplyChainService = Depends(get_supply_chain_service),
+# ):
+#     """공급망 맵 단건(map_id). 내 테넌트 소유만(아니면 404)."""
+#     if current_user.tenant_id is None:
+#         raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+#     result = await service.get_map(str(map_id), str(current_user.tenant_id))
+#     if result is None:
+#         raise HTTPException(status_code=404, detail="Supply chain map not found")
+#     return result
+#
+#
+# @router.patch("/maps/{map_id}")
+# async def update_map_status_endpoint(
+#     map_id: UUID,
+#     body: MapStatusUpdate,
+#     current_user: CurrentUser = Depends(get_current_user),
+#     service: SupplyChainService = Depends(get_supply_chain_service),
+# ):
+#     """공급망 맵 완료/전송 상태 변경(building/completed). 내 테넌트 소유만."""
+#     if body.status not in ("building", "completed"):
+#         raise HTTPException(status_code=422, detail="status must be building or completed")
+#     if current_user.tenant_id is None:
+#         raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+#     result = await service.set_map_status(
+#         str(map_id), body.status, str(current_user.user_id), str(current_user.tenant_id)
+#     )
+#     if result is None:
+#         raise HTTPException(status_code=404, detail="Supply chain map not found")
+#     return result
+# [MARKER:END]

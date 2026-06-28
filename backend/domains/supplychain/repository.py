@@ -17,11 +17,11 @@ XINJIANG_REGION_WKT = (
 )
 
 
-# [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 맵 헤더(supply_chain_maps) 도입에 따른 개명.
+# [MARKER:BEGIN] supplier 외(supplychain) — 맵 헤더(supply_chain_maps) 도입에 따른 개명.
 #   supply_chain_map.map_id(엣지 PK) → edge_id, supply_ratio.map_id → edge_id 로 전 쿼리 정합.
 #   프론트 응답 키는 보호 위해 최종 출력에서 'map_id' 별칭/CTE 컬럼명 유지(edge_id AS map_id).
 #   최종 작업 시 이 클래스의 map_id↔edge_id 관련 변경을 원복 대상으로 식별.
-# [REVERT-NON-SUPPLIER:END]
+# [MARKER:END]
 class SupplyChainRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -137,19 +137,19 @@ class SupplyChainRepository:
         result = await self.session.execute(query, {"hop_level": hop_level})
         return [dict(row._mapping) for row in result]
 
-    @trace_tool("supply_chain_create")
-    # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 신규 엣지를 소속 맵 헤더에 연결.
-    async def _ensure_map_header(self, bom_version_id: str) -> str:
-        """이 bom_version의 공급망 맵 헤더(supply_chain_maps) 보장 — 없으면 생성하고 map_id 반환."""
-        q = text("""
-            INSERT INTO supply_chain_maps (bom_version_id, product_id, status)
-            SELECT :bv, bv.product_id, 'building' FROM bom_versions bv WHERE bv.bom_version_id = :bv
-            ON CONFLICT (bom_version_id) DO UPDATE SET bom_version_id = EXCLUDED.bom_version_id
-            RETURNING map_id;
-        """)
-        r = await self.session.execute(q, {"bv": bom_version_id})
-        return str(r.scalar_one())
-    # [REVERT-NON-SUPPLIER:END]
+    # [MARKER:BEGIN] supplier 외(supplychain) — 신규 엣지를 소속 맵 헤더에 연결.
+    #     @trace_tool("supply_chain_create")
+    #     async def _ensure_map_header(self, bom_version_id: str) -> str:
+    #         """이 bom_version의 공급망 맵 헤더(supply_chain_maps) 보장 — 없으면 생성하고 map_id 반환."""
+    #         q = text("""
+    #             INSERT INTO supply_chain_maps (bom_version_id, product_id, status)
+    #             SELECT :bv, bv.product_id, 'building' FROM bom_versions bv WHERE bv.bom_version_id = :bv
+    #             ON CONFLICT (bom_version_id) DO UPDATE SET bom_version_id = EXCLUDED.bom_version_id
+    #             RETURNING map_id;
+    #         """)
+    #         r = await self.session.execute(q, {"bv": bom_version_id})
+    #         return str(r.scalar_one())
+    # [MARKER:END]
 
     async def create_supply_relation(
         self,
@@ -159,7 +159,7 @@ class SupplyChainRepository:
         part_id: str,
     ) -> Dict[str, Any]:
         """supply_chain_map에 parent-child 관계 INSERT 후 생성 row 반환."""
-        map_header_id = await self._ensure_map_header(bom_version_id)  # [REVERT-NON-SUPPLIER]
+        # map_header_id = await self._ensure_map_header(bom_version_id)  # [MARKER]
         query = text("""
             INSERT INTO supply_chain_map
                 (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id)
@@ -186,7 +186,7 @@ class SupplyChainRepository:
         part_id: str,
     ) -> Dict[str, Any]:
         """협력사 자진신고: 공급원 변경 시 새로운 노드를 SUPPLIER_DECLARED 상태로 생성"""
-        map_header_id = await self._ensure_map_header(bom_version_id)  # [REVERT-NON-SUPPLIER] 헤더 연결
+        # map_header_id = await self._ensure_map_header(bom_version_id)  # [MARKER] 헤더 연결
         query = text("""
             INSERT INTO supply_chain_map
                 (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id,
@@ -210,31 +210,31 @@ class SupplyChainRepository:
         await self.session.flush()
         return dict(result.first()._mapping)
 
-    # [REVERT-NON-SUPPLIER:BEGIN] 협력사 확인(verify) — supply_chain_map.verification_status 갱신.
+    # [MARKER:BEGIN] 협력사 확인(verify) — supply_chain_map.verification_status 갱신.
     #   supplier 외(supplychain) 도메인. 최종 작업 시 이 메서드 전체 주석/삭제.
-    async def set_supplier_verification(
-        self,
-        bom_version_id: str,
-        child_supplier_id: str,
-        verified: bool,
-    ) -> int:
-        """이 BOM 버전에서 해당 협력사로 연결된 맵 엣지들의 verification_status를 일괄 갱신."""
-        query = text("""
-            UPDATE supply_chain_map
-               SET verification_status = :status
-             WHERE bom_version_id = :bom_version_id
-               AND child_supplier_id = :child_supplier_id
-            RETURNING edge_id AS map_id;
-        """)
-        result = await self.session.execute(query, {
-            "bom_version_id": bom_version_id,
-            "child_supplier_id": child_supplier_id,
-            "status": "verified" if verified else "unverified",
-        })
-        rows = result.fetchall()
-        await self.session.flush()
-        return len(rows)
-    # [REVERT-NON-SUPPLIER:END]
+    #     async def set_supplier_verification(
+    #         self,
+    #         bom_version_id: str,
+    #         child_supplier_id: str,
+    #         verified: bool,
+    #     ) -> int:
+    #         """이 BOM 버전에서 해당 협력사로 연결된 맵 엣지들의 verification_status를 일괄 갱신."""
+    #         query = text("""
+    #             UPDATE supply_chain_map
+    #                SET verification_status = :status
+    #              WHERE bom_version_id = :bom_version_id
+    #                AND child_supplier_id = :child_supplier_id
+    #             RETURNING edge_id AS map_id;
+    #         """)
+    #         result = await self.session.execute(query, {
+    #             "bom_version_id": bom_version_id,
+    #             "child_supplier_id": child_supplier_id,
+    #             "status": "verified" if verified else "unverified",
+    #         })
+    #         rows = result.fetchall()
+    #         await self.session.flush()
+    #         return len(rows)
+    # [MARKER:END]
 
     @trace_tool("get_supplier_master_and_gps_dto")
     async def get_supplier_master_and_gps_dto(self, supplier_id: str) -> dict:
@@ -579,11 +579,11 @@ class SupplyChainRepository:
                     LIMIT 1
                 )                      AS factory_id,
                 p.tier_level,
-                scm.hop_level,  -- [REVERT-NON-SUPPLIER] supplier 외(supplychain) — 차수 SSOT(1차=hop 1). 프론트 1차 판정/트리 tier용
-                p.part_name,   -- [REVERT-NON-SUPPLIER] supplier 외(supplychain) — 프론트 맵 트리 부품명 표시용
-                p.part_code,   -- [REVERT-NON-SUPPLIER]
+                -- scm.hop_level,  [MARKER] supplier 외(supplychain) — 차수 SSOT(1차=hop 1). 프론트 1차 판정/트리 tier용
+                -- p.part_name,   [MARKER] supplier 외(supplychain) — 프론트 맵 트리 부품명 표시용
+                -- p.part_code,   [MARKER]
                 scm.link_status,
-                scm.verification_status,  -- [REVERT-NON-SUPPLIER] STEP3 협력사 '확인' 상태 하이드레이션용
+                -- scm.verification_status,  [MARKER] STEP3 협력사 '확인' 상태 하이드레이션용
                 scm.supply_period_from,
                 scm.supply_period_to,
                 scm.created_at
@@ -877,55 +877,55 @@ class SupplyChainRepository:
         result = await self.session.execute(query)
         return [dict(row._mapping) for row in result]
 
-    # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(supply_chain_maps) 조회/상태.
-    async def list_map_headers(self, tenant_id: str) -> List[Dict[str, Any]]:
-        """내 테넌트의 공급망 맵 헤더 목록 + 엣지 수. (맵 그 자체를 map_id로 관리)"""
-        query = text("""
-            SELECT h.map_id, h.bom_version_id, h.product_id, p.product_name,
-                   h.status, h.completed_at, COUNT(e.edge_id) AS edge_count
-            FROM supply_chain_maps h
-            JOIN products p ON p.product_id = h.product_id
-            LEFT JOIN supply_chain_map e ON e.map_id = h.map_id
-            WHERE p.tenant_id = :tenant_id
-            GROUP BY h.map_id, h.bom_version_id, h.product_id, p.product_name, h.status, h.completed_at
-            ORDER BY p.product_name;
-        """)
-        result = await self.session.execute(query, {"tenant_id": tenant_id})
-        return [dict(r._mapping) for r in result]
-
-    async def get_map_header(self, map_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
-        """맵 헤더 단건(map_id). 내 테넌트 소유만(아니면 None)."""
-        query = text("""
-            SELECT h.map_id, h.bom_version_id, h.product_id, p.product_name,
-                   h.status, h.completed_by, h.completed_at,
-                   COUNT(e.edge_id) AS edge_count
-            FROM supply_chain_maps h
-            JOIN products p ON p.product_id = h.product_id
-            LEFT JOIN supply_chain_map e ON e.map_id = h.map_id
-            WHERE h.map_id = :map_id AND p.tenant_id = :tenant_id
-            GROUP BY h.map_id, h.bom_version_id, h.product_id, p.product_name,
-                     h.status, h.completed_by, h.completed_at;
-        """)
-        row = (await self.session.execute(query, {"map_id": map_id, "tenant_id": tenant_id})).first()
-        return dict(row._mapping) if row else None
-
-    async def set_map_status(self, map_id: str, status: str, user_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
-        """맵 완료/전송 상태 변경. 내 테넌트 소유만. flush만(커밋은 service)."""
-        is_completed = status == "completed"
-        query = text("""
-            UPDATE supply_chain_maps h
-               SET status = :status,
-                   completed_by = CASE WHEN :is_completed THEN CAST(:user_id AS uuid) ELSE h.completed_by END,
-                   completed_at = CASE WHEN :is_completed THEN now() ELSE h.completed_at END
-            FROM products p
-             WHERE h.product_id = p.product_id
-               AND h.map_id = :map_id AND p.tenant_id = :tenant_id
-            RETURNING h.map_id, h.status, h.completed_at;
-        """)
-        row = (await self.session.execute(query, {
-            "map_id": map_id, "status": status, "is_completed": is_completed,
-            "user_id": user_id, "tenant_id": tenant_id,
-        })).first()
-        await self.session.flush()
-        return dict(row._mapping) if row else None
-    # [REVERT-NON-SUPPLIER:END]
+    # [MARKER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(supply_chain_maps) 조회/상태.
+    #     async def list_map_headers(self, tenant_id: str) -> List[Dict[str, Any]]:
+    #         """내 테넌트의 공급망 맵 헤더 목록 + 엣지 수. (맵 그 자체를 map_id로 관리)"""
+    #         query = text("""
+    #             SELECT h.map_id, h.bom_version_id, h.product_id, p.product_name,
+    #                    h.status, h.completed_at, COUNT(e.edge_id) AS edge_count
+    #             FROM supply_chain_maps h
+    #             JOIN products p ON p.product_id = h.product_id
+    #             LEFT JOIN supply_chain_map e ON e.map_id = h.map_id
+    #             WHERE p.tenant_id = :tenant_id
+    #             GROUP BY h.map_id, h.bom_version_id, h.product_id, p.product_name, h.status, h.completed_at
+    #             ORDER BY p.product_name;
+    #         """)
+    #         result = await self.session.execute(query, {"tenant_id": tenant_id})
+    #         return [dict(r._mapping) for r in result]
+    #
+    #     async def get_map_header(self, map_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    #         """맵 헤더 단건(map_id). 내 테넌트 소유만(아니면 None)."""
+    #         query = text("""
+    #             SELECT h.map_id, h.bom_version_id, h.product_id, p.product_name,
+    #                    h.status, h.completed_by, h.completed_at,
+    #                    COUNT(e.edge_id) AS edge_count
+    #             FROM supply_chain_maps h
+    #             JOIN products p ON p.product_id = h.product_id
+    #             LEFT JOIN supply_chain_map e ON e.map_id = h.map_id
+    #             WHERE h.map_id = :map_id AND p.tenant_id = :tenant_id
+    #             GROUP BY h.map_id, h.bom_version_id, h.product_id, p.product_name,
+    #                      h.status, h.completed_by, h.completed_at;
+    #         """)
+    #         row = (await self.session.execute(query, {"map_id": map_id, "tenant_id": tenant_id})).first()
+    #         return dict(row._mapping) if row else None
+    #
+    #     async def set_map_status(self, map_id: str, status: str, user_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    #         """맵 완료/전송 상태 변경. 내 테넌트 소유만. flush만(커밋은 service)."""
+    #         is_completed = status == "completed"
+    #         query = text("""
+    #             UPDATE supply_chain_maps h
+    #                SET status = :status,
+    #                    completed_by = CASE WHEN :is_completed THEN CAST(:user_id AS uuid) ELSE h.completed_by END,
+    #                    completed_at = CASE WHEN :is_completed THEN now() ELSE h.completed_at END
+    #             FROM products p
+    #              WHERE h.product_id = p.product_id
+    #                AND h.map_id = :map_id AND p.tenant_id = :tenant_id
+    #             RETURNING h.map_id, h.status, h.completed_at;
+    #         """)
+    #         row = (await self.session.execute(query, {
+    #             "map_id": map_id, "status": status, "is_completed": is_completed,
+    #             "user_id": user_id, "tenant_id": tenant_id,
+    #         })).first()
+    #         await self.session.flush()
+    #         return dict(row._mapping) if row else None
+    # [MARKER:END]

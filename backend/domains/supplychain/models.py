@@ -29,20 +29,20 @@ from backend.infrastructure.database import Base
 
 # ---------------------------------------------------------------------------
 # 0. SupplyChainMaps — 공급망 맵 헤더(맵 그 자체). 엣지(supply_chain_map)를 묶는 1급 엔티티.
-# [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 맵 헤더 엔티티 신설.
+# [MARKER:BEGIN] supplier 외(supplychain) — 맵 헤더 엔티티 신설.
 # ---------------------------------------------------------------------------
-class SupplyChainMaps(Base):
-    """공급망 맵 1개 = map_id 1개 = bom_version(제품×Lot) 1개. 완료/전송 상태 관리."""
-    __tablename__ = "supply_chain_maps"
-
-    map_id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.uuid_generate_v4())
-    bom_version_id = Column(UUID(as_uuid=True), ForeignKey("bom_versions.bom_version_id"))
-    product_id = Column(UUID(as_uuid=True), ForeignKey("products.product_id"))
-    status = Column(String(20), server_default="building", comment="building / completed")
-    completed_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
-    completed_at = Column(TIMESTAMP(timezone=True))
-    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
-# [REVERT-NON-SUPPLIER:END]
+# class SupplyChainMaps(Base):
+#     """공급망 맵 1개 = map_id 1개 = bom_version(제품×Lot) 1개. 완료/전송 상태 관리."""
+#     __tablename__ = "supply_chain_maps"
+#
+#     map_id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.uuid_generate_v4())
+#     bom_version_id = Column(UUID(as_uuid=True), ForeignKey("bom_versions.bom_version_id"))
+#     product_id = Column(UUID(as_uuid=True), ForeignKey("products.product_id"))
+#     status = Column(String(20), server_default="building", comment="building / completed")
+#     completed_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+#     completed_at = Column(TIMESTAMP(timezone=True))
+#     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+# [MARKER:END]
 
 
 # ---------------------------------------------------------------------------
@@ -54,15 +54,15 @@ class SupplyChainMap(Base):
     """
     __tablename__ = "supply_chain_map"
 
-    # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — map_id(엣지 PK)를 edge_id로 개명하고
+    # [MARKER:BEGIN] supplier 외(supplychain) — map_id(엣지 PK)를 edge_id로 개명하고
     #   map_id 는 맵 헤더(supply_chain_maps) FK 로 재정의. (한 줄=1 엣지, map_id=소속 맵)
-    edge_id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        server_default=func.uuid_generate_v4(),
-    )
-    map_id = Column(UUID(as_uuid=True), ForeignKey("supply_chain_maps.map_id"), nullable=True)
-    # [REVERT-NON-SUPPLIER:END]
+    # edge_id = Column(
+    #     UUID(as_uuid=True),
+    #     primary_key=True,
+    #     server_default=func.uuid_generate_v4(),
+    # )
+    # map_id = Column(UUID(as_uuid=True), ForeignKey("supply_chain_maps.map_id"), nullable=True)
+    # [MARKER:END]
     bom_version_id = Column(UUID(as_uuid=True), ForeignKey("bom_versions.bom_version_id"))
     parent_supplier_id = Column(UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"))
     child_supplier_id = Column(UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"), nullable=True)
@@ -108,7 +108,7 @@ class SupplyRatio(Base):
     __tablename__ = "supply_ratio"
 
     ratio_id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.uuid_generate_v4())
-    # [REVERT-NON-SUPPLIER] supplier 외(supplychain) — FK를 supply_chain_map.edge_id 로 개명
+    # [MARKER] supplier 외(supplychain) — FK를 supply_chain_map.edge_id 로 개명
     edge_id = Column(UUID(as_uuid=True), ForeignKey("supply_chain_map.edge_id", ondelete="CASCADE"), nullable=False)
     factory_id = Column(UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id"))
     ratio_percentage = Column(Numeric(5, 2))

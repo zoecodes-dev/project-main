@@ -35,7 +35,7 @@ from uuid import UUID
 from sqlalchemy import and_, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload  # [REVERT-NON-SUPPLIER] 이 import 제거 (customer eager load용)
+# from sqlalchemy.orm import selectinload  # [MARKER] 이 import 제거 (customer eager load용)
 
 from backend.domains.product.models import (
     BomVersion,
@@ -361,7 +361,7 @@ class ProductRepository:
         """
         result = await self.session.execute(
             select(Product)
-            .options(selectinload(Product.customer))  # [REVERT-NON-SUPPLIER] customer eager load(고객사명용)
+            # .options(selectinload(Product.customer))  # [MARKER] customer eager load(고객사명용)
             .order_by(
                 Product.synced_at.desc().nulls_last(),
                 Product.created_at.desc(),
@@ -461,7 +461,7 @@ class ProductRepository:
         #   5계층(Pack=0 ~ 광물=4) 초과는 데이터 오염으로 간주.
         # ------------------------------------------------------------------
         # [결정 #2] link_status 필터 문자열 생성
-        # [REVERT-NON-SUPPLIER] supplier 외 — supply_chain_map 엣지 PK가 edge_id로 개명됨(주석 참고용).
+        # [MARKER] supplier 외 — supply_chain_map 엣지 PK가 edge_id로 개명됨(주석 참고용).
         # scm.edge_id IS NULL 조건: supply_chain_map에 매핑이 없는 부품(직접 BOM 항목)도 포함.
         # 허용값은 schema chk_link_status 그대로 사용 ('supplychain_confirmed').
         link_status_filter = ""
@@ -479,7 +479,7 @@ class ProductRepository:
                     p.parent_part_id,
                     p.hs_code,
                     p.material_type,
-                    p.function_purpose,  -- [REVERT-NON-SUPPLIER] product 외 지원 — 프론트 BOM 트리 '용도/기능' 표시용
+                    -- p.function_purpose,  [MARKER] product 외 지원 — 프론트 BOM 트리 '용도/기능' 표시용
                     p.unit_price,
                     bi.required_quantity,
                     bi.required_quantity_unit,
@@ -511,7 +511,7 @@ class ProductRepository:
                     p.parent_part_id,
                     p.hs_code,
                     p.material_type,
-                    p.function_purpose,  -- [REVERT-NON-SUPPLIER] product 외 지원 — 프론트 BOM 트리 '용도/기능' 표시용
+                    -- p.function_purpose,  [MARKER] product 외 지원 — 프론트 BOM 트리 '용도/기능' 표시용
                     p.unit_price,
                     NULL::numeric(15,4) AS required_quantity,
                     NULL::varchar(20) AS required_quantity_unit,
@@ -566,7 +566,7 @@ class ProductRepository:
                 "parent_part_id":         str(row["parent_part_id"]) if row["parent_part_id"] else None,
                 "hs_code":                row["hs_code"],
                 "material_type":          row["material_type"],
-                "function_purpose":       row["function_purpose"],  # [REVERT-NON-SUPPLIER] 용도/기능
+                # "function_purpose":       row["function_purpose"],  # [MARKER] 용도/기능
                 "unit_price":             float(row["unit_price"]) if row["unit_price"] is not None else None,
                 "required_quantity":      float(row["required_quantity"]) if row["required_quantity"] is not None else None,
                 "required_quantity_unit": row["required_quantity_unit"],
@@ -601,40 +601,40 @@ class ProductRepository:
         #       root_nodes[0]만 쓰면 나머지 2개 서브트리가 누락된다. 완전 수정은
         #       다중 루트 반환이 필요(응답 계약 변경) — 백엔드 담당자 검토 요망.
         # ───────────────────────────────────────────────────────────────
-        # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(product) — BOM 트리 404 수정(공급망 맵 노드 표시용).
+        # [MARKER:BEGIN] supplier 외(product) — BOM 트리 404 수정(공급망 맵 노드 표시용).
         #   원인: parent_part_id IS NULL 루트가 0건 → 404. 앵커(depth=0) 기준으로 수정.
         #   최종작업 시 아래 블록을 원복:
         #       root_nodes = [n for n in node_map.values() if n["parent_part_id"] is None]
         #       if not root_nodes: return None
         #       root_node = root_nodes[0]
-        root_nodes = [
-            n for n in node_map.values()
-            if n["depth"] == 0
-        ]
-        if not root_nodes:
-            return None
-        if len(root_nodes) == 1:
-            root_node = root_nodes[0]
-        else:
-            # forest(루트 여러 개) → 제품을 합성 루트로 묶어 모든 1차 부품을 children으로 노출.
-            root_node = {
-                "part_id":                str(product_row["product_id"]),
-                "part_code":              product_row["product_code"],
-                "part_name":              product_row["product_name"],
-                "tier_level":             0,
-                "parent_part_id":         None,
-                "hs_code":                None,
-                "material_type":          None,
-                "function_purpose":       None,  # [REVERT-NON-SUPPLIER] 제품 루트(부품 아님)
-                "unit_price":             None,
-                "required_quantity":      None,
-                "required_quantity_unit": None,
-                "origin_country":         None,
-                "direct_material_cost":   None,
-                "depth":                  0,
-                "children":               root_nodes,
-            }
-        # [REVERT-NON-SUPPLIER:END]
+        # root_nodes = [
+        #     n for n in node_map.values()
+        #     if n["depth"] == 0
+        # ]
+        # if not root_nodes:
+        #     return None
+        # if len(root_nodes) == 1:
+        #     root_node = root_nodes[0]
+        # else:
+        #     # forest(루트 여러 개) → 제품을 합성 루트로 묶어 모든 1차 부품을 children으로 노출.
+        #     root_node = {
+        #         "part_id":                str(product_row["product_id"]),
+        #         "part_code":              product_row["product_code"],
+        #         "part_name":              product_row["product_name"],
+        #         "tier_level":             0,
+        #         "parent_part_id":         None,
+        #         "hs_code":                None,
+        #         "material_type":          None,
+        #         "function_purpose":       None,  # [MARKER] 제품 루트(부품 아님)
+        #         "unit_price":             None,
+        #         "required_quantity":      None,
+        #         "required_quantity_unit": None,
+        #         "origin_country":         None,
+        #         "direct_material_cost":   None,
+        #         "depth":                  0,
+        #         "children":               root_nodes,
+        #     }
+        # [MARKER:END]
 
         # ------------------------------------------------------------------
         # 최종 응답 조립

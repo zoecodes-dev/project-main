@@ -191,12 +191,14 @@ class DataRequestCreateRequest(BaseModel):
     클라이언트(또는 다른 서비스)가 새로운 데이터 제출을 요청할 때 전달해야 하는 최소 필수 데이터입니다.
     """
     # requester_user_id/actor_id 미제공 시 라우터가 토큰의 현재 사용자로 채운다.
-    # [REVERT-NON-SUPPLIER] supplier 외(submission) — 프론트 발송 배선용. 최종작업 시 아래 두 줄 원복(필수 uuid.UUID).
-    requester_user_id: Optional[uuid.UUID] = None  # [REVERT-NON-SUPPLIER] 원복: requester_user_id: uuid.UUID
+    # [MARKER] supplier 외(submission) — 프론트 발송 배선용. 최종작업 시 아래 두 줄 원복(필수 uuid.UUID).
+    # requester_user_id: Optional[uuid.UUID] = None  # [MARKER] 원복 적용
+    requester_user_id: uuid.UUID
     target_supplier_id: uuid.UUID
     requested_data_type: str
     due_date: Optional[datetime] = None
-    actor_id: Optional[uuid.UUID] = None  # [REVERT-NON-SUPPLIER] 원복: actor_id: uuid.UUID
+    # actor_id: Optional[uuid.UUID] = None  # [MARKER] 원복 적용
+    actor_id: uuid.UUID
 
 class DataRequestResponse(BaseModel):
     """
@@ -212,8 +214,8 @@ class DataRequestResponse(BaseModel):
     due_date: Optional[datetime] = None
     response_status: Optional[ResponseStatus] = None
     submission_status: Optional[SubmissionStatus] = None
-    # [REVERT-NON-SUPPLIER] supplier 외(submission) — 대상 협력사 완성도 누락 항목 수(프론트 자료요청 표시용).
-    missing_count: Optional[int] = None  # [REVERT-NON-SUPPLIER] 이 줄 주석처리
+    # [MARKER] supplier 외(submission) — 대상 협력사 완성도 누락 항목 수(프론트 자료요청 표시용).
+    # missing_count: Optional[int] = None  # [MARKER] 이 줄 주석처리
 
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 

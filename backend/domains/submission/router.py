@@ -87,13 +87,13 @@ async def list_data_requests_endpoint(
     )
 
 @router.post("", response_model=DataRequestResponse, status_code=status.HTTP_201_CREATED)
-# [REVERT-NON-SUPPLIER:BEGIN] supplier 외(submission) — current_user 의존 + requester/actor 토큰 추론(프론트 발송 배선용).
-#   최종작업 시 아래 인라인 [REVERT-NON-SUPPLIER] 줄들을 원복: current_user 파라미터 제거,
+# [MARKER:BEGIN] supplier 외(submission) — current_user 의존 + requester/actor 토큰 추론(프론트 발송 배선용).
+#   최종작업 시 아래 인라인 [MARKER] 줄들을 원복: current_user 파라미터 제거,
 #   requester=req.requester_user_id / actor=req.actor_id 직접 사용.
 async def create_data_request_endpoint(
     req: DataRequestCreateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),  # [REVERT-NON-SUPPLIER] 이 줄 제거
+    # current_user: CurrentUser = Depends(get_current_user),  # [MARKER] 이 줄 제거
 ):
     """
     [API] POST /data-requests
@@ -102,8 +102,10 @@ async def create_data_request_endpoint(
     - requester_user_id/actor_id 미제공 시 토큰의 현재 사용자로 자동 채움(프론트는 대상·유형만 보내면 됨).
     - 도메인 계층에서 발생한 ValueError(무결성 위반 등)를 HTTP 422 상태 코드로 매핑한다.
     """
-    requester = req.requester_user_id or current_user.user_id  # [REVERT-NON-SUPPLIER] 원복: requester = req.requester_user_id
-    actor = req.actor_id or current_user.user_id  # [REVERT-NON-SUPPLIER] 원복: actor = req.actor_id
+    # requester = req.requester_user_id or current_user.user_id  # [MARKER] 원복 적용
+    requester = req.requester_user_id
+    # actor = req.actor_id or current_user.user_id  # [MARKER] 원복 적용
+    actor = req.actor_id
     try:
         return await create_and_request_submission(
             db=db,
@@ -113,22 +115,22 @@ async def create_data_request_endpoint(
             due_date=req.due_date,
             actor_id=actor,
         )
-    # [REVERT-NON-SUPPLIER:END]
+    # [MARKER:END]
     except ValueError as e:
         # 비즈니스 규칙 위반 또는 DB 참조 무결성 위반 시 422 반환
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="서버 내부 오류가 발생했습니다.")
 
-# [REVERT-NON-SUPPLIER:BEGIN] HITL 협력사 승인 — AI 추출 목록(입력+AI분석+신뢰도). /{request_id}보다 먼저 등록.
-@router.get("/ai-extractions")
-async def list_ai_extractions_endpoint(
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    """협력사 자료요청 AI 파싱 결과(parsed_fields + confidence) 목록. HITL 검토·승인용."""
-    return await list_ai_extractions(db)
-# [REVERT-NON-SUPPLIER:END]
+# [MARKER:BEGIN] HITL 협력사 승인 — AI 추출 목록(입력+AI분석+신뢰도). /{request_id}보다 먼저 등록.
+# @router.get("/ai-extractions")
+# async def list_ai_extractions_endpoint(
+#     db: AsyncSession = Depends(get_db),
+#     current_user: CurrentUser = Depends(get_current_user),
+# ):
+#     """협력사 자료요청 AI 파싱 결과(parsed_fields + confidence) 목록. HITL 검토·승인용."""
+#     return await list_ai_extractions(db)
+# [MARKER:END]
 
 
 @router.get("/{request_id}", response_model=DataRequestResponse)

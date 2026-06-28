@@ -8,7 +8,8 @@ Submission 도메인 Data Access 계층 (Repository)
 """
 import uuid
 from typing import Optional
-from sqlalchemy import select, asc, text  # [REVERT-NON-SUPPLIER] 원복: select, asc (text는 get_missing_counts용)
+# from sqlalchemy import select, asc, text  # [MARKER] 원복 적용(text는 비-supplier get_missing_counts용)
+from sqlalchemy import select, asc
 from sqlalchemy import select, Table, Column, MetaData, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +29,7 @@ _suppliers_tbl = Table(
     "suppliers", _supplier_meta,
     Column("supplier_id", PG_UUID(as_uuid=True), primary_key=True),
     Column("provider_type", String(30)),
-    Column("company_name", String(255)),  # [REVERT-NON-SUPPLIER] HITL 추출 목록 협력사명용
+    # Column("company_name", String(255)),  # [MARKER] HITL 추출 목록 협력사명용
 )
 
 async def create_data_request(db: AsyncSession, log_record: DataRequestLog) -> DataRequestLog:
@@ -73,21 +74,21 @@ async def list_data_requests(
     result = await db.execute(stmt)
     return list(result.scalars().all())
 
-# [REVERT-NON-SUPPLIER:BEGIN] supplier 외(submission) — 자료요청 누락 건수 계산(프론트 표시용). 최종작업 시 함수 전체 주석처리.
-async def get_missing_counts(db: AsyncSession, supplier_ids: list[uuid.UUID]) -> dict:
-    """대상 협력사들의 data_completeness_status.missing_fields 길이 맵 {supplier_id: 누락 수}."""
-    if not supplier_ids:
-        return {}
-    stmt = text(
-        """
-        SELECT entity_id, COALESCE(jsonb_array_length(missing_fields), 0) AS missing_count
-        FROM data_completeness_status
-        WHERE entity_type = 'supplier' AND entity_id::text = ANY(:ids)
-        """
-    )
-    rows = (await db.execute(stmt, {"ids": [str(s) for s in supplier_ids]})).mappings().all()
-    return {row["entity_id"]: row["missing_count"] for row in rows}
-# [REVERT-NON-SUPPLIER:END]
+# [MARKER:BEGIN] supplier 외(submission) — 자료요청 누락 건수 계산(프론트 표시용). 최종작업 시 함수 전체 주석처리.
+# async def get_missing_counts(db: AsyncSession, supplier_ids: list[uuid.UUID]) -> dict:
+#     """대상 협력사들의 data_completeness_status.missing_fields 길이 맵 {supplier_id: 누락 수}."""
+#     if not supplier_ids:
+#         return {}
+#     stmt = text(
+#         """
+#         SELECT entity_id, COALESCE(jsonb_array_length(missing_fields), 0) AS missing_count
+#         FROM data_completeness_status
+#         WHERE entity_type = 'supplier' AND entity_id::text = ANY(:ids)
+#         """
+#     )
+#     rows = (await db.execute(stmt, {"ids": [str(s) for s in supplier_ids]})).mappings().all()
+#     return {row["entity_id"]: row["missing_count"] for row in rows}
+# [MARKER:END]
 
 async def get_completeness_by_supplier(db: AsyncSession, supplier_id: uuid.UUID) -> Optional[DataCompletenessStatus]:
     """[SELECT] 특정 협력사의 데이터 완성도 현황을 단건 조회합니다."""
@@ -170,26 +171,26 @@ async def list_extraction_results_by_suppliers(
     return list(result.all())
 
 
-# [REVERT-NON-SUPPLIER:BEGIN] HITL 협력사 승인 — AI 추출(parsed_fields+confidence) + 협력사 + hitl_reviews 연결.
+# [MARKER:BEGIN] HITL 협력사 승인 — AI 추출(parsed_fields+confidence) + 협력사 + hitl_reviews 연결.
 #   submission 도메인(비-supplier). 최종 작업 시 이 함수 + 엔드포인트 원복.
-async def list_extractions_for_review(db: AsyncSession) -> list[dict]:
-    """AI 파싱 추출결과 + 협력사명 + 요청유형/상태 + (연결된 경우) hitl_reviews 검토 상태."""
-    q = text("""
-        SELECT e.request_id, e.parsed_fields, e.confidence_map, e.unparsed_fields,
-               d.target_supplier_id, d.requested_data_type, d.submission_status, d.batch_id,
-               s.company_name,
-               h.review_id  AS hitl_review_id,
-               h.status     AS hitl_status,
-               h.reason     AS hitl_reason
-        FROM document_extraction_results e
-        JOIN data_request_log d ON d.request_id = e.request_id
-        JOIN suppliers s        ON s.supplier_id = d.target_supplier_id
-        LEFT JOIN hitl_reviews h ON h.batch_id = d.batch_id
-        ORDER BY e.created_at DESC
-    """)
-    result = await db.execute(q)
-    return [dict(r) for r in result.mappings().all()]
-# [REVERT-NON-SUPPLIER:END]
+# async def list_extractions_for_review(db: AsyncSession) -> list[dict]:
+#     """AI 파싱 추출결과 + 협력사명 + 요청유형/상태 + (연결된 경우) hitl_reviews 검토 상태."""
+#     q = text("""
+#         SELECT e.request_id, e.parsed_fields, e.confidence_map, e.unparsed_fields,
+#                d.target_supplier_id, d.requested_data_type, d.submission_status, d.batch_id,
+#                s.company_name,
+#                h.review_id  AS hitl_review_id,
+#                h.status     AS hitl_status,
+#                h.reason     AS hitl_reason
+#         FROM document_extraction_results e
+#         JOIN data_request_log d ON d.request_id = e.request_id
+#         JOIN suppliers s        ON s.supplier_id = d.target_supplier_id
+#         LEFT JOIN hitl_reviews h ON h.batch_id = d.batch_id
+#         ORDER BY e.created_at DESC
+#     """)
+#     result = await db.execute(q)
+#     return [dict(r) for r in result.mappings().all()]
+# [MARKER:END]
 
 # ============================================================================
 # [동작] idempotency_key를 PK로 INSERT 시도 →
