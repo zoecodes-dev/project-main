@@ -523,7 +523,7 @@ async def get_regulation_results(
             s.company_name                  AS supplier_name,
             r.regulation_code               AS regulation,
             cr.verdict,
-            b.confidence_score              AS confidence,
+            cr.confidence_score             AS confidence,   -- 추출항목/판정 신뢰도(AI 파싱뷰와 동일 기준)
             cr.needs_human_review,
             cr.cited_clauses,                              -- 대조한 규제 조항(jsonb 배열)
             cr.reasoning_text                              -- AI 판단 근거(어느 근거↔조항 대조 결과)
