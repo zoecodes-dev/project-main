@@ -445,10 +445,11 @@ INSERT INTO compliance_results (batch_id, regulation_id, supplier_id, verdict, n
 SELECT 'ba333333-0000-4000-8000-000000000003', regulation_id, 'a5555555-5555-4000-8000-000000000005', 'compliance_violation', FALSE, '["UFLPA Sec.3"]'::jsonb, 0.93, '신장 강제노동 의혹 — 위반'
 FROM regulations WHERE regulation_code = 'UFLPA';
 
--- ③ GLC Lot2 [Sad] IRA FEOC 위반 (외국지분 28.5% > 25%)
+-- ③ GLC Lot2 [Sad] EU 배터리 탄소발자국 위반 (신고 탄소집약도 기준 초과)
+--   근거: Global Mining 제출 탄소발자국 증빙(da555555)의 carbon_intensity 18.7 > 기준 16.
 INSERT INTO compliance_results (batch_id, regulation_id, supplier_id, verdict, needs_human_review, cited_clauses, confidence_score, reasoning_text)
-SELECT 'ba333333-0000-4000-8000-000000000003', regulation_id, 'a5555555-5555-4000-8000-000000000005', 'compliance_violation', FALSE, '["IRA FEOC"]'::jsonb, 0.94, 'FEOC 우려국 지분 28.5% 초과 — 차단'
-FROM regulations WHERE regulation_code = 'IRA';
+SELECT 'ba333333-0000-4000-8000-000000000003', regulation_id, 'a5555555-5555-4000-8000-000000000005', 'compliance_violation', FALSE, '["EU 2023/1542 Art.7"]'::jsonb, 0.93, '신고 탄소집약도 18.7 kgCO2e/kWh — 기준 16 초과, 화석연료(석탄) 기반 검증 불일치'
+FROM regulations WHERE regulation_code = 'EU_BATTERY_ART7';
 
 
 -- ============================================================
@@ -506,15 +507,18 @@ FROM regulations WHERE regulation_code = 'IRA';
 INSERT INTO data_request_log (request_id, requester_user_id, target_supplier_id, requested_data_type, requested_at, due_date, response_status, submission_status) VALUES
 ('da111111-0000-4000-8000-000000000001', '11111111-0000-4000-8000-000000000002', 'a1111111-1111-4000-8000-000000000001', '탄소발자국 증빙', now() - interval '15 days', now() - interval '1 day', 'response_responded', 'submission_approved'),
 ('da444444-0000-4000-8000-000000000004', '11111111-0000-4000-8000-000000000002', 'a4444444-4444-4000-8000-000000000004', '공장 정보',       now() - interval '6 days',  now() + interval '8 days', 'response_responded', 'submission_rework'),
-('daababab-0000-4000-8000-0000000000ab', '11111111-0000-4000-8000-000000000002', 'abababab-abab-4000-8000-0000000000ab', '원산지 증빙',     now() - interval '22 days', now() - interval '8 days', 'response_escalated', 'submission_requested');
+('daababab-0000-4000-8000-0000000000ab', '11111111-0000-4000-8000-000000000002', 'abababab-abab-4000-8000-0000000000ab', '원산지 증빙',     now() - interval '22 days', now() - interval '8 days', 'response_escalated', 'submission_requested'),
+('da555555-0000-4000-8000-000000000005', '11111111-0000-4000-8000-000000000002', 'a5555555-5555-4000-8000-000000000005', '탄소발자국 증빙', now() - interval '5 days',  now() - interval '1 day',  'response_responded', 'submission_submitted');
 
 INSERT INTO submission_documents (document_id, request_id, supplier_id, file_url, file_name, file_type, doc_category, file_hash, uploaded_by) VALUES
 ('d0c11111-0000-4000-8000-000000000001', 'da111111-0000-4000-8000-000000000001', 'a1111111-1111-4000-8000-000000000001', 's3://kira-docs/hy_carbon.pdf',  'hy_carbon.pdf',  'pdf',  'carbon_data', 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90', '11111111-0000-4000-8000-000000000004'),
-('d0c44444-0000-4000-8000-000000000004', 'da444444-0000-4000-8000-000000000004', 'a4444444-4444-4000-8000-000000000004', 's3://kira-docs/ds_factory.xlsx','ds_factory.xlsx','xlsx', 'factory_doc', 'b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1', '11111111-0000-4000-8000-000000000006');
+('d0c44444-0000-4000-8000-000000000004', 'da444444-0000-4000-8000-000000000004', 'a4444444-4444-4000-8000-000000000004', 's3://kira-docs/ds_factory.xlsx','ds_factory.xlsx','xlsx', 'factory_doc', 'b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1', '11111111-0000-4000-8000-000000000006'),
+('d0c55555-0000-4000-8000-000000000005', 'da555555-0000-4000-8000-000000000005', 'a5555555-5555-4000-8000-000000000005', 's3://kira-docs/gm_carbon.pdf',  'gm_carbon.pdf',  'pdf',  'carbon_data', 'c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2', '11111111-0000-4000-8000-000000000004');
 
 INSERT INTO document_extraction_results (request_id, document_id, parsed_fields, confidence_map, unparsed_fields, supplier_confirmed, confirmed_at) VALUES
 ('da111111-0000-4000-8000-000000000001', 'd0c11111-0000-4000-8000-000000000001', '{"carbon_intensity":2.34,"energy_source":"renewable"}'::jsonb, '{"carbon_intensity":0.96,"energy_source":0.91}'::jsonb, '[]'::jsonb, TRUE, now() - interval '2 days'),
-('da444444-0000-4000-8000-000000000004', 'd0c44444-0000-4000-8000-000000000004', '{"factory_name":"화성 공장","capacity":"2GWh"}'::jsonb, '{"factory_name":0.95,"capacity":0.62}'::jsonb, '["energy_source"]'::jsonb, FALSE, NULL);
+('da444444-0000-4000-8000-000000000004', 'd0c44444-0000-4000-8000-000000000004', '{"factory_name":"화성 공장","capacity":"2GWh"}'::jsonb, '{"factory_name":0.95,"capacity":0.62}'::jsonb, '["energy_source"]'::jsonb, FALSE, NULL),
+('da555555-0000-4000-8000-000000000005', 'd0c55555-0000-4000-8000-000000000005', '{"carbon_intensity":18.7,"energy_source":"coal"}'::jsonb, '{"carbon_intensity":0.93,"energy_source":0.9}'::jsonb, '[]'::jsonb, TRUE, now() - interval '1 day');
 
 INSERT INTO submission_status_history (request_id, from_status, to_status, actor_id, reason) VALUES
 ('da111111-0000-4000-8000-000000000001', 'submission_submitted', 'submission_approved', '11111111-0000-4000-8000-000000000002', '검토 통과'),
