@@ -99,6 +99,23 @@ INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, co
 INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
 ('abababab-abab-4000-8000-0000000000ab', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Unverified Precursor Trading', 'Unverified Precursor Trading', 'trader', 40, 'supplier_in_progress', 'medium', 'under_review');
 
+-- 소재 국가(ISO 3166-1 alpha-2) 시드 — INSERT에 country 미포함이라 전부 null이던 것 보완(화면 '미입력' 해소).
+UPDATE suppliers SET country = CASE supplier_id
+  WHEN 'a0000000-0000-4000-8000-000000000000' THEN 'KR'  -- KIRA Energy Solutions(OEM)
+  WHEN 'a1111111-1111-4000-8000-000000000001' THEN 'KR'  -- 한양셀 제조
+  WHEN 'a7777777-7777-4000-8000-000000000007' THEN 'KR'  -- 우진배터리
+  WHEN 'a8888888-8888-4000-8000-000000000008' THEN 'KR'  -- 우진셀
+  WHEN 'a2222222-2222-4000-8000-000000000002' THEN 'KR'  -- 동성머티리얼
+  WHEN 'a4444444-4444-4000-8000-000000000004' THEN 'KR'  -- 대성정밀
+  WHEN 'a6666666-6666-4000-8000-000000000006' THEN 'KR'  -- 청정전구체
+  WHEN 'aaaaaaaa-aaaa-4000-8000-00000000000a' THEN 'KR'  -- 한중제련
+  WHEN 'acacacac-acac-4000-8000-0000000000ac' THEN 'CN'  -- Xinjiang Nickel Refinery
+  WHEN 'a3333333-3333-4000-8000-000000000003' THEN 'AU'  -- 호주리튬광업
+  WHEN 'a9999999-9999-4000-8000-000000000009' THEN 'CL'  -- 칠레리튬광업
+  WHEN 'a5555555-5555-4000-8000-000000000005' THEN 'CN'  -- Global Mining Corp(신장 인접·FEOC 부적격)
+  WHEN 'abababab-abab-4000-8000-0000000000ab' THEN 'CN'  -- Unverified Precursor Trading(미확인 원산지)
+  ELSE country END;
+
 
 -- ============================================================
 -- 5. 공장 / 사업장 (영역 2) — PostGIS 좌표 (Geo Audit 핵심)
