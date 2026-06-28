@@ -161,10 +161,12 @@ INSERT INTO supplier_certifications (supplier_id, certification_type, certificat
 --   suppliers 마스터(4번)와 공장(5번)이 모두 INSERT된 뒤에 와야 FK 위반이 안 난다.
 INSERT INTO products (product_id, product_code, product_name, manufacturer_id, tenant_id, customer_id, model_name, amperage_ah, type, source_system, external_id) VALUES
 -- manufacturer_id = KIRA(원청·팩 제조사). 우리가 만드는 팩이므로 제조사는 KIRA. (이전 시드: 한양셀/우진배터리로 잘못 지정)
-('d1111111-0000-4000-8000-000000000001', 'BMW-IX3-NCM811-108', 'BMW iX3 Cylindrical NCM811 108Ah', 'a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b1', 'iX3 50',  108.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-IX3'),
-('d2222222-0000-4000-8000-000000000002', 'BMW-I4-NCM-81',      'BMW i4 Prismatic NCM 81Ah',        'a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b1', 'i4',       81.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-I4'),
-('d3333333-0000-4000-8000-000000000003', 'MB-GLC-NCM-94',      'Mercedes GLC EV Prismatic NCM 94Ah','a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b2', 'GLC EV',   94.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-GLC'),
-('d4444444-0000-4000-8000-000000000004', 'MB-EQS-NCM-118',     'Mercedes EQS Prismatic NCM 118Ah', 'a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b2', 'EQS',     118.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-EQS');
+-- product_name/code: 실제 셀 제조사 관례대로 자사 브랜드(KIRA PRiMX)+사양(폼팩터·화학조성·용량). OEM 차종은 제품명에 박지 않고
+-- customer_id(고객사)와 model_name(납품 차종)으로 분리 — (제품 × 고객사 × 단위기간) 그룹핑·검색·맵핑을 위해.
+('d1111111-0000-4000-8000-000000000001', 'KE-CYL-NCM811-108', 'KIRA PRiMX Cylindrical NCM811 108Ah', 'a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b1', 'iX3 50',  108.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-IX3'),
+('d2222222-0000-4000-8000-000000000002', 'KE-PRI-NCM-081',    'KIRA PRiMX Prismatic NCM 81Ah',       'a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b1', 'i4',       81.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-I4'),
+('d3333333-0000-4000-8000-000000000003', 'KE-PRI-NCM-094',    'KIRA PRiMX Prismatic NCM 94Ah',       'a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b2', 'GLC EV',   94.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-GLC'),
+('d4444444-0000-4000-8000-000000000004', 'KE-PRI-NCM-118',    'KIRA PRiMX Prismatic NCM 118Ah',      'a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'c0000000-0000-4000-8000-0000000000b2', 'EQS',     118.00, 'battery_pack', 'ERP_PLM', 'ERP-PROD-EQS');
 
 -- BOM 버전: ③ GLC만 기간별 2 Lot(2024 정상 / 2025 신장 위반), 나머지 단일
 INSERT INTO bom_versions (bom_version_id, product_id, version_number, production_from, production_to, status, source_system, external_id) VALUES
