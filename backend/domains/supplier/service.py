@@ -239,6 +239,65 @@ _CTI_ATTR_BY_TYPE = {
     "miner": "miner_detail",
 }
 
+# 국가명 → ISO 3166-1 alpha-2. suppliers.country 는 VARCHAR(2)라, 입력 경로(AI 파싱
+# 배선·자료제출·회원가입)가 '대한민국'·'China'·'대한민국 (KR)' 같은 자유 표기를 보내면
+# 영속화 직전에 코드로 정규화한다(_normalize_country_to_iso2). 국가 추가는 여기 한 줄.
+_COUNTRY_NAME_TO_ISO2 = {
+    "대한민국": "KR", "한국": "KR", "southkorea": "KR", "korea": "KR", "republicofkorea": "KR",
+    "중국": "CN", "china": "CN", "prchina": "CN", "peoplesrepublicofchina": "CN",
+    "미국": "US", "usa": "US", "us": "US", "unitedstates": "US",
+    "unitedstatesofamerica": "US", "america": "US",
+    "일본": "JP", "japan": "JP",
+    "호주": "AU", "australia": "AU",
+    "칠레": "CL", "chile": "CL",
+    "콩고민주공화국": "CD", "콩고민주": "CD", "콩고": "CD",
+    "drc": "CD", "democraticrepublicofthecongo": "CD", "congo": "CD",
+    "인도네시아": "ID", "indonesia": "ID",
+    "필리핀": "PH", "philippines": "PH",
+    "베트남": "VN", "vietnam": "VN",
+    "캐나다": "CA", "canada": "CA",
+    "아르헨티나": "AR", "argentina": "AR",
+    "볼리비아": "BO", "bolivia": "BO",
+    "페루": "PE", "peru": "PE",
+    "독일": "DE", "germany": "DE", "deutschland": "DE",
+    "프랑스": "FR", "france": "FR",
+    "영국": "GB", "uk": "GB", "unitedkingdom": "GB", "britain": "GB",
+    "폴란드": "PL", "poland": "PL",
+    "핀란드": "FI", "finland": "FI",
+    "스웨덴": "SE", "sweden": "SE",
+    "노르웨이": "NO", "norway": "NO",
+    "모로코": "MA", "morocco": "MA",
+    "남아프리카공화국": "ZA", "남아공": "ZA", "southafrica": "ZA",
+    "짐바브웨": "ZW", "zimbabwe": "ZW",
+    "브라질": "BR", "brazil": "BR",
+    "멕시코": "MX", "mexico": "MX",
+    "인도": "IN", "india": "IN",
+    "대만": "TW", "taiwan": "TW",
+}
+_KNOWN_ISO2 = set(_COUNTRY_NAME_TO_ISO2.values())
+
+
+def _normalize_country_to_iso2(value: Optional[str]) -> Optional[str]:
+    """국가 표기 → ISO 3166-1 alpha-2. 코드면 그대로(대문자), '대한민국 (KR)'면 괄호 코드
+    우선, 한/영 국가명이면 매핑. 해석 불가하면 None."""
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    # 괄호 안 alpha-2 우선: "대한민국 (KR)" → KR
+    start, end = raw.find("("), raw.find(")")
+    if start != -1 and end == start + 3:
+        code = raw[start + 1:end].upper()
+        if code.isalpha() and code in _KNOWN_ISO2:
+            return code
+    # 입력 자체가 alpha-2 코드
+    if len(raw) == 2 and raw.isalpha() and raw.upper() in _KNOWN_ISO2:
+        return raw.upper()
+    # 이름 매핑(소문자·공백/구두점 제거)
+    key = "".join(ch for ch in raw.lower() if ch not in " \t.()")
+    return _COUNTRY_NAME_TO_ISO2.get(key)
+
 
 async def update_supplier_detail(
     db: AsyncSession, supplier_id: UUID, tenant_id: Optional[UUID], fields: dict
@@ -261,6 +320,14 @@ async def update_supplier_detail(
     prev_doc_urls = {col: getattr(supplier, col, None) for col in doc_url_kinds}
     # 입력 양식 영속화 — 테이블별로 분배(보낸 필드만).
     fields = dict(fields)
+    # 국가 정규화 — suppliers.country 는 VARCHAR(2)(alpha-2). 자유 표기('대한민국' 등)를
+    # 코드로 변환. 해석 불가하면 country를 빼서(=쓰지 않음) 잘못된 값으로 덮어쓰지 않는다.
+    if "country" in fields:
+        iso = _normalize_country_to_iso2(fields.get("country"))
+        if iso:
+            fields["country"] = iso
+        else:
+            fields.pop("country")
     manuf = {k: fields.pop(k) for k in ("carbon_intensity", "energy_source") if k in fields}
     self_risk = fields.pop("self_reported_risk_level", None)
     if fields:                         # 나머지는 suppliers 컬럼(core_minerals 포함)
