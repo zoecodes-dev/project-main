@@ -545,6 +545,7 @@ class MasterFormCompany(BaseModel):
     country: Optional[str] = None  # 소재 국가(ISO 3166-1 alpha-2)
     business_reg_doc_url: Optional[str] = None  # 사업자등록증 업로드 URL
     environmental_report_url: Optional[str] = None  # 환경성적서 업로드 URL
+    self_assessment_doc_url: Optional[str] = None  # 실사 자가진단 보고서 업로드 URL
     established_year: Optional[int] = None
     employee_count: Optional[int] = None
 
