@@ -75,7 +75,7 @@ async def _db_checks() -> None:
                 await db.rollback()  # 트랜잭션 복구 — 다음 쿼리가 연쇄 abort되지 않게
                 fail(f"{t}: {type(e).__name__}: {str(e).splitlines()[0]}")
 
-        # 규제 임베딩 적재 상태 — RAG(search_regulations) 동작 가능 여부
+        # 규제 임베딩 적재 상태 — 배선(부팅 자동 시드)이 동작하면 indexed:10
         try:
             rows = (await db.execute(text(
                 "SELECT embedding_status, COUNT(*) FROM regulations GROUP BY embedding_status"
