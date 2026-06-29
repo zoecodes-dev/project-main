@@ -460,11 +460,16 @@ async def get_supplied_items(db: AsyncSession, supplier_id: UUID) -> List[dict]:
     공급 품목 — 이 협력사(child_supplier_id)가 supply_chain_map에서 공급하는 부품(parts) distinct.
     (supply_chain_map·parts는 타 도메인 테이블이지만 읽기 전용 SELECT만; 모델 import 없음.)
     """
+    # [공급원 변경 자진신고 배선] bom_version_id 동봉 — 협력사 포털이 declare_source_change
+    # 실호출에 쓸 (bom_version, part) 컨텍스트를 여기서 제공한다. 한 부품이 여러 BOM 버전에
+    # 걸치면 (part, bom_version)별로 행이 분리된다. version_number는 드롭다운 표시용.
     stmt = text(
         """
-        SELECT DISTINCT p.part_id, p.part_code, p.part_name, p.tier_level, p.material_type
+        SELECT DISTINCT p.part_id, p.part_code, p.part_name, p.tier_level, p.material_type,
+               scm.bom_version_id, bv.version_number AS bom_version_number
         FROM supply_chain_map scm
         JOIN parts p ON p.part_id = scm.part_id
+        LEFT JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
         WHERE scm.child_supplier_id = :sid
         ORDER BY p.tier_level NULLS LAST, p.part_code
         """
