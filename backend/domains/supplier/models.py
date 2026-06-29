@@ -775,6 +775,9 @@ class SuppliedItemDTO(BaseModel):
     part_name: Optional[str] = None
     tier_level: Optional[int] = None
     material_type: Optional[str] = None
+    # [공급원 변경 자진신고] declare_source_change 실호출용 BOM 컨텍스트.
+    bom_version_id: Optional[uuid.UUID] = None
+    bom_version_number: Optional[str] = None
     model_config = {"from_attributes": True}
 
 

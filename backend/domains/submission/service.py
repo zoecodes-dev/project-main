@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.queue import enqueue, NOTIFICATION_QUEUE
+from backend.infrastructure import storage  # presigned URL(원본 문서 PDF 뷰어)
 from backend.infrastructure.trace import trace_node, trace_tool
 
 logger = logging.getLogger(__name__)
@@ -28,21 +29,37 @@ from backend.domains.submission.repository import (
 async def list_ai_extractions(db: AsyncSession) -> list[dict]:
     """[REVERT-NON-SUPPLIER] HITL 협력사 승인 — AI 추출(parsed_fields+confidence) + 협력사·요청 정보."""
     rows = await list_extractions_for_review(db)
-    return [{
-        "request_id": str(r["request_id"]),
-        "supplier_id": str(r["target_supplier_id"]) if r.get("target_supplier_id") else None,
-        "supplier_name": r.get("company_name"),
-        "requested_data_type": r.get("requested_data_type"),
-        "submission_status": r.get("submission_status"),
-        "parsed_fields": r.get("parsed_fields") or {},
-        "confidence_map": r.get("confidence_map") or {},
-        "unparsed_fields": r.get("unparsed_fields") or [],
-        # hitl_reviews 연결 — 승인/반려가 백엔드 HITL 큐도 갱신할 수 있게.
-        "batch_id": str(r["batch_id"]) if r.get("batch_id") else None,
-        "hitl_review_id": str(r["hitl_review_id"]) if r.get("hitl_review_id") else None,
-        "hitl_status": r.get("hitl_status"),
-        "hitl_reason": r.get("hitl_reason"),
-    } for r in rows]
+    out: list[dict] = []
+    for r in rows:
+        # 원본 문서 PDF 뷰어용 임시 다운로드 URL. doc_s3_key(submission_documents.file_url=버킷 키)를
+        # presigned 로 변환. 로컬은 S3 자격증명이 없어 서명이 실패할 수 있으므로 None 폴백
+        # (프론트는 URL 없으면 플레이스홀더로 처리). storage 는 공유 인프라(도메인 격리 무관).
+        s3_key = r.get("doc_s3_key")
+        document_url = None
+        if s3_key:
+            try:
+                document_url = await storage.generate_presigned_url(s3_key)
+            except Exception as exc:  # NoCredentials 등 — 로컬/미구성
+                logger.warning("presign 실패(doc_s3_key=%s): %s", s3_key, exc)
+        out.append({
+            "request_id": str(r["request_id"]),
+            "supplier_id": str(r["target_supplier_id"]) if r.get("target_supplier_id") else None,
+            "supplier_name": r.get("company_name"),
+            "requested_data_type": r.get("requested_data_type"),
+            "submission_status": r.get("submission_status"),
+            "parsed_fields": r.get("parsed_fields") or {},
+            "confidence_map": r.get("confidence_map") or {},
+            "unparsed_fields": r.get("unparsed_fields") or [],
+            # 원본 문서(PDF 뷰어) — 임시 다운로드 URL + 파일명. 없으면 None.
+            "document_url": document_url,
+            "document_file_name": r.get("doc_file_name"),
+            # hitl_reviews 연결 — 승인/반려가 백엔드 HITL 큐도 갱신할 수 있게.
+            "batch_id": str(r["batch_id"]) if r.get("batch_id") else None,
+            "hitl_review_id": str(r["hitl_review_id"]) if r.get("hitl_review_id") else None,
+            "hitl_status": r.get("hitl_status"),
+            "hitl_reason": r.get("hitl_reason"),
+        })
+    return out
 from backend.domains.submission.state_machine import transition_submission
 from backend.domains.submission.models import DataCompletenessStatus, SubmissionStatusHistory
 from backend.events.types import (

@@ -820,9 +820,19 @@ CREATE TABLE submission_documents (
     file_name     VARCHAR(255),
     file_type     VARCHAR(30)
         CONSTRAINT chk_doc_file_type CHECK (file_type IN ('pdf', 'xlsx', 'csv', 'image', 'docx', 'other')),
-    -- 업로드 서류의 업무상 분류 (원산지/공장/FEOC 증빙/인증서/기타)
+    -- 업로드 서류의 업무상 분류. AI 파싱 전 doc_type 판별 → 유형별 파싱 프롬프트 분기 기준.
+    --   공통: business_registration / origin_certificate / dd_audit_report / feoc_ownership_declaration
+    --   manufacturer: product_spec / manufacturing_process_doc / carbon_footprint_declaration / recycled_content_report
+    --   miner: mining_permit / mineral_production_report / safety_health_report / environmental_impact_assessment
+    --   smelter: rmap_certificate / cmrt_declaration / cbam_declaration / uflpa_documentation / smelter_identification
     doc_category  VARCHAR(50)
-        CONSTRAINT chk_doc_category CHECK (doc_category IN ('origin_cert', 'factory_doc', 'feoc_proof', 'certification', 'audit_report', 'carbon_data', 'other')),
+        CONSTRAINT chk_doc_category CHECK (doc_category IN (
+            'business_registration', 'origin_certificate', 'dd_audit_report', 'feoc_ownership_declaration',
+            'product_spec', 'manufacturing_process_doc', 'carbon_footprint_declaration', 'recycled_content_report',
+            'mining_permit', 'mineral_production_report', 'safety_health_report', 'environmental_impact_assessment',
+            'rmap_certificate', 'cmrt_declaration', 'cbam_declaration', 'uflpa_documentation', 'smelter_identification',
+            'other'
+        )),
     file_hash     VARCHAR(64), -- SHA-256, document_integrity_rule(서류-폼 불일치) 대조용
     uploaded_by   UUID REFERENCES users(user_id),
     uploaded_at   TIMESTAMPTZ DEFAULT now()
