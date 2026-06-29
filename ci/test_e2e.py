@@ -20,7 +20,7 @@ import os
 import httpx
 import pytest
 
-from backend.infrastructure.security import create_access_token
+from BACK.backend.infrastructure.security import create_access_token
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost")
 TIMEOUT = 15.0
