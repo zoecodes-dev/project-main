@@ -19,6 +19,7 @@ from backend.domains.submission.models import (
     DataCompletenessStatus,
     SubmissionStatusHistory,
     DocumentExtractionResult,
+    SubmissionDocument,
     ProcessedJob,
 )
 # suppliers는 supplier 도메인 소유 테이블이라 ORM 모델을 import(약속 6번 위반)하지 않고,
@@ -106,6 +107,49 @@ async def get_timeline_by_supplier(db: AsyncSession, supplier_id: uuid.UUID) -> 
     
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+async def get_submission_document_by_file_url(
+    db: AsyncSession, file_url: str
+) -> Optional[SubmissionDocument]:
+    """
+    [SELECT] file_url(=S3 키)로 기존 문서 행을 찾는다. 멱등성 가드용 —
+    같은 S3 키가 이미 등록돼 있으면 중복 행/중복 파싱을 막는다.
+    """
+    stmt = select(SubmissionDocument).where(
+        SubmissionDocument.file_url == file_url
+    ).limit(1)
+    return (await db.execute(stmt)).scalars().first()
+
+
+async def create_submission_document(
+    db: AsyncSession,
+    *,
+    request_id: uuid.UUID,
+    supplier_id: uuid.UUID,
+    file_url: str,
+    file_name: Optional[str] = None,
+    file_type: Optional[str] = None,
+    doc_category: Optional[str] = None,
+    uploaded_by: Optional[uuid.UUID] = None,
+) -> SubmissionDocument:
+    """
+    [INSERT] 파싱 대상 원본 문서 메타를 submission_documents에 적재한다.
+    file_url엔 S3 키를 저장한다(data_gateway가 이 키로 바이트를 읽는다).
+    document_id/uploaded_at은 모델 server_default에 맡긴다. commit은 호출부 책임.
+    """
+    doc = SubmissionDocument(
+        request_id=request_id,
+        supplier_id=supplier_id,
+        file_url=file_url,
+        file_name=file_name,
+        file_type=file_type,
+        doc_category=doc_category,
+        uploaded_by=uploaded_by,
+    )
+    db.add(doc)
+    await db.flush()
+    return doc
+
 
 async def create_extraction_result(
     db: AsyncSession,

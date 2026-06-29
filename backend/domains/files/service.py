@@ -71,6 +71,9 @@ async def upload_file(
         "size_bytes": obj.size_bytes,
         "content_type": obj.content_type,
         "url": url,
+        # s3_key: 버킷 내 영구 키(presigned url과 달리 만료 안 됨). 호출부가 이 키를
+        # *_doc_url 같은 컬럼에 저장해두면 파싱(data_gateway)이 그대로 읽어 쓸 수 있다.
+        "s3_key": key,
     }
 
 

@@ -27,7 +27,11 @@ from backend.domains.supplier.models import (
     SupplierOnboarding,
     SupplierRiskProfile,
 )
-from backend.events.types import RiskProfileUpdatedEvent, SupplierInvitedEvent
+from backend.events.types import (
+    RiskProfileUpdatedEvent,
+    SupplierInvitedEvent,
+    SupplierDocumentUploadedEvent,
+)
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
 # 마스터폼 섹션 4~6 write는 E가 제공(submission/masterform.py). B의 오케스트레이터가
@@ -303,6 +307,15 @@ async def update_supplier_detail(
     supplier = await repository.get_supplier_by_id(db, supplier_id, tenant_id)
     if supplier is None:
         return None
+    # 필요문서 URL 컬럼의 '커밋 전' 값을 미리 떠둔다 — 새 S3 키로 바뀐 것만
+    # 커밋 후 SupplierDocumentUploaded로 발행해 파싱 파이프라인을 태우기 위함.
+    # (필드명 → 이벤트 doc_kind 코드)
+    doc_url_kinds = {
+        "business_reg_doc_url": "business_reg",
+        "environmental_report_url": "environmental_report",
+        "self_assessment_doc_url": "self_assessment",
+    }
+    prev_doc_urls = {col: getattr(supplier, col, None) for col in doc_url_kinds}
     # 입력 양식 영속화 — 테이블별로 분배(보낸 필드만).
     fields = dict(fields)
     manuf = {k: fields.pop(k) for k in ("carbon_intensity", "energy_source") if k in fields}
@@ -314,6 +327,22 @@ async def update_supplier_detail(
     if self_risk is not None:          # 실사 자가진단 → risk_profiles
         await repository.set_self_reported_risk_level(db, supplier_id, self_risk)
     await db.commit()
+
+    # ── 커밋 성공 후 발행 (PROJECT_CORE 5-2) ──────────────────────────────
+    # 새로 들어온(이전 값과 다른) 비어있지 않은 필요문서 S3 키만 발행 → 중복 파싱 방지.
+    for col, kind in doc_url_kinds.items():
+        new_val = fields.get(col)
+        if new_val and new_val != prev_doc_urls.get(col):
+            await publish(
+                "SupplierDocumentUploaded",
+                dataclasses.asdict(SupplierDocumentUploadedEvent(
+                    supplier_id=supplier_id,
+                    s3_key=new_val,
+                    file_name=new_val.rsplit("/", 1)[-1] if "/" in new_val else new_val,
+                    doc_kind=kind,
+                )),
+            )
+
     return await get_supplier_detail(db, supplier_id, tenant_id)
 
 
