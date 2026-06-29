@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 
 # doc_kind → submission_documents.doc_category (CHECK 제약 허용값에 매핑)
 _DOC_CATEGORY = {
-    "business_reg": "certification",
-    "environmental_report": "carbon_data",
-    "self_assessment": "audit_report",
+    "business_reg": "business_registration",
+    "environmental_report": "environmental_impact_assessment",
+    "self_assessment": "dd_audit_report",
 }
 
 # 확장자 → file_type (CHECK 제약: pdf/xlsx/csv/image/docx/other)
