@@ -824,13 +824,13 @@ CREATE TABLE submission_documents (
     --   공통: business_registration / origin_certificate / dd_audit_report / feoc_ownership_declaration
     --   manufacturer: product_spec / manufacturing_process_doc / carbon_footprint_declaration / recycled_content_report
     --   miner: mining_permit / mineral_production_report / safety_health_report / environmental_impact_assessment
-    --   smelter: rmap_certificate / cmrt_declaration / cbam_declaration / uflpa_documentation
+    --   smelter: rmap_certificate / cmrt_declaration / cbam_declaration / uflpa_documentation / smelter_identification
     doc_category  VARCHAR(50)
         CONSTRAINT chk_doc_category CHECK (doc_category IN (
             'business_registration', 'origin_certificate', 'dd_audit_report', 'feoc_ownership_declaration',
             'product_spec', 'manufacturing_process_doc', 'carbon_footprint_declaration', 'recycled_content_report',
             'mining_permit', 'mineral_production_report', 'safety_health_report', 'environmental_impact_assessment',
-            'rmap_certificate', 'cmrt_declaration', 'cbam_declaration', 'uflpa_documentation',
+            'rmap_certificate', 'cmrt_declaration', 'cbam_declaration', 'uflpa_documentation', 'smelter_identification',
             'other'
         )),
     file_hash     VARCHAR(64), -- SHA-256, document_integrity_rule(서류-폼 불일치) 대조용
