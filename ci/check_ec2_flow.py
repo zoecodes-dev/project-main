@@ -41,7 +41,7 @@ def check_identity() -> None:
 def check_embedding() -> None:
     section("2. Bedrock 임베딩 (Cohere Embed)")
     try:
-        from backend.llm.embedding_factory import embed_query
+        from BACK.backend.llm.embedding_factory import embed_query
         vec = embed_query("UFLPA 강제노동 수입금지 규정")
         ok(f"임베딩 차원 = {len(vec)} (schema VECTOR(1536)와 일치해야 함)")
     except Exception as e:
@@ -51,7 +51,7 @@ def check_embedding() -> None:
 def check_llm() -> None:
     section("3. Bedrock LLM (Claude Sonnet)")
     try:
-        from backend.llm.bedrock_factory import get_llm, Model
+        from BACK.backend.llm.bedrock_factory import get_llm, Model
         resp = get_llm(Model.SONNET_46, max_tokens=64).invoke("Reply with exactly: OK")
         ok(f"응답 = {str(resp.content)[:80]!r}")
     except Exception as e:
@@ -60,7 +60,7 @@ def check_llm() -> None:
 
 async def _db_checks() -> None:
     from sqlalchemy import text
-    from backend.infrastructure.database import AsyncSessionLocal
+    from BACK.backend.infrastructure.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
         for t in (

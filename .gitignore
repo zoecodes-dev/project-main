@@ -1,3 +1,6 @@
+# 로컬 폴더 구조 (CI 스크립트용, git 추적 제외)
+BACK/
+
 # Environments
 venv/
 env/
