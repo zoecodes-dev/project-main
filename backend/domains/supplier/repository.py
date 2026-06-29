@@ -17,22 +17,16 @@ from backend.domains.supplier.models import (
     Supplier,
     SupplierMinerDetail,
     SupplierRiskProfile,
-    SupplierCertification,
-    SupplierHumanRightsIssue,
-    SupplierIndustrialAccident,
     SupplierAuditRecord,
     SupplierOnboarding,
     SupplierFactory,
     SupplierContact,
     SupplierManufacturerDetail,
-    SupplierRecyclerDetail,
     FactoryCarbonDeclaration,
-    TrainingRecord,
     MasterFormCompany,
     MasterFormFactory,
     MasterFormContact,
     MasterFormManufacturing,
-    MasterFormRecycling,
 )
 
 async def create_supplier(db: AsyncSession, supplier_data: dict) -> Supplier:
@@ -67,8 +61,6 @@ async def get_supplier_by_id(
         .where(Supplier.supplier_id == supplier_id)
         .options(
             selectinload(Supplier.manufacturer_detail),
-            selectinload(Supplier.recycler_detail),
-            selectinload(Supplier.trader_detail),
             selectinload(Supplier.miner_detail),
             selectinload(Supplier.factories),
         )
@@ -257,67 +249,14 @@ async def update_supplier_risk_level(
 # ============================================================
 # BE-3: 7탭 모달 조회 (기존 테이블 SELECT 전용 · 커밋/변경 없음)
 # ============================================================
-async def get_certifications(
-    db: AsyncSession, supplier_id: UUID
-) -> List[SupplierCertification]:
-    """ESG 탭 — 일반 인증서(ISO 14001 등) 목록. 발급일 최신순."""
-    stmt = (
-        select(SupplierCertification)
-        .where(SupplierCertification.supplier_id == supplier_id)
-        .order_by(SupplierCertification.issued_at.desc().nullslast())
-    )
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
-
-async def get_human_rights_issues(
-    db: AsyncSession, supplier_id: UUID
-) -> List[SupplierHumanRightsIssue]:
-    """ESG 탭 — 인권 이슈 목록. 탐지 시각 최신순."""
-    stmt = (
-        select(SupplierHumanRightsIssue)
-        .where(SupplierHumanRightsIssue.supplier_id == supplier_id)
-        .order_by(SupplierHumanRightsIssue.detected_at.desc().nullslast())
-    )
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
-
-async def get_industrial_accidents(
-    db: AsyncSession, supplier_id: UUID
-) -> List[SupplierIndustrialAccident]:
-    """ESG 탭 — 산업재해 목록. 발생일 최신순."""
-    stmt = (
-        select(SupplierIndustrialAccident)
-        .where(SupplierIndustrialAccident.supplier_id == supplier_id)
-        .order_by(SupplierIndustrialAccident.accident_date.desc())
-    )
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
-
 async def get_audit_records(
     db: AsyncSession, supplier_id: UUID
 ) -> List[SupplierAuditRecord]:
-    """ESG·Reliability 탭 — 실사(Due Diligence) 기록. 실사일 최신순."""
+    """Reliability 탭 — 실사(Due Diligence) 기록. 실사일 최신순."""
     stmt = (
         select(SupplierAuditRecord)
         .where(SupplierAuditRecord.supplier_id == supplier_id)
         .order_by(SupplierAuditRecord.audit_date.desc())
-    )
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
-
-async def get_training_records(
-    db: AsyncSession, supplier_id: UUID
-) -> List[TrainingRecord]:
-    """Training 탭 — 교육 이수 기록 + 교육 자료 메타(selectinload). 마감일 최신순."""
-    stmt = (
-        select(TrainingRecord)
-        .where(TrainingRecord.supplier_id == supplier_id)
-        .options(selectinload(TrainingRecord.material))
-        .order_by(TrainingRecord.due_date.desc())
     )
     result = await db.execute(stmt)
     return result.scalars().all()
@@ -421,21 +360,6 @@ async def get_completeness(db: AsyncSession, supplier_id: UUID) -> Optional[dict
     elif mf is None:
         data["missing_fields"] = []
     return data
-
-
-async def get_origin_certificates(db: AsyncSession, supplier_id: UUID) -> List[dict]:
-    """원산지/규제 증빙 — origin_certificates 목록. 만료 임박 순(expires_at)."""
-    stmt = text(
-        """
-        SELECT cert_id, cert_type, cert_number, issuing_authority,
-               issued_at, expires_at, origin_country, status, document_url
-        FROM origin_certificates
-        WHERE supplier_id = :sid
-        ORDER BY expires_at ASC NULLS LAST
-        """
-    )
-    rows = (await db.execute(stmt, {"sid": str(supplier_id)})).mappings().all()
-    return [dict(r) for r in rows]
 
 
 async def get_carbon_declarations(db: AsyncSession, supplier_id: UUID) -> List[dict]:
@@ -606,35 +530,6 @@ async def write_master_form_manufacturing(
             source=decl.source,
         ))
     await db.flush()
-
-
-# ── 섹션 2: 재활용 (supplier_recycler_details replace) ─────────────────────
-async def write_master_form_recycling(
-    db: AsyncSession, supplier_id: UUID, data: MasterFormRecycling
-) -> None:
-    """
-    섹션 2 — supplier_recycler_details(1-per-supplier, replace).
-    recycled_materials는 RecycledMaterialsSchema(B·C 공유 계약)를 dict로 직렬화해 저장.
-
-    recycling_efficiency(소재별 회수율 {"Li":80,"Co":90,...})는 D팀 Wave 0 DDL이
-    develop에 머지되어(supplier_recycler_details 컬럼) 함께 저장한다.
-    recycled_content_ratio(완성품 내 재활용 패널 비율)와는 별개 축이다.
-    """
-    await db.execute(
-        delete(SupplierRecyclerDetail).where(SupplierRecyclerDetail.supplier_id == supplier_id)
-    )
-    recycled = (
-        data.recycled_materials.model_dump(exclude_none=True)
-        if data.recycled_materials is not None else None
-    )
-    db.add(SupplierRecyclerDetail(
-        supplier_id=supplier_id,
-        recycled_materials=recycled,
-        recycling_certification=data.recycling_certification,
-        input_source=data.input_source,
-        recycled_content_ratio=data.recycled_content_ratio,
-        recycling_efficiency=data.recycling_efficiency,  # 소재별 회수율(D DDL 머지됨)
-    ))
 
 
 async def upsert_miner_details(

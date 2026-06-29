@@ -34,18 +34,10 @@ from backend.events.types import (
 )
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
-# 마스터폼 섹션 4~6 write는 E가 제공(submission/masterform.py). B의 오케스트레이터가
-# '동일 db 세션'으로 호출해 단일 트랜잭션 atomic 묶음으로 commit한다(§4). 도메인 코드를
-# 대신 구현하는 게 아니라 제공된 계약 함수를 호출만 한다.
-from backend.domains.submission import masterform as e_masterform
 # AP: 추출결과 read는 E 제공(submission repository), 마스터폼 prefill 변환은 B(supplier)
 #   masterform_prefill. 둘 다 무거운 LLM 스택을 끌어오지 않는 가벼운 호출이다.
 from backend.domains.submission import repository as submission_repo
 from backend.domains.supplier import masterform_prefill
-# NOTE: 섹션 3 원산지 증명서 write(C: regulation.save_origin_certificates)는 섹션 3
-#   블록 안에서 '지연(lazy) import'한다 — regulation.repository가 LLM 임베딩 스택
-#   (langchain_aws)을 끌어오므로, 모듈 로드 시점에 가져오면 supplier.service import가
-#   그 무거운 스택에 묶인다. 실제 호출 시점(런타임)에만 가져와 import를 가볍게 유지한다.
 
 # ── 정책 상수 ───────────────────────────────────────────────
 # 협력사 온보딩 SLA. PROJECT_CORE: 14일 미응답 → Reminder, 21일 → Escalation.
@@ -142,10 +134,6 @@ async def submit_master_form(
     섹션 → 저장 책임:
       0 회사·공장·PIC      B (repository.write_master_form_*)
       1 탄소발자국         B (manufacturer_details + factory_carbon_declarations)
-      2 재활용             B (recycler_details · recycling_efficiency 포함)
-      3 원산지·GPS         D GPS(miner_details) + C 원산지 증명서(save_origin_certificates, 지연 import)
-      5 인권·중대·교육     E (e_masterform.write_supplier_social)
-      6 EoL·인증서         E (e_masterform.write_supplier_certifications)
 
     반환: 저장된 섹션 키 목록을 담은 dict. 없는 supplier_id면 None(→ router 404).
     """
@@ -173,49 +161,6 @@ async def submit_master_form(
                 db, supplier_id, factory_ids, form.manufacturing
             )
             sections_saved.append("manufacturing")
-
-        # ── 섹션 2: 재활용 (B) ────────────────────────────────────────────────
-        if form.recycling is not None:
-            await repository.write_master_form_recycling(db, supplier_id, form.recycling)
-            sections_saved.append("recycling")
-
-        # ── 섹션 3: 원산지·GPS ────────────────────────────────────────────────
-        #   GPS(supplier_miner_details)      = D 제공(repository.upsert_miner_details).
-        #   원산지 증명서(origin_certificates) = C 제공(regulation.save_origin_certificates).
-        #   PostGIS 좌표 변환(lng/lat swap)은 upsert_miner_details 내부가 담당한다.
-        if form.origin is not None:
-            origin = form.origin
-            coords = origin.mine_coordinates
-            await repository.upsert_miner_details(
-                db,
-                supplier_id,
-                mine_name=origin.mine_name,
-                mining_method=origin.mining_method,
-                extraction_volume=origin.extraction_volume,
-                lat=coords.latitude if coords else None,
-                lng=coords.longitude if coords else None,
-                active_period_from=origin.active_period_from,
-                active_period_to=origin.active_period_to,
-            )
-            sections_saved.append("origin")
-            # 원산지 증명서(C 제공) — 같은 db 세션으로 호출(commit은 이 service가 일괄).
-            # 지연 import: regulation.repository가 LLM 임베딩 스택을 끌어오므로 호출 시점에만.
-            if origin.origin_certificates:
-                from backend.domains.regulation.service import save_origin_certificates
-                await save_origin_certificates(
-                    db=db,
-                    supplier_id=str(supplier_id),
-                    certificates=[c.model_dump() for c in origin.origin_certificates],
-                )
-                sections_saved.append("origin_certificates")
-
-        # ── 섹션 5~6: E 제공 write 함수 호출 (동일 트랜잭션) ──────────────────
-        if form.social is not None:
-            await e_masterform.write_supplier_social(db, supplier_id, factory_ids, form.social)
-            sections_saved.append("social")
-        if form.certifications is not None:
-            await e_masterform.write_supplier_certifications(db, supplier_id, form.certifications)
-            sections_saved.append("certifications")
 
         # ── 규제: 실사 자가진단 결과 → supplier_risk_profiles.self_reported_risk_level ──
         if form.self_reported_risk_level is not None:
@@ -291,8 +236,6 @@ _OEM_SUPPLIER_ID = UUID("a0000000-0000-4000-8000-000000000000")
 # provider_type → 채워야 할 CTI relationship 속성명 매핑
 _CTI_ATTR_BY_TYPE = {
     "manufacturer": "manufacturer_detail",
-    "recycler": "recycler_detail",
-    "trader": "trader_detail",
     "miner": "miner_detail",
 }
 
@@ -456,29 +399,6 @@ async def get_risk_profile(supplier_id: UUID, db: AsyncSession) -> SupplierRiskP
 # BE-3: 7탭 모달 조회 (기존 테이블 SELECT 전용)
 #   존재하지 않는 협력사면 None을 반환 → router가 404로 매핑.
 # ============================================================
-async def get_esg(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
-    """ESG 탭 — 인증서(E) + 인권 이슈/산업재해(S) + 실사 기록(G)을 묶어 반환."""
-    if await repository.get_supplier_by_id(db, supplier_id) is None:
-        return None
-    return {
-        "supplier_id": supplier_id,
-        "certifications": await repository.get_certifications(db, supplier_id),
-        "human_rights_issues": await repository.get_human_rights_issues(db, supplier_id),
-        "industrial_accidents": await repository.get_industrial_accidents(db, supplier_id),
-        "audit_records": await repository.get_audit_records(db, supplier_id),
-    }
-
-
-async def get_training(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
-    """Training 탭 — 교육 이수 기록(교육 자료 메타 포함)."""
-    if await repository.get_supplier_by_id(db, supplier_id) is None:
-        return None
-    return {
-        "supplier_id": supplier_id,
-        "records": await repository.get_training_records(db, supplier_id),
-    }
-
-
 async def get_factories(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
     """사업장 탭 — 공장/광산 목록(좌표 lat/lng 포함)."""
     if await repository.get_supplier_by_id(db, supplier_id) is None:
@@ -514,16 +434,6 @@ async def get_completeness(db: AsyncSession, supplier_id: UUID) -> Optional[dict
             "last_updated_at": None,
         }
     return {"supplier_id": supplier_id, **comp}
-
-
-async def get_origin_certificates(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
-    """원산지/규제 증빙 — origin_certificates 목록."""
-    if await repository.get_supplier_by_id(db, supplier_id) is None:
-        return None
-    return {
-        "supplier_id": supplier_id,
-        "origin_certificates": await repository.get_origin_certificates(db, supplier_id),
-    }
 
 
 async def get_supplied_items(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:

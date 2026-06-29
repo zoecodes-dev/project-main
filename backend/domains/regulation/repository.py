@@ -16,10 +16,6 @@ backend/domains/regulation/repository.py  (담당: 팀원 C — 은지)
   search_by_embedding()  : pgvector 코사인 유사도 RAG 검색
                            (기존 compliance.py search_regulations에서 이관)
 
-  ── 쓰기 ──
-  write_origin_certificates() : 마스터폼 섹션 3 원산지 인증서 INSERT
-                                (B의 service가 atomic 트랜잭션에서 호출)
-
   ── [TODO: D 머지 후] ──
   get_required_fields()  : regulation_required_fields 테이블에서 조회
 
@@ -38,10 +34,8 @@ backend/domains/regulation/repository.py  (담당: 팀원 C — 은지)
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
-from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import select, text
@@ -206,12 +200,6 @@ async def search_by_embedding(
 # └──────────────────────────────────────────────────────────────┘
 
 _TEMP_REQUIRED_FIELDS: dict[str, list[dict[str, Any]]] = {
-    "EU_BATTERY": [
-        {"field_name": "recycled_content_ratio", "field_type": "number",
-         "is_mandatory": True, "provider_type_applicable": ["recycler", "manufacturer"]},
-        {"field_name": "recycled_materials", "field_type": "jsonb",
-         "is_mandatory": True, "provider_type_applicable": ["recycler"]},
-    ],
     "EU_BATTERY_ART7": [
         {"field_name": "carbon_intensity", "field_type": "number",
          "is_mandatory": True, "provider_type_applicable": ["manufacturer"]},
@@ -221,12 +209,8 @@ _TEMP_REQUIRED_FIELDS: dict[str, list[dict[str, Any]]] = {
     "EUDR": [
         {"field_name": "mine_coordinates", "field_type": "string",
          "is_mandatory": True, "provider_type_applicable": ["miner"]},
-        {"field_name": "origin_country", "field_type": "string",
-         "is_mandatory": True, "provider_type_applicable": ["miner", "trader"]},
     ],
     "UFLPA": [
-        {"field_name": "origin_country", "field_type": "string",
-         "is_mandatory": True, "provider_type_applicable": ["miner", "trader"]},
         {"field_name": "geo_risk_flags", "field_type": "jsonb",
          "is_mandatory": False, "provider_type_applicable": ["miner"]},
     ],
@@ -257,80 +241,6 @@ async def get_required_fields(
         )
 
     return fields
-
-
-# ============================================================
-# 4. 쓰기 — 마스터폼 섹션 3 원산지 인증서 INSERT
-#    B(은진)의 service가 atomic 트랜잭션에서 호출
-# ============================================================
-
-async def write_origin_certificates(
-    db: AsyncSession,
-    supplier_id: str,
-    certificates: list[dict[str, Any]],
-) -> list[str]:
-    """
-    마스터폼 섹션 3의 원산지 인증서 데이터를 origin_certificates 테이블에 삽입한다.
-
-    [중요 — flush만, commit 금지]
-      이 함수는 마스터폼의 단일 트랜잭션 내에서 호출된다.
-      B의 service가 모든 섹션 write 완료 후 commit() 일괄 수행.
-    """
-    created_ids: list[str] = []
-
-    for cert in certificates:
-        cert_id = str(uuid.uuid4())
-
-        await db.execute(
-            text("""
-                INSERT INTO origin_certificates
-                    (cert_id, supplier_id,
-                     cert_type, cert_number, issuing_authority,
-                     issued_at, expires_at,
-                     origin_country, covered_minerals,
-                     status, document_url,
-                     created_at, updated_at)
-                VALUES
-                    (:cert_id, :supplier_id::uuid,
-                     :cert_type, :cert_number, :issuing_authority,
-                     :issued_at, :expires_at,
-                     :origin_country, CAST(:covered_minerals AS jsonb),
-                     'valid', :document_url,
-                     :now, :now)
-            """),
-            {
-                "cert_id":            cert_id,
-                "supplier_id":        supplier_id,
-                "cert_type":          cert["cert_type"],
-                "cert_number":        cert.get("cert_number"),
-                "issuing_authority":  cert.get("issuing_authority"),
-                "issued_at":          cert.get("issued_at"),
-                "expires_at":         cert["expires_at"],
-                "origin_country":     cert.get("origin_country"),
-                "covered_minerals":   json.dumps(
-                    cert.get("covered_minerals"),
-                    ensure_ascii=False,
-                ) if cert.get("covered_minerals") else None,
-                "document_url":       cert.get("document_url"),
-                "now":                datetime.now(timezone.utc),
-            },
-        )
-
-        created_ids.append(cert_id)
-
-        logger.info(
-            "원산지 인증서 INSERT: cert_id=%s, supplier_id=%s, cert_type=%s",
-            cert_id, supplier_id, cert["cert_type"],
-        )
-
-    await db.flush()
-
-    logger.info(
-        "원산지 인증서 %d건 flush 완료 (supplier_id=%s). commit은 상위 service에서.",
-        len(created_ids), supplier_id,
-    )
-
-    return created_ids
 
 
 # ============================================================

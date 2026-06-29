@@ -22,7 +22,6 @@ backend/domains/regulation/service.py  (담당: 팀원 C — 은지)
   get_regulations_by_destination(db, dest)     → list[dict]
   get_required_fields(db, regulation_code)     → list[dict]
   search_regulations(db, query, code, top_k)   → list[dict]
-  save_origin_certificates(db, sid, certs)     → list[str]
 
   ── [신규 §2.3a / §7.1 — 공유 서비스] ──
   list_violations(db, tenant_id, supplier_id, limit)  → list[dict]
@@ -169,33 +168,6 @@ async def get_regulation_by_code(
     if reg is None:
         return None
     return _regulation_to_dict(reg)
-
-
-# ============================================================
-# 6. 마스터폼 섹션 3 — 원산지 인증서 저장
-# ============================================================
-
-async def save_origin_certificates(
-    db: AsyncSession,
-    supplier_id: str,
-    certificates: list[dict[str, Any]],
-) -> list[str]:
-    """
-    마스터폼 섹션 3 원산지 인증서를 origin_certificates 테이블에 저장한다.
-
-    [호출 구조]
-      B의 supplier/service.py (마스터폼 진입점)
-        → 이 함수 호출
-          → repository.write_origin_certificates() 위임
-      commit은 B의 service가 일괄 수행 (atomic 보장).
-    """
-    if not certificates:
-        logger.debug("save_origin_certificates: 저장할 인증서가 없습니다.")
-        return []
-
-    return await reg_repo.write_origin_certificates(
-        db, supplier_id, certificates,
-    )
 
 
 # ============================================================
