@@ -222,12 +222,15 @@ async def list_extractions_for_review(db: AsyncSession) -> list[dict]:
         SELECT e.request_id, e.parsed_fields, e.confidence_map, e.unparsed_fields,
                d.target_supplier_id, d.requested_data_type, d.submission_status, d.batch_id,
                s.company_name,
+               sd.file_url   AS doc_s3_key,
+               sd.file_name  AS doc_file_name,
                h.review_id  AS hitl_review_id,
                h.status     AS hitl_status,
                h.reason     AS hitl_reason
         FROM document_extraction_results e
         JOIN data_request_log d ON d.request_id = e.request_id
         JOIN suppliers s        ON s.supplier_id = d.target_supplier_id
+        LEFT JOIN submission_documents sd ON sd.document_id = e.document_id
         LEFT JOIN hitl_reviews h ON h.batch_id = d.batch_id
         ORDER BY e.created_at DESC
     """)
