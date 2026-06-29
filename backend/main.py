@@ -48,6 +48,10 @@ async def _register_subscriptions() -> None:
     await subscribe("SubmissionApproved", on_submission_approved)
     await subscribe("SubmissionCompleted", on_submission_approved)
 
+    # ── E: 협력사 필요문서 업로드 → 파싱 파이프라인 다리 ──────────────
+    from backend.handlers.supplier_document_ingest import on_supplier_document_uploaded
+    await subscribe("SupplierDocumentUploaded", on_supplier_document_uploaded)
+
     # ── 그 외 도메인 핸들러 슬롯 (D: discovered_via 기록 / E: 알림 등) ──
     # 예) await subscribe("SupplierInvited", supplychain_record_discovered_via)
 

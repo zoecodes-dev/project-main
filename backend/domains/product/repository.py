@@ -32,7 +32,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload  # [REVERT-NON-SUPPLIER] 이 import 제거 (customer eager load용)
@@ -128,7 +128,19 @@ class ProductRepository:
         # ------------------------------------------------------------------
         # 2단계: 제품 UPSERT
         # customer_cache 에서 customer_id 를 꺼내 product row에 채워요.
+        #
+        # [테넌트 격리(§0.2) — tenant_id 채움]
+        # GET /products 는 토큰 tenant_id 로 행을 필터하는데(list_products_filtered),
+        # ingest 로 새로 들어오는 행이 tenant_id=NULL 이면 그 필터에서 전부 제외돼
+        # "조회 안 됨" 증상이 난다. POST /products 엔드포인트는 인증 유저(토큰)를
+        # 받지 않으므로 tenant 를 데이터에서 도출해야 한다. precedence 는 마이그레이션
+        # 0002 백필과 동일하게 맞춘다:
+        #   ① 제조 협력사(manufacturer_id→suppliers.tenant_id)
+        #   ② 그래도 NULL 이고 테넌트가 정확히 1개면(단일 원청 배포) 그 테넌트
+        # 시드 제품은 manufacturer_id 가 없어 ②로 채워진다(단일 테넌트 배포 기준).
         # ------------------------------------------------------------------
+        single_tenant_id = await self._single_tenant_fallback()
+
         upserted_products: List[Product] = []
 
         for raw in raw_products:
@@ -138,26 +150,43 @@ class ProductRepository:
                 customer_obj, _ = customer_cache[customer_code]
                 customer_id = customer_obj.customer_id
 
-            stmt = (
+            # 테넌트 도출: ① 제조 협력사 테넌트 → ② 단일 테넌트 폴백
+            manufacturer_id = raw.get("manufacturer_id")
+            tenant_id = None
+            if manufacturer_id is not None:
+                tenant_id = await self._tenant_of_supplier(manufacturer_id)
+            if tenant_id is None:
+                tenant_id = single_tenant_id
+
+            insert_stmt = (
                 pg_insert(Product)
                 .values(
                     product_code=raw["product_code"],
                     product_name=raw.get("product_name"),
-                    manufacturer_id=raw.get("manufacturer_id"),
+                    manufacturer_id=manufacturer_id,
                     type=raw.get("type"),
                     specs=raw.get("specs"),
                     customer_id=customer_id,
+                    tenant_id=tenant_id,
                     model_name=raw.get("model_name"),
                     amperage_ah=raw.get("amperage_ah"),
                     source_system=source_system,
                     external_id=raw.get("external_id", raw["product_code"]),
                     synced_at=now,
                 )
+            )
+            stmt = (
+                insert_stmt
                 .on_conflict_do_update(
                     index_elements=["product_code"],
                     set_={
                         "product_name":  raw.get("product_name"),
                         "customer_id":   customer_id,
+                        # COALESCE: 기존에 백필된 tenant_id 를 새 NULL 로 덮지 않는다.
+                        # (다중 테넌트 + manufacturer 미지정 시 도출값이 NULL 일 수 있음)
+                        "tenant_id":     func.coalesce(
+                            insert_stmt.excluded.tenant_id, Product.tenant_id
+                        ),
                         "model_name":    raw.get("model_name"),
                         "amperage_ah":   raw.get("amperage_ah"),
                         "source_system": source_system,
@@ -314,6 +343,34 @@ class ProductRepository:
                 "amperage_ah":          118.00,
             },
         ]
+
+    # -----------------------------------------------------------------------
+    # 테넌트 도출 헬퍼 (tenant_id 백필 — 마이그레이션 0002 precedence 와 동일)
+    #
+    # 도메인 격리(PROJECT_CORE 5-1): suppliers/tenants 는 타 도메인 테이블이라
+    # ORM 모델을 import 하지 않고 text() 원시 SQL 로 읽기만 한다(마이그레이션과 동일).
+    # -----------------------------------------------------------------------
+
+    async def _tenant_of_supplier(self, supplier_id: UUID) -> Optional[UUID]:
+        """제조 협력사(manufacturer)의 tenant_id 를 반환한다. 없으면 None."""
+        result = await self.session.execute(
+            text("SELECT tenant_id FROM suppliers WHERE supplier_id = :sid"),
+            {"sid": str(supplier_id)},
+        )
+        row = result.first()
+        return row[0] if row else None
+
+    async def _single_tenant_fallback(self) -> Optional[UUID]:
+        """
+        테넌트가 정확히 1개일 때만 그 tenant_id 를 반환한다(단일 원청 배포 폴백).
+        2개 이상이면 어느 쪽 소유인지 단정할 수 없으므로 None 을 반환해
+        tenant_id 를 비워 둔다(마이그레이션 0002 백필 ②와 동일 정책).
+        """
+        result = await self.session.execute(
+            text("SELECT tenant_id FROM tenants LIMIT 2")
+        )
+        rows = result.fetchall()
+        return rows[0][0] if len(rows) == 1 else None
 
 
     # -----------------------------------------------------------------------

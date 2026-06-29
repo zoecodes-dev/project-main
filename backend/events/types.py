@@ -119,6 +119,23 @@ class RiskProfileUpdatedEvent:
 
 
 @dataclass
+class SupplierDocumentUploadedEvent:
+    """
+    협력사가 필요문서(*_doc_url)를 새로 업로드(S3 키 변경)했을 때 발행.
+    발행: B(supplier) → 수신: E(submission)가 submission_documents 행 생성 + 파싱 큐 enqueue.
+
+    s3_key: files 버킷 내 키(영구 URL 아님). data_gateway가 이 키로 바이트를 읽어 파싱한다.
+    doc_kind: 'business_reg' | 'environmental_report' | 'self_assessment'
+    """
+    supplier_id: Optional[UUID] = None
+    s3_key: Optional[str] = None
+    file_name: Optional[str] = None
+    doc_kind: Optional[str] = None
+    event_name: str = "SupplierDocumentUploaded"
+    occurred_at: datetime = field(default_factory=_now_utc)
+
+
+@dataclass
 class FactoryRegulationChangedEvent:
     """
     공장의 applicable_regulations 컬럼 수정 시 발행. (backend_md_additions I절)
