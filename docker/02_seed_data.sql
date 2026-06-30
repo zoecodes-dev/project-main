@@ -161,11 +161,6 @@ INSERT INTO supplier_onboarding (supplier_id, consent_status, consent_signed_at,
 ('a4444444-4444-4000-8000-000000000004', 'consent_agreed',  now() - interval '5 days',  'agreed',  now() - interval '6 days',  now() + interval '8 days', 1),
 ('abababab-abab-4000-8000-0000000000ab', 'consent_pending', NULL,                        'pending', now() - interval '22 days', now() - interval '8 days', 3);
 
--- 인증서
-INSERT INTO supplier_certifications (supplier_id, certification_type, certification_no, issued_at, expires_at, issuing_body) VALUES
-('a1111111-1111-4000-8000-000000000001', 'ISO 14001', 'ISO-14001-HY-2023', '2023-01-01', '2026-12-31', 'KAB'),
-('a5555555-5555-4000-8000-000000000005', 'Bettercoal', 'BC-GMC-2022',       '2022-06-01', now()::date + 20, 'Bettercoal');
-
 
 -- ============================================================
 -- 3. 제품 마스터 4종 + BOM 버전 (영역 7) — 3축(고객사·기간·조성)
@@ -211,13 +206,6 @@ INSERT INTO supplier_miner_details (supplier_id, mine_name, mining_method, extra
 ('a3333333-3333-4000-8000-000000000003', 'Greenbushes Lithium', 'open_pit', 80000.00, ST_SetSRID(ST_MakePoint(116.060, -33.860), 4326), '2018-01-01'),
 ('a9999999-9999-4000-8000-000000000009', 'Atacama Brine', 'brine', 60000.00, ST_SetSRID(ST_MakePoint(-68.200, -23.500), 4326), '2019-01-01');
 
--- 트레이더 공개율 낮음 (i4 Gray)
-INSERT INTO supplier_trader_details (supplier_id, trading_license, broker_certification, disclosure_completeness) VALUES
-('abababab-abab-4000-8000-0000000000ab', 'TR-LIC-2023', NULL, 45.00);
-
-INSERT INTO trader_disclosure_obligation (trader_supplier_id, upstream_supplier_id, disclosure_completeness, last_audited_at) VALUES
-('abababab-abab-4000-8000-0000000000ab', 'a5555555-5555-4000-8000-000000000005', 45.00, now() - interval '10 days');
-
 
 -- ============================================================
 -- 7. 리스크 프로필 (영역 4)
@@ -239,36 +227,6 @@ INSERT INTO supplier_risk_profiles (supplier_id, overall_risk_score, risk_level,
 INSERT INTO supplier_audit_records (supplier_id, audit_date, audit_type, auditor, audit_status, inspector_id, result, next_audit_due) VALUES
 ('a5555555-5555-4000-8000-000000000005', now()::date - 30, 'on_site', 'Third Party Auditor', 'in_progress', '11111111-0000-4000-8000-000000000002', 'pending', now()::date + 30);
 
--- 인권 이슈 (Global Mining 강제노동 — UFLPA 근거)
-INSERT INTO supplier_human_rights_issues (supplier_id, factory_id, issue_type, severity, description, detected_at, status, source) VALUES
-('a5555555-5555-4000-8000-000000000005', 'f5555555-0000-4000-8000-000000000005', 'forced_labor', 'critical', '신장 지역 강제노동 의혹', now() - interval '40 days', 'open', 'NGO Report');
-
--- 산재 (조사중)
-INSERT INTO supplier_industrial_accidents (supplier_id, factory_id, accident_date, accident_type, description, casualties, status) VALUES
-('a5555555-5555-4000-8000-000000000005', 'f5555555-0000-4000-8000-000000000005', now()::date - 15, 'serious_injury', '광산 붕괴 사고', 2, 'investigating');
-
-
--- ============================================================
--- 8. 원산지 증명서 (영역 5)
--- ============================================================
-INSERT INTO origin_certificates (supplier_id, factory_id, cert_type, cert_number, issuing_authority, issued_at, expires_at, origin_country, status) VALUES
-('a1111111-1111-4000-8000-000000000001', 'f1111111-0000-4000-8000-000000000001', 'CONFLICT_FREE', 'CF-HY-2024',  'RMI',  '2024-06-01', now()::date + 200, 'KR', 'valid'),
-('a3333333-3333-4000-8000-000000000003', 'f3333333-0000-4000-8000-000000000003', 'CONFLICT_FREE', 'CF-AU-2024',  'RMI',  '2024-05-01', now()::date + 250, 'AU', 'valid'),
-('a9999999-9999-4000-8000-000000000009', 'f9999999-0000-4000-8000-000000000009', 'CONFLICT_FREE', 'CF-CL-2024',  'RMI',  '2024-04-01', now()::date + 240, 'CL', 'valid'),
-('a5555555-5555-4000-8000-000000000005', 'f5555555-0000-4000-8000-000000000005', 'UFLPA_REBUTTAL','UF-GMC-2024', 'Self', '2024-01-01', now()::date + 15,  'CN', 'expiring_soon'),
-('a4444444-4444-4000-8000-000000000004', 'f4444444-0000-4000-8000-000000000004', 'GENERAL',       'GEN-DS-2024', 'KCCI', '2024-03-01', now()::date + 100, 'KR', 'under_review');
-
-
--- ============================================================
--- 9. 교육 관리 (영역 6)
--- ============================================================
-INSERT INTO training_materials (material_id, title, title_en, category, format, duration_minutes, required_for, version) VALUES
-('a1111111-0000-4000-8000-0000000000a1', '인권 실사 교육', 'Human Rights DD',    'human_rights',      'online', 60, '["CSDDD"]'::jsonb, 'v1'),
-('a1111111-0000-4000-8000-0000000000a2', '분쟁광물 교육',  'Conflict Minerals',  'conflict_minerals', 'video',  30, '["CONFLICT_MINERALS"]'::jsonb, 'v1');
-
-INSERT INTO training_records (supplier_id, factory_id, material_id, trainee_count, total_eligible, completion_rate, completed_at, due_date, status) VALUES
-('a1111111-1111-4000-8000-000000000001', 'f1111111-0000-4000-8000-000000000001', 'a1111111-0000-4000-8000-0000000000a1', 50, 50, 100.00, now() - interval '10 days', now()::date - 5, 'completed'),
-('a5555555-5555-4000-8000-000000000005', 'f5555555-0000-4000-8000-000000000005', 'a1111111-0000-4000-8000-0000000000a1', 5,  40, 12.50,  NULL,                       now()::date - 10, 'overdue');
 
 
 -- ============================================================
@@ -548,9 +506,10 @@ INSERT INTO data_request_log (request_id, requester_user_id, target_supplier_id,
 ('da555555-0000-4000-8000-000000000005', '11111111-0000-4000-8000-000000000002', 'a5555555-5555-4000-8000-000000000005', '탄소발자국 증빙', now() - interval '5 days',  now() - interval '1 day',  'response_responded', 'submission_submitted');
 
 INSERT INTO submission_documents (document_id, request_id, supplier_id, file_url, file_name, file_type, doc_category, file_hash, uploaded_by) VALUES
-('d0c11111-0000-4000-8000-000000000001', 'da111111-0000-4000-8000-000000000001', 'a1111111-1111-4000-8000-000000000001', 's3://kira-docs/hy_carbon.pdf',  'hy_carbon.pdf',  'pdf',  'carbon_data', 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90', '11111111-0000-4000-8000-000000000004'),
-('d0c44444-0000-4000-8000-000000000004', 'da444444-0000-4000-8000-000000000004', 'a4444444-4444-4000-8000-000000000004', 's3://kira-docs/ds_factory.xlsx','ds_factory.xlsx','xlsx', 'factory_doc', 'b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1', '11111111-0000-4000-8000-000000000006'),
-('d0c55555-0000-4000-8000-000000000005', 'da555555-0000-4000-8000-000000000005', 'a5555555-5555-4000-8000-000000000005', 's3://kira-docs/gm_carbon.pdf',  'gm_carbon.pdf',  'pdf',  'carbon_data', 'c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2', '11111111-0000-4000-8000-000000000004');
+('d0c11111-0000-4000-8000-000000000001', 'da111111-0000-4000-8000-000000000001', 'a1111111-1111-4000-8000-000000000001', 's3://kira-docs/hy_carbon.pdf',  'hy_carbon.pdf',  'pdf',  'carbon_footprint_declaration', 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90', '11111111-0000-4000-8000-000000000004'),
+('d0c44444-0000-4000-8000-000000000004', 'da444444-0000-4000-8000-000000000004', 'a4444444-4444-4000-8000-000000000004', 's3://kira-docs/ds_factory.xlsx','ds_factory.xlsx','xlsx', 'product_spec', 'b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1', '11111111-0000-4000-8000-000000000006'),
+('d0c44444-0000-4000-8000-000000000044', 'da444444-0000-4000-8000-000000000004', 'a4444444-4444-4000-8000-000000000004', 's3://kira-docs/ds_process.pdf', 'ds_process.pdf', 'pdf',  'manufacturing_process_doc', 'd4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3', '11111111-0000-4000-8000-000000000006'),
+('d0c55555-0000-4000-8000-000000000005', 'da555555-0000-4000-8000-000000000005', 'a5555555-5555-4000-8000-000000000005', 's3://kira-docs/gm_carbon.pdf',  'gm_carbon.pdf',  'pdf',  'carbon_footprint_declaration', 'c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2', '11111111-0000-4000-8000-000000000004');
 
 INSERT INTO document_extraction_results (request_id, document_id, parsed_fields, confidence_map, unparsed_fields, supplier_confirmed, confirmed_at) VALUES
 ('da111111-0000-4000-8000-000000000001', 'd0c11111-0000-4000-8000-000000000001', '{"carbon_intensity":2.34,"energy_source":"renewable"}'::jsonb, '{"carbon_intensity":0.96,"energy_source":0.91}'::jsonb, '[]'::jsonb, TRUE, now() - interval '2 days'),

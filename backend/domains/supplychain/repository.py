@@ -370,10 +370,7 @@ class SupplyChainRepository:
           supplier_id, provider_type, depth (트리 최소 depth)
           has_carbon_intensity          : manufacturer_details.carbon_intensity 존재 여부
           has_factory_carbon_decl       : factory_carbon_declarations 행 존재 여부
-          has_recycled_content_ratio    : recycler_details.recycled_content_ratio 존재 여부
-          has_recycled_materials        : recycler_details.recycled_materials 존재 여부
           has_mine_coordinates          : miner_details.mine_coordinates 존재 여부
-          has_origin_country            : origin_certificates(valid/expiring_soon) 존재 여부
           has_feoc_direct_ownership     : risk_profiles.feoc_direct_ownership 존재 여부
           has_feoc_indirect_ownership   : risk_profiles.feoc_indirect_ownership 존재 여부
         """
@@ -423,18 +420,8 @@ class SupplyChainRepository:
                     JOIN supplier_factories sf ON sf.factory_id = fcd.factory_id
                     WHERE sf.supplier_id = us.supplier_id AND fcd.is_active = TRUE
                 )                                                            AS has_factory_carbon_decl,
-                -- Recycler: recycled_content_ratio
-                (srd.recycled_content_ratio IS NOT NULL)                     AS has_recycled_content_ratio,
-                -- Recycler: recycled_materials (JSONB — 광물별 함량)
-                (srd.recycled_materials IS NOT NULL)                         AS has_recycled_materials,
                 -- Miner: mine_coordinates (PostGIS POINT)
                 (smind.mine_coordinates IS NOT NULL)                         AS has_mine_coordinates,
-                -- Miner/Trader: origin_country via origin_certificates
-                EXISTS (
-                    SELECT 1 FROM origin_certificates oc
-                    WHERE oc.supplier_id = us.supplier_id
-                      AND oc.status IN ('valid', 'expiring_soon')
-                )                                                            AS has_origin_country,
                 -- Trader/Manufacturer: FEOC 직접 지분 (risk_profiles)
                 (srp.feoc_direct_ownership IS NOT NULL)                      AS has_feoc_direct_ownership,
                 -- Trader/Manufacturer: FEOC 간접 지분 (risk_profiles)
@@ -442,7 +429,6 @@ class SupplyChainRepository:
             FROM unique_suppliers us
             LEFT JOIN root_suppliers rs                  ON rs.child_supplier_id = us.supplier_id
             LEFT JOIN supplier_manufacturer_details smd ON smd.supplier_id = us.supplier_id
-            LEFT JOIN supplier_recycler_details srd      ON srd.supplier_id = us.supplier_id
             LEFT JOIN supplier_miner_details smind       ON smind.supplier_id = us.supplier_id
             LEFT JOIN supplier_risk_profiles srp         ON srp.supplier_id = us.supplier_id
             ORDER BY us.depth, us.provider_type;

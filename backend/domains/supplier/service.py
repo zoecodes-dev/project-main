@@ -27,21 +27,17 @@ from backend.domains.supplier.models import (
     SupplierOnboarding,
     SupplierRiskProfile,
 )
-from backend.events.types import RiskProfileUpdatedEvent, SupplierInvitedEvent
+from backend.events.types import (
+    RiskProfileUpdatedEvent,
+    SupplierInvitedEvent,
+    SupplierDocumentUploadedEvent,
+)
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
-# 마스터폼 섹션 4~6 write는 E가 제공(submission/masterform.py). B의 오케스트레이터가
-# '동일 db 세션'으로 호출해 단일 트랜잭션 atomic 묶음으로 commit한다(§4). 도메인 코드를
-# 대신 구현하는 게 아니라 제공된 계약 함수를 호출만 한다.
-from backend.domains.submission import masterform as e_masterform
 # AP: 추출결과 read는 E 제공(submission repository), 마스터폼 prefill 변환은 B(supplier)
 #   masterform_prefill. 둘 다 무거운 LLM 스택을 끌어오지 않는 가벼운 호출이다.
 from backend.domains.submission import repository as submission_repo
 from backend.domains.supplier import masterform_prefill
-# NOTE: 섹션 3 원산지 증명서 write(C: regulation.save_origin_certificates)는 섹션 3
-#   블록 안에서 '지연(lazy) import'한다 — regulation.repository가 LLM 임베딩 스택
-#   (langchain_aws)을 끌어오므로, 모듈 로드 시점에 가져오면 supplier.service import가
-#   그 무거운 스택에 묶인다. 실제 호출 시점(런타임)에만 가져와 import를 가볍게 유지한다.
 
 # ── 정책 상수 ───────────────────────────────────────────────
 # 협력사 온보딩 SLA. PROJECT_CORE: 14일 미응답 → Reminder, 21일 → Escalation.
@@ -138,10 +134,6 @@ async def submit_master_form(
     섹션 → 저장 책임:
       0 회사·공장·PIC      B (repository.write_master_form_*)
       1 탄소발자국         B (manufacturer_details + factory_carbon_declarations)
-      2 재활용             B (recycler_details · recycling_efficiency 포함)
-      3 원산지·GPS         D GPS(miner_details) + C 원산지 증명서(save_origin_certificates, 지연 import)
-      5 인권·중대·교육     E (e_masterform.write_supplier_social)
-      6 EoL·인증서         E (e_masterform.write_supplier_certifications)
 
     반환: 저장된 섹션 키 목록을 담은 dict. 없는 supplier_id면 None(→ router 404).
     """
@@ -169,49 +161,6 @@ async def submit_master_form(
                 db, supplier_id, factory_ids, form.manufacturing
             )
             sections_saved.append("manufacturing")
-
-        # ── 섹션 2: 재활용 (B) ────────────────────────────────────────────────
-        if form.recycling is not None:
-            await repository.write_master_form_recycling(db, supplier_id, form.recycling)
-            sections_saved.append("recycling")
-
-        # ── 섹션 3: 원산지·GPS ────────────────────────────────────────────────
-        #   GPS(supplier_miner_details)      = D 제공(repository.upsert_miner_details).
-        #   원산지 증명서(origin_certificates) = C 제공(regulation.save_origin_certificates).
-        #   PostGIS 좌표 변환(lng/lat swap)은 upsert_miner_details 내부가 담당한다.
-        if form.origin is not None:
-            origin = form.origin
-            coords = origin.mine_coordinates
-            await repository.upsert_miner_details(
-                db,
-                supplier_id,
-                mine_name=origin.mine_name,
-                mining_method=origin.mining_method,
-                extraction_volume=origin.extraction_volume,
-                lat=coords.latitude if coords else None,
-                lng=coords.longitude if coords else None,
-                active_period_from=origin.active_period_from,
-                active_period_to=origin.active_period_to,
-            )
-            sections_saved.append("origin")
-            # 원산지 증명서(C 제공) — 같은 db 세션으로 호출(commit은 이 service가 일괄).
-            # 지연 import: regulation.repository가 LLM 임베딩 스택을 끌어오므로 호출 시점에만.
-            if origin.origin_certificates:
-                from backend.domains.regulation.service import save_origin_certificates
-                await save_origin_certificates(
-                    db=db,
-                    supplier_id=str(supplier_id),
-                    certificates=[c.model_dump() for c in origin.origin_certificates],
-                )
-                sections_saved.append("origin_certificates")
-
-        # ── 섹션 5~6: E 제공 write 함수 호출 (동일 트랜잭션) ──────────────────
-        if form.social is not None:
-            await e_masterform.write_supplier_social(db, supplier_id, factory_ids, form.social)
-            sections_saved.append("social")
-        if form.certifications is not None:
-            await e_masterform.write_supplier_certifications(db, supplier_id, form.certifications)
-            sections_saved.append("certifications")
 
         # ── 규제: 실사 자가진단 결과 → supplier_risk_profiles.self_reported_risk_level ──
         if form.self_reported_risk_level is not None:
@@ -287,10 +236,67 @@ _OEM_SUPPLIER_ID = UUID("a0000000-0000-4000-8000-000000000000")
 # provider_type → 채워야 할 CTI relationship 속성명 매핑
 _CTI_ATTR_BY_TYPE = {
     "manufacturer": "manufacturer_detail",
-    "recycler": "recycler_detail",
-    "trader": "trader_detail",
     "miner": "miner_detail",
 }
+
+# 국가명 → ISO 3166-1 alpha-2. suppliers.country 는 VARCHAR(2)라, 입력 경로(AI 파싱
+# 배선·자료제출·회원가입)가 '대한민국'·'China'·'대한민국 (KR)' 같은 자유 표기를 보내면
+# 영속화 직전에 코드로 정규화한다(_normalize_country_to_iso2). 국가 추가는 여기 한 줄.
+_COUNTRY_NAME_TO_ISO2 = {
+    "대한민국": "KR", "한국": "KR", "southkorea": "KR", "korea": "KR", "republicofkorea": "KR",
+    "중국": "CN", "china": "CN", "prchina": "CN", "peoplesrepublicofchina": "CN",
+    "미국": "US", "usa": "US", "us": "US", "unitedstates": "US",
+    "unitedstatesofamerica": "US", "america": "US",
+    "일본": "JP", "japan": "JP",
+    "호주": "AU", "australia": "AU",
+    "칠레": "CL", "chile": "CL",
+    "콩고민주공화국": "CD", "콩고민주": "CD", "콩고": "CD",
+    "drc": "CD", "democraticrepublicofthecongo": "CD", "congo": "CD",
+    "인도네시아": "ID", "indonesia": "ID",
+    "필리핀": "PH", "philippines": "PH",
+    "베트남": "VN", "vietnam": "VN",
+    "캐나다": "CA", "canada": "CA",
+    "아르헨티나": "AR", "argentina": "AR",
+    "볼리비아": "BO", "bolivia": "BO",
+    "페루": "PE", "peru": "PE",
+    "독일": "DE", "germany": "DE", "deutschland": "DE",
+    "프랑스": "FR", "france": "FR",
+    "영국": "GB", "uk": "GB", "unitedkingdom": "GB", "britain": "GB",
+    "폴란드": "PL", "poland": "PL",
+    "핀란드": "FI", "finland": "FI",
+    "스웨덴": "SE", "sweden": "SE",
+    "노르웨이": "NO", "norway": "NO",
+    "모로코": "MA", "morocco": "MA",
+    "남아프리카공화국": "ZA", "남아공": "ZA", "southafrica": "ZA",
+    "짐바브웨": "ZW", "zimbabwe": "ZW",
+    "브라질": "BR", "brazil": "BR",
+    "멕시코": "MX", "mexico": "MX",
+    "인도": "IN", "india": "IN",
+    "대만": "TW", "taiwan": "TW",
+}
+_KNOWN_ISO2 = set(_COUNTRY_NAME_TO_ISO2.values())
+
+
+def _normalize_country_to_iso2(value: Optional[str]) -> Optional[str]:
+    """국가 표기 → ISO 3166-1 alpha-2. 코드면 그대로(대문자), '대한민국 (KR)'면 괄호 코드
+    우선, 한/영 국가명이면 매핑. 해석 불가하면 None."""
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    # 괄호 안 alpha-2 우선: "대한민국 (KR)" → KR
+    start, end = raw.find("("), raw.find(")")
+    if start != -1 and end == start + 3:
+        code = raw[start + 1:end].upper()
+        if code.isalpha() and code in _KNOWN_ISO2:
+            return code
+    # 입력 자체가 alpha-2 코드
+    if len(raw) == 2 and raw.isalpha() and raw.upper() in _KNOWN_ISO2:
+        return raw.upper()
+    # 이름 매핑(소문자·공백/구두점 제거)
+    key = "".join(ch for ch in raw.lower() if ch not in " \t.()")
+    return _COUNTRY_NAME_TO_ISO2.get(key)
 
 
 async def update_supplier_detail(
@@ -303,8 +309,25 @@ async def update_supplier_detail(
     supplier = await repository.get_supplier_by_id(db, supplier_id, tenant_id)
     if supplier is None:
         return None
+    # 필요문서 URL 컬럼의 '커밋 전' 값을 미리 떠둔다 — 새 S3 키로 바뀐 것만
+    # 커밋 후 SupplierDocumentUploaded로 발행해 파싱 파이프라인을 태우기 위함.
+    # (필드명 → 이벤트 doc_kind 코드)
+    doc_url_kinds = {
+        "business_reg_doc_url": "business_reg",
+        "environmental_report_url": "environmental_report",
+        "self_assessment_doc_url": "self_assessment",
+    }
+    prev_doc_urls = {col: getattr(supplier, col, None) for col in doc_url_kinds}
     # 입력 양식 영속화 — 테이블별로 분배(보낸 필드만).
     fields = dict(fields)
+    # 국가 정규화 — suppliers.country 는 VARCHAR(2)(alpha-2). 자유 표기('대한민국' 등)를
+    # 코드로 변환. 해석 불가하면 country를 빼서(=쓰지 않음) 잘못된 값으로 덮어쓰지 않는다.
+    if "country" in fields:
+        iso = _normalize_country_to_iso2(fields.get("country"))
+        if iso:
+            fields["country"] = iso
+        else:
+            fields.pop("country")
     manuf = {k: fields.pop(k) for k in ("carbon_intensity", "energy_source") if k in fields}
     self_risk = fields.pop("self_reported_risk_level", None)
     if fields:                         # 나머지는 suppliers 컬럼(core_minerals 포함)
@@ -314,6 +337,22 @@ async def update_supplier_detail(
     if self_risk is not None:          # 실사 자가진단 → risk_profiles
         await repository.set_self_reported_risk_level(db, supplier_id, self_risk)
     await db.commit()
+
+    # ── 커밋 성공 후 발행 (PROJECT_CORE 5-2) ──────────────────────────────
+    # 새로 들어온(이전 값과 다른) 비어있지 않은 필요문서 S3 키만 발행 → 중복 파싱 방지.
+    for col, kind in doc_url_kinds.items():
+        new_val = fields.get(col)
+        if new_val and new_val != prev_doc_urls.get(col):
+            await publish(
+                "SupplierDocumentUploaded",
+                dataclasses.asdict(SupplierDocumentUploadedEvent(
+                    supplier_id=supplier_id,
+                    s3_key=new_val,
+                    file_name=new_val.rsplit("/", 1)[-1] if "/" in new_val else new_val,
+                    doc_kind=kind,
+                )),
+            )
+
     return await get_supplier_detail(db, supplier_id, tenant_id)
 
 
@@ -427,29 +466,6 @@ async def get_risk_profile(supplier_id: UUID, db: AsyncSession) -> SupplierRiskP
 # BE-3: 7탭 모달 조회 (기존 테이블 SELECT 전용)
 #   존재하지 않는 협력사면 None을 반환 → router가 404로 매핑.
 # ============================================================
-async def get_esg(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
-    """ESG 탭 — 인증서(E) + 인권 이슈/산업재해(S) + 실사 기록(G)을 묶어 반환."""
-    if await repository.get_supplier_by_id(db, supplier_id) is None:
-        return None
-    return {
-        "supplier_id": supplier_id,
-        "certifications": await repository.get_certifications(db, supplier_id),
-        "human_rights_issues": await repository.get_human_rights_issues(db, supplier_id),
-        "industrial_accidents": await repository.get_industrial_accidents(db, supplier_id),
-        "audit_records": await repository.get_audit_records(db, supplier_id),
-    }
-
-
-async def get_training(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
-    """Training 탭 — 교육 이수 기록(교육 자료 메타 포함)."""
-    if await repository.get_supplier_by_id(db, supplier_id) is None:
-        return None
-    return {
-        "supplier_id": supplier_id,
-        "records": await repository.get_training_records(db, supplier_id),
-    }
-
-
 async def get_factories(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
     """사업장 탭 — 공장/광산 목록(좌표 lat/lng 포함)."""
     if await repository.get_supplier_by_id(db, supplier_id) is None:
@@ -485,16 +501,6 @@ async def get_completeness(db: AsyncSession, supplier_id: UUID) -> Optional[dict
             "last_updated_at": None,
         }
     return {"supplier_id": supplier_id, **comp}
-
-
-async def get_origin_certificates(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
-    """원산지/규제 증빙 — origin_certificates 목록."""
-    if await repository.get_supplier_by_id(db, supplier_id) is None:
-        return None
-    return {
-        "supplier_id": supplier_id,
-        "origin_certificates": await repository.get_origin_certificates(db, supplier_id),
-    }
 
 
 async def get_supplied_items(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:

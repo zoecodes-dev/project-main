@@ -25,13 +25,10 @@ from backend.domains.supplier.models import (
     SupplierDetailUpdateRequest,
     RiskProfileResponse,
     RiskScoreUpdateRequest,
-    SupplierEsgResponse,
-    SupplierTrainingResponse,
     SupplierReliabilityResponse,
     SupplierFactoriesResponse,
     SupplierContactsResponse,
     SupplierCompletenessResponse,
-    SupplierOriginCertsResponse,
     SupplierCarbonDeclsResponse,
     SupplierSuppliedItemsResponse,
     MasterFormRequest,
@@ -228,32 +225,6 @@ async def update_risk_score_endpoint(
 # ============================================================
 # BE-3: 7탭 모달 조회 엔드포인트 (기존 테이블 SELECT 전용)
 # ============================================================
-@router.get("/{supplier_id}/esg", response_model=SupplierEsgResponse)
-async def get_supplier_esg_endpoint(
-    supplier_id: UUID,
-    _auth: UUID = Depends(authorized_supplier),
-    db: AsyncSession = Depends(get_db),
-):
-    """ESG 탭 — 인증서(E) + 인권 이슈/산업재해(S) + 실사 기록(G) 조회. 내 테넌트 소유만."""
-    data = await service.get_esg(db, supplier_id)
-    if data is None:
-        raise HTTPException(status_code=404, detail="Supplier not found")
-    return data
-
-
-@router.get("/{supplier_id}/training", response_model=SupplierTrainingResponse)
-async def get_supplier_training_endpoint(
-    supplier_id: UUID,
-    _auth: UUID = Depends(authorized_supplier),
-    db: AsyncSession = Depends(get_db),
-):
-    """Training 탭 — 교육 이수 기록(교육 자료 메타 포함) 조회. 내 테넌트 소유만."""
-    data = await service.get_training(db, supplier_id)
-    if data is None:
-        raise HTTPException(status_code=404, detail="Supplier not found")
-    return data
-
-
 @router.get("/{supplier_id}/reliability", response_model=SupplierReliabilityResponse)
 async def get_supplier_reliability_endpoint(
     supplier_id: UUID,
@@ -301,19 +272,6 @@ async def get_supplier_completeness_endpoint(
 ):
     """입력 완성도 — data_completeness_status(completion_rate·missing_fields) 조회. 내 테넌트 소유만."""
     data = await service.get_completeness(db, supplier_id)
-    if data is None:
-        raise HTTPException(status_code=404, detail="Supplier not found")
-    return data
-
-
-@router.get("/{supplier_id}/origin-certificates", response_model=SupplierOriginCertsResponse)
-async def get_supplier_origin_certificates_endpoint(
-    supplier_id: UUID,
-    _auth: UUID = Depends(authorized_supplier),
-    db: AsyncSession = Depends(get_db),
-):
-    """원산지/규제 증빙 — origin_certificates 목록 조회. 내 테넌트 소유만."""
-    data = await service.get_origin_certificates(db, supplier_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return data
