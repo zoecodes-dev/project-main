@@ -14,7 +14,7 @@ from backend.agents.graph import setup_graph, teardown_graph
 from backend.infrastructure.event_bus import start_event_listener, stop_event_listener, subscribe
 from backend.domains.supplychain.router import router as supplychain_router, product_supply_chain_router
 from backend.domains.due_diligence.router import router as due_diligence_router
-from backend.domains.submission.router import router as submission_router, submissions_router
+from backend.domains.submission.router import router as submission_router, submissions_router, submission_documents_router
 from backend.domains.verification.router import router as verification_router
 
 from backend.domains.users.router import router as users_router
@@ -29,6 +29,7 @@ from backend.domains.acl.router import router as acl_router
 from backend.domains.regulation.router import router as regulation_router, compliance_router
 from backend.domains.files.router import router as files_router
 from backend.domains.data_consent.router import router as data_consent_router
+from backend.domains.notifications.router import router as notifications_router
 
 async def _register_subscriptions() -> None:
     """
@@ -81,6 +82,7 @@ app.include_router(product_supply_chain_router)
 app.include_router(due_diligence_router)
 app.include_router(submission_router)
 app.include_router(submissions_router)
+app.include_router(submission_documents_router)
 app.include_router(verification_router)
 
 app.include_router(users_router)
@@ -99,6 +101,7 @@ app.include_router(regulation_router)
 app.include_router(compliance_router)
 app.include_router(files_router)
 app.include_router(data_consent_router)
+app.include_router(notifications_router)
 
 @app.get("/health")
 async def health_check():

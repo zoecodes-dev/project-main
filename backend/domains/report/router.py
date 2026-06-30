@@ -71,6 +71,35 @@ async def get_inbox(
     return items
 
 
+# ── GET /reports/risk-summary  (/{reportId} 보다 먼저 선언) ──────
+
+@router.get("/risk-summary")
+async def get_risk_summary(
+    locale: str = Query(default="ko"),
+    current_user: CurrentUser = Depends(get_current_user),
+    service: ReportService = Depends(_get_service),
+):
+    """공급망 리스크 관리 요약문 + metrics. 내부 확인용(기본 ko)."""
+    return await service.build_risk_summary(current_user.tenant_id, locale)
+
+
+# ── GET /reports/risk-summary/outbound  (고객사 전송 다국어 프리뷰) ──────
+
+@router.get("/risk-summary/outbound")
+async def get_outbound_risk_summary(
+    customer_id: uuid.UUID = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
+    service: ReportService = Depends(_get_service),
+):
+    """고객사 전송용 다국어 요약 프리뷰. 고객사 국가로 언어 자동 결정
+    (독일=EN+DE, 그 외=EN). 국가 미상이면 EN + country_known=False(사람이 선택).
+    타 테넌트/미보유 고객사면 404."""
+    result = await service.build_outbound_summary(current_user.tenant_id, customer_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return result
+
+
 # ── 3.2b GET /reports/{reportId} ─────────────────────────────────
 
 @router.get("/{report_id}")
@@ -96,6 +125,7 @@ async def create_report(
     try:
         report = await service.create_report(
             requester_id=current_user.user_id,
+            tenant_id=current_user.tenant_id,
             title=body.title,
             type=body.type,
             batch_id=body.related_batch,

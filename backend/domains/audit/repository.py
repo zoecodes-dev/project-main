@@ -232,6 +232,28 @@ async def list_package_trail(db: AsyncSession, package_id: UUID) -> list[dict]:
     return [dict(row._mapping) for row in result.all()]
 
 
+async def list_audit_snapshots(db: AsyncSession, package_id: UUID) -> list[dict]:
+    """audit_data_snapshots — 승인 순간 동결된 증빙 스냅샷.
+    snapshot_data(active BOM·협력사·규제판정 동결 JSON) 원본을 포함해 반환한다.
+    부인방지 핵심 증빙이라 export 번들에 그대로 싣는다."""
+    stmt = text(
+        """
+        SELECT
+            snapshot_id,
+            step_id,
+            decided_by,
+            snapshot_data,
+            signature_hash,
+            created_at
+        FROM audit_data_snapshots
+        WHERE batch_id = CAST(:package_id AS uuid)
+        ORDER BY created_at ASC
+        """
+    )
+    result = await db.execute(stmt, {"package_id": str(package_id)})
+    return [dict(row._mapping) for row in result.all()]
+
+
 async def create_pending_hitl_review(
     db: AsyncSession,
     batch_id: UUID,

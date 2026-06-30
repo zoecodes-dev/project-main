@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,10 +39,6 @@ class ActionSourceType(str, Enum):
     HITL = "HITL"
 
 
-class CurrentUser(BaseModel):
-    user_id: UUID
-
-
 class ActionItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -60,10 +56,6 @@ class GapAnalysisOut(BaseModel):
 
     affected_supplier_ids: object | None
     newly_required_fields: object | None
-
-
-async def get_current_user(x_user_id: UUID = Header(alias="X-User-Id")) -> CurrentUser:
-    return CurrentUser(user_id=x_user_id)
 
 
 @actions_router.get("/actions", response_model=list[ActionItemOut])
@@ -130,6 +122,8 @@ async def list_audit_packages(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없어 접근할 수 없습니다.")
     items = await service.list_audit_packages(db, current_user.tenant_id, page, size)
     total = await service.count_audit_packages(db, current_user.tenant_id)
     set_total_count(response, total)
@@ -144,6 +138,8 @@ async def get_audit_package(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없어 접근할 수 없습니다.")
     try:
         return await service.get_audit_package(db, package_id, current_user.tenant_id)
     except BatchNotFound:
@@ -158,10 +154,11 @@ async def export_audit_package(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # 패키지 존재 확인
+    # tenant_id 없는 유저는 패키지 접근 불가 — SQL의 NULL 우회 방지
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없어 접근할 수 없습니다.")
+    # 패키지 번들을 JSON 증빙 파일로 S3 업로드 → presigned URL 반환.
     try:
-        await service.get_audit_package(db, package_id, current_user.tenant_id)
+        return await service.export_audit_package(db, package_id, current_user.tenant_id)
     except BatchNotFound:
         raise HTTPException(status_code=404, detail=f"audit package not found: {package_id}")
-    # 실제 파일 생성은 추후 구현 (S3 업로드 등)
-    return {"export_url": None}

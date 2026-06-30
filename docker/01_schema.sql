@@ -98,9 +98,11 @@ CREATE TABLE suppliers (
     smelter_type        VARCHAR(20) CONSTRAINT chk_smelter_type CHECK (smelter_type IN ('rmi', 'private')),  -- smelter 세부 구분(RMI/private)
     core_minerals       JSONB,  -- 소재 구성: 핵심광물 함량(%) {"Li":12.5,"Co":8.0,"Ni":60.0}
     country             VARCHAR(2),  -- 기본정보: 소재 국가(ISO 3166-1 alpha-2)
+    address             TEXT,  -- 기본정보: 회사 주소(전체 주소 문자열). 공장 주소(supplier_factories.address)와 별개 — 회사 소재지
     business_reg_doc_url    VARCHAR(500),  -- 필요문서: 사업자등록증(기업정보 서류) 업로드 URL
     environmental_report_url VARCHAR(500),  -- 필요문서: 환경성적서(회원가입 시 수집) 업로드 URL
     self_assessment_doc_url VARCHAR(500),  -- 규제: 실사 자가진단 보고서 업로드 URL(내 기업 정보에서 제출·확인)
+    is_unverified       BOOLEAN DEFAULT false,  -- 회원가입: 사업자등록증 미보유로 '미확인 상태' 등록(원청/상위가 검증)
     parent_supplier_id  UUID REFERENCES suppliers(supplier_id),
     established_year    INT,
     employee_count      INT,
@@ -234,6 +236,7 @@ CREATE TABLE data_provision_consents (
 CREATE INDEX idx_data_consent_supplier ON data_provision_consents(supplier_id);
 CREATE INDEX idx_data_consent_status   ON data_provision_consents(status);
 
+
 -- ============================================================
 -- 영역 3. Provider Type별 CTI 상세 (B 담당)
 -- ============================================================
@@ -247,6 +250,7 @@ CREATE TABLE supplier_manufacturer_details (
     capacity              VARCHAR(100),
     carbon_intensity      NUMERIC(10,4)
 );
+
 
 -- [테이블 역할] 원료 광산 상세 정보. (Geo Audit Agent의 신장 및 DRC 위험 검증의 기준점)
 CREATE TABLE supplier_miner_details (
@@ -316,7 +320,6 @@ CREATE TABLE supplier_audit_records (
     report_url         VARCHAR(500),
     created_at         TIMESTAMPTZ DEFAULT now()
 );
-
 
 
 -- ============================================================
@@ -626,6 +629,22 @@ CREATE TABLE regulation_required_fields (
     is_mandatory               BOOLEAN DEFAULT TRUE
 );
 
+-- [테이블 역할 — C-1 신규] 규제 원문 조항 단위 청킹 + 임베딩. (가산적·무회귀: regulations 컬럼 불변)
+-- search_regulations()가 regulation_code=UNIQUE 1행에 갇혀 cited_clauses 강제가 데이터로
+-- enforce되지 않던 문제를 해결한다. citation(조항번호)+content(조항원문) 단위로 RAG 검색 대상을 만든다.
+CREATE TABLE regulation_clauses (
+    clause_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    regulation_id    UUID NOT NULL REFERENCES regulations(regulation_id) ON DELETE CASCADE,
+    citation         VARCHAR(100) NOT NULL,  -- 예: 'Art.7(2)', 'Annex XII §3'
+    content          TEXT NOT NULL,          -- 조항 원문(또는 정제된 조항 텍스트)
+    embedding_status VARCHAR(20) DEFAULT 'pending'
+        CONSTRAINT chk_clause_embedding_status CHECK (embedding_status IN ('pending', 'indexed')),
+    embedding        vector(1536), -- regulations.embedding과 동일 차원(Cohere embed-v4)
+    created_at       TIMESTAMPTZ DEFAULT now(),
+
+    CONSTRAINT uq_regulation_clause_citation UNIQUE (regulation_id, citation)
+);
+
 -- [테이블 역할] 업종 마스터별 필수 제출 서류 및 필수 키-값 쌍 스키마 사양서.
 CREATE TABLE onboarding_data_requirements (
     requirement_id   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -686,19 +705,9 @@ CREATE TABLE submission_documents (
     file_name     VARCHAR(255),
     file_type     VARCHAR(30)
         CONSTRAINT chk_doc_file_type CHECK (file_type IN ('pdf', 'xlsx', 'csv', 'image', 'docx', 'other')),
-    -- 업로드 서류의 업무상 분류. AI 파싱 전 doc_type 판별 → 유형별 파싱 프롬프트 분기 기준.
-    --   공통: business_registration / origin_certificate / dd_audit_report / feoc_ownership_declaration
-    --   manufacturer: product_spec / manufacturing_process_doc / carbon_footprint_declaration / recycled_content_report
-    --   miner: mining_permit / mineral_production_report / safety_health_report / environmental_impact_assessment
-    --   smelter: rmap_certificate / cmrt_declaration / cbam_declaration / uflpa_documentation / smelter_identification
+    -- 업로드 서류의 업무상 분류 (원산지/공장/FEOC 증빙/인증서/기타)
     doc_category  VARCHAR(50)
-        CONSTRAINT chk_doc_category CHECK (doc_category IN (
-            'business_registration', 'origin_certificate', 'dd_audit_report', 'feoc_ownership_declaration',
-            'product_spec', 'manufacturing_process_doc', 'carbon_footprint_declaration', 'recycled_content_report',
-            'mining_permit', 'mineral_production_report', 'safety_health_report', 'environmental_impact_assessment',
-            'rmap_certificate', 'cmrt_declaration', 'cbam_declaration', 'uflpa_documentation', 'smelter_identification',
-            'other'
-        )),
+        CONSTRAINT chk_doc_category CHECK (doc_category IN ('origin_cert', 'factory_doc', 'feoc_proof', 'certification', 'audit_report', 'carbon_data', 'other')),
     file_hash     VARCHAR(64), -- SHA-256, document_integrity_rule(서류-폼 불일치) 대조용
     uploaded_by   UUID REFERENCES users(user_id),
     uploaded_at   TIMESTAMPTZ DEFAULT now()
@@ -712,6 +721,8 @@ CREATE TABLE document_extraction_results (
     parsed_fields       JSONB, -- AI가 추론한 Key-Value 구조체
     confidence_map      JSONB, -- 필드별 추출 신뢰도 점수 (0.0 ~ 1.0)
     unparsed_fields     JSONB, -- 파싱 실패 필드 리스트
+    detected_document_type VARCHAR(255),       -- AI가 분류한 문서 유형 (원어 표기)
+    evidence_summary       TEXT,               -- 문서 내용 1-2문장 요약
     supplier_confirmed  BOOLEAN DEFAULT FALSE, -- 협력사가 눈으로 검토하고 확인 버튼 눌렀는지 여부
     confirmed_at        TIMESTAMPTZ,
     created_at          TIMESTAMPTZ DEFAULT now()
@@ -969,7 +980,7 @@ CREATE INDEX idx_files_tenant            ON files(tenant_id);
 CREATE INDEX idx_factories_location      ON supplier_factories USING GIST(location);
 CREATE INDEX idx_miner_coords            ON supplier_miner_details USING GIST(mine_coordinates);
 
--- 2) 자재 트리 인덱스
+-- 2) 원산지 및 자재 트리 인덱스
 CREATE INDEX idx_parts_parent            ON parts(parent_part_id);
 CREATE INDEX idx_parts_hs_code           ON parts(hs_code);
 
@@ -984,6 +995,9 @@ CREATE INDEX idx_bom_versions_period     ON bom_versions(production_from, produc
 CREATE INDEX idx_batches_status          ON batches(status);
 CREATE INDEX idx_batches_tenant_status   ON batches(tenant_id, status);
 CREATE INDEX idx_regulations_embedding   ON regulations USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX idx_regulation_clauses_embedding ON regulation_clauses USING hnsw (embedding vector_cosine_ops); -- C-1 신규
+CREATE INDEX idx_regulation_clauses_regulation_id ON regulation_clauses(regulation_id); -- C-1 신규
+CREATE INDEX idx_regulation_clauses_pending   ON regulation_clauses(regulation_id) WHERE embedding_status = 'pending'; -- C-1 신규: 임베딩 시드 배치 조회용
 CREATE INDEX idx_compliance_supplier     ON compliance_results(supplier_id);
 
 -- 4) 워크플로우 추적 및 파싱 임시 인덱스

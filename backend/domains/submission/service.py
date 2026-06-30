@@ -26,9 +26,9 @@ from backend.domains.submission.repository import (
 )
 
 
-async def list_ai_extractions(db: AsyncSession) -> list[dict]:
+async def list_ai_extractions(db: AsyncSession, tenant_id) -> list[dict]:
     """[REVERT-NON-SUPPLIER] HITL 협력사 승인 — AI 추출(parsed_fields+confidence) + 협력사·요청 정보."""
-    rows = await list_extractions_for_review(db)
+    rows = await list_extractions_for_review(db, tenant_id)
     out: list[dict] = []
     for r in rows:
         # 원본 문서 PDF 뷰어용 임시 다운로드 URL. doc_s3_key(submission_documents.file_url=버킷 키)를
@@ -50,6 +50,9 @@ async def list_ai_extractions(db: AsyncSession) -> list[dict]:
             "parsed_fields": r.get("parsed_fields") or {},
             "confidence_map": r.get("confidence_map") or {},
             "unparsed_fields": r.get("unparsed_fields") or [],
+            "detected_document_type": r.get("detected_document_type"),
+            "evidence_summary": r.get("evidence_summary"),
+            "doc_category": r.get("doc_category"),
             # 원본 문서(PDF 뷰어) — 임시 다운로드 URL + 파일명. 없으면 None.
             "document_url": document_url,
             "document_file_name": r.get("doc_file_name"),

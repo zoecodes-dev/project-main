@@ -11,13 +11,22 @@ S3 객체 저장 공통 헬퍼. 파일 업로드 / 다운로드(presigned URL) /
 import asyncio
 
 import boto3
+from botocore.config import Config
 
 # data_gateway 와 동일 버킷/리전 재사용. [BYPASS:C4]
 S3_BUCKET = "kira-documents-423937245947-ap-northeast-2-an"
 AWS_REGION = "ap-northeast-2"
 
 # boto3 client는 스레드 안전 — 모듈 레벨 1회 생성. 자격증명은 IAM Role.
-_s3_client = boto3.client("s3", region_name=AWS_REGION)
+# presigned URL은 반드시 '리전 엔드포인트 + SigV4'로 서명해야 한다. 글로벌
+# 엔드포인트(bucket.s3.amazonaws.com)로 서명하면 리전 버킷에선 서명 불일치
+# (SignatureDoesNotMatch, 403)로 다운로드가 막힌다 — 검증 완료(2026-06-30).
+_s3_client = boto3.client(
+    "s3",
+    region_name=AWS_REGION,
+    endpoint_url=f"https://s3.{AWS_REGION}.amazonaws.com",
+    config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+)
 
 
 async def upload_bytes(key: str, data: bytes, content_type: str | None = None) -> None:
