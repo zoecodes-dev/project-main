@@ -82,6 +82,8 @@ async def process_document_parse(ctx, document_id: str, request_id: str | None =
                 parsed_fields=result.get("parsed_fields", {}),
                 confidence_map=result.get("confidence_map", {}),
                 unparsed_fields=result.get("unparsed_fields", []),
+                detected_document_type=result.get("detected_document_type") or None,
+                evidence_summary=result.get("evidence_summary") or None,
             )
             await submission_repo.mark_job_done(db, idempotency_key=idempotency_key)
             await db.commit()   # 워커가 트랜잭션 경계 소유 (claim+적재+done 원자 커밋)
