@@ -158,10 +158,8 @@ async def export_audit_package(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # 패키지 존재 확인
+    # 패키지 번들을 JSON 증빙 파일로 S3 업로드 → presigned URL 반환.
     try:
-        await service.get_audit_package(db, package_id, current_user.tenant_id)
+        return await service.export_audit_package(db, package_id, current_user.tenant_id)
     except BatchNotFound:
         raise HTTPException(status_code=404, detail=f"audit package not found: {package_id}")
-    # 실제 파일 생성은 추후 구현 (S3 업로드 등)
-    return {"export_url": None}

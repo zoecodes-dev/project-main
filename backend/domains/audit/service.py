@@ -1,4 +1,5 @@
 # backend/domains/audit/service.py
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
@@ -6,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.trace import trace_node
+from backend.infrastructure.storage import upload_bytes, generate_presigned_url
 from backend.domains.audit import repository
 from backend.domains.audit.models import AuditTrail
 
@@ -136,6 +138,45 @@ async def get_audit_package(
         "checklist": checklist,
         "hash_chain": trail,
     }
+
+
+async def export_audit_package(
+    db: AsyncSession,
+    package_id: UUID,
+    tenant_id: UUID | None,
+) -> dict:
+    """
+    감사 패키지를 '완료 증빙 파일'로 내보낸다 — 패키지 번들(헤더·체크리스트·해시체인)을
+    JSON으로 직렬화해 S3에 업로드하고 presigned URL을 반환한다.
+
+    - 파일은 요청 시마다 생성(키는 package_id로 고정 → 재요청 시 덮어쓰기). 별도
+      export_url 컬럼은 두지 않는다(증빙 출처 = 스냅샷/트레일 SSOT, URL은 만료성).
+    - 없는 패키지면 get_audit_package가 BatchNotFound(→ router 404).
+    - S3 미구성 환경(로컬 자격증명 없음)에서는 업로드가 실패한다 — 프로덕션/EC2 IAM Role
+      환경에서 동작(files 도메인 업로드와 동일 전제).
+    """
+    package = await get_audit_package(db, package_id, tenant_id)  # 없으면 BatchNotFound
+
+    # 승인 순간 동결 스냅샷 원본(snapshot_data)을 번들에 포함 — 부인방지 증빙의 핵심.
+    # (package에는 건수만 있어 hash_chain과 함께 실제 증빙 데이터를 같이 싣는다.)
+    snapshots = await repository.list_audit_snapshots(db, package_id)
+    bundle = {**package, "data_snapshots": snapshots}
+
+    # datetime/UUID 등은 default=str로 직렬화. 사람이 열어볼 수 있게 indent.
+    payload = json.dumps(
+        bundle, ensure_ascii=False, indent=2, default=str
+    ).encode("utf-8")
+
+    key = f"audit-exports/{package_id}.json"
+    try:
+        await upload_bytes(key, payload, "application/json")
+        export_url = await generate_presigned_url(key)
+    except Exception as e:
+        # S3 미구성/자격증명 없음/네트워크 등 — 500 대신 부드럽게 폴백.
+        # 프론트는 export_url=None + error 문구로 "업로드 실패"를 표시한다.
+        print(f"[audit export] S3 업로드 실패 (package={package_id}): {e}")
+        return {"export_url": None, "error": "증빙 파일 업로드에 실패했습니다. 잠시 후 다시 시도해 주세요."}
+    return {"export_url": export_url}
 
 
 async def verify_chain(db: AsyncSession, batch_id: UUID) -> ChainVerification:
