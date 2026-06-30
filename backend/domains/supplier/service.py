@@ -22,7 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.supplier import repository
 from backend.domains.supplier.models import (
+    MasterFormContact,
+    MasterFormFactory,
     MasterFormRequest,
+    OnboardingSubmitRequest,
     Supplier,
     SupplierOnboarding,
     SupplierRiskProfile,
@@ -38,6 +41,11 @@ from backend.infrastructure.trace import trace_node
 #   masterform_prefill. 둘 다 무거운 LLM 스택을 끌어오지 않는 가벼운 호출이다.
 from backend.domains.submission import repository as submission_repo
 from backend.domains.supplier import masterform_prefill
+# [회원가입 — 결정 #4] 온보딩 제출은 "제출→즉시 로그인 / 중복 즉시 409"라 이벤트가 아니라
+#   동기 처리한다. 도메인 격리는 users repository '재사용 + 단일 커밋'으로 지킨다(새 계정
+#   생성 책임은 users 의 것이되, 온보딩의 단일 트랜잭션 안에서 한 번에 커밋).
+from backend.domains.users.repository import UserRepository
+from backend.infrastructure.security import get_password_hash
 
 # ── 정책 상수 ───────────────────────────────────────────────
 # 협력사 온보딩 SLA. PROJECT_CORE: 14일 미응답 → Reminder, 21일 → Escalation.
@@ -520,6 +528,137 @@ async def get_carbon_declarations(db: AsyncSession, supplier_id: UUID) -> Option
     return {
         "supplier_id": supplier_id,
         "declarations": await repository.get_carbon_declarations(db, supplier_id),
+    }
+
+
+# ============================================================
+# 협력사 회원가입(공개 온보딩) — prefill / submit (담당: 팀원 B / §4)
+#   진입은 초대 링크 ?supplierId= 키잉(invite token 없음, decision #8). 무토큰 공개.
+# ============================================================
+class OnboardingConflictError(Exception):
+    """이미 가입 완료된 supplier 재제출 또는 이메일 중복 — router 가 409 로 매핑."""
+
+
+async def get_onboarding_prefill(db: AsyncSession, supplier_id: UUID) -> Optional[dict]:
+    """공개 prefill — 비민감 필드(회사명/유형/국가)만. 없는 supplier_id면 None(→404)."""
+    supplier = await repository.get_supplier_by_id(db, supplier_id)
+    if supplier is None:
+        return None
+    return {
+        "company_name": supplier.company_name,
+        "provider_type": supplier.provider_type,
+        "country": supplier.country,
+    }
+
+
+def _build_onboarding_contacts(body: OnboardingSubmitRequest) -> List[MasterFormContact]:
+    """PIC payload → MasterFormContact. 대표(is_primary)가 하나도 없으면 첫 명을 대표로
+    승격하고, 대표에는 회사 블록의 department(본인 부서)를 보조로 채운다."""
+    any_primary = any(c.is_primary for c in body.contacts)
+    contacts: List[MasterFormContact] = []
+    for i, c in enumerate(body.contacts):
+        is_primary = c.is_primary or (not any_primary and i == 0)
+        contacts.append(MasterFormContact(
+            name=c.name,
+            role=c.role,
+            department=c.department or (body.company.department if is_primary else None),
+            email=c.email,
+            phone=c.phone,
+            is_primary=is_primary,
+        ))
+    return contacts
+
+
+async def submit_onboarding(
+    db: AsyncSession, supplier_id: UUID, body: OnboardingSubmitRequest
+) -> Optional[dict]:
+    """
+    공개 submit — 회사정보 + 문서 + PIC + 동의 전이 + 활성 계정 생성을 ★단일 트랜잭션·
+    단일 커밋★ 으로 영속화(§4). 없는 supplier_id면 None(→404). 재제출/이메일 중복은
+    OnboardingConflictError(→409). 응답 onboarding_complete=True.
+
+    ※ 도메인 격리(결정 #4): users 의 계정 생성을 동기 호출하되, 커밋은 이 트랜잭션 한 번.
+      이벤트가 아니라 동기인 이유 = "제출→즉시 로그인 / 중복 즉시 409".
+    """
+    supplier = await repository.get_supplier_by_id(db, supplier_id)
+    if supplier is None:
+        return None
+
+    users = UserRepository(db)
+    # 1) 재제출 가드 — 이미 활성 계정이 있는 supplier 면 409(decision #8).
+    if await users.get_active_by_supplier_id(supplier_id) is not None:
+        raise OnboardingConflictError("이미 가입이 완료된 협력사입니다.")
+    # 2) 이메일 중복 — users.email UNIQUE 선검사 → 409.
+    if await users.get_by_email(body.account.email) is not None:
+        raise OnboardingConflictError("이미 사용 중인 이메일입니다.")
+
+    try:
+        # 3) 회사정보 — suppliers 갱신(보낸 것만; country 는 ISO2 정규화).
+        company_fields: dict = {
+            "company_name": body.company.company_name,
+            "business_reg_no": body.company.business_reg_no,
+            "duns_number": body.company.duns_number,
+            "is_unverified": body.unverified,
+        }
+        iso = _normalize_country_to_iso2(body.company.country)
+        if iso:
+            company_fields["country"] = iso
+        if body.business_reg_doc is not None:
+            company_fields["business_reg_doc_url"] = body.business_reg_doc.s3_key
+        # None 은 제거(빈값으로 덮어쓰지 않음). is_unverified=False 는 bool 이라 보존.
+        company_fields = {k: v for k, v in company_fields.items() if v is not None}
+        await repository.update_supplier_fields(db, supplier_id, company_fields)
+
+        # 3-b) 회사 주소 — PROJECT_CORE/README §2.2: 회사 주소는 suppliers 컬럼이 아니라
+        #   '공장(본사)' 단위로 보존(supplier_factories, factory_role='headquarters').
+        #   원산지·규제 판정의 최소 단위가 공장이라는 코어 원칙. 신규 supplier라 replace-all OK.
+        if body.company.address:
+            await repository.write_master_form_factories(db, supplier_id, [
+                MasterFormFactory(
+                    factory_name=body.company.company_name,
+                    address=body.company.address,
+                    country=iso,
+                    factory_role="headquarters",
+                )
+            ])
+
+        # 4) PIC — supplier_contacts replace-all(대표 1명 is_primary).
+        await repository.write_master_form_contacts(
+            db, supplier_id, _build_onboarding_contacts(body)
+        )
+
+        # 5) 동의 전이 — supplier_onboarding.consent_status='consent_agreed'.
+        signed_at = datetime.now(timezone.utc)
+        await repository.mark_consent_agreed(db, supplier_id, signed_at)
+
+        # 6) 상태 전이 — suppliers.status='supplier_review'(원청 승인 대기).
+        await repository.set_supplier_status(db, supplier_id, "supplier_review")
+
+        # 7) 활성 계정 생성 — tenant_id=초대한 OEM, role=supplier_ceo(결정 #3).
+        primary = next((c for c in body.contacts if c.is_primary), None)
+        if primary is None and body.contacts:
+            primary = body.contacts[0]
+        await users.create_user(
+            email=body.account.email,
+            password_hash=get_password_hash(body.account.password),
+            role="supplier_ceo",
+            supplier_id=supplier_id,
+            tenant_id=supplier.tenant_id,
+            name=primary.name if primary else None,
+        )
+
+        # 8) 단일 커밋(atomic) — 여기 도달해야만 전체 영속화.
+        await db.commit()
+    except OnboardingConflictError:
+        raise
+    except Exception:
+        await db.rollback()
+        raise
+
+    return {
+        "supplier_id": supplier_id,
+        "status": "supplier_review",
+        "onboarding_complete": True,
     }
 
 

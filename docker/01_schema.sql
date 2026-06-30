@@ -101,6 +101,7 @@ CREATE TABLE suppliers (
     business_reg_doc_url    VARCHAR(500),  -- 필요문서: 사업자등록증(기업정보 서류) 업로드 URL
     environmental_report_url VARCHAR(500),  -- 필요문서: 환경성적서(회원가입 시 수집) 업로드 URL
     self_assessment_doc_url VARCHAR(500),  -- 규제: 실사 자가진단 보고서 업로드 URL(내 기업 정보에서 제출·확인)
+    is_unverified       BOOLEAN DEFAULT false,  -- 회원가입: 사업자등록증 미보유로 '미확인 상태' 등록(원청/상위가 검증)
     parent_supplier_id  UUID REFERENCES suppliers(supplier_id),
     established_year    INT,
     employee_count      INT,

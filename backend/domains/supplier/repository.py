@@ -273,6 +273,26 @@ async def get_onboarding_by_supplier(
     return result.scalars().first()
 
 
+async def mark_consent_agreed(db: AsyncSession, supplier_id: UUID, signed_at) -> None:
+    """회원가입 제출 — supplier_onboarding 동의 전이(consent_status='consent_agreed').
+    온보딩 row 는 초대 시점(create_supplier_and_invite)에 이미 존재하므로 UPDATE.
+    flush까지만 — 커밋은 service 가 단일 트랜잭션으로."""
+    await db.execute(
+        update(SupplierOnboarding)
+        .where(SupplierOnboarding.supplier_id == supplier_id)
+        .values(consent_status="consent_agreed", consent_signed_at=signed_at)
+    )
+    await db.flush()
+
+
+async def set_supplier_status(db: AsyncSession, supplier_id: UUID, status: str) -> None:
+    """suppliers.status 전이(회원가입 제출 → 'supplier_review'). flush까지만(커밋은 service)."""
+    await db.execute(
+        update(Supplier).where(Supplier.supplier_id == supplier_id).values(status=status)
+    )
+    await db.flush()
+
+
 async def get_factories(db: AsyncSession, supplier_id: UUID) -> List[dict]:
     """
     사업장 탭 — supplier_factories 목록.
