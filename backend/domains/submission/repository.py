@@ -159,11 +159,13 @@ async def create_extraction_result(
     parsed_fields: dict,
     confidence_map: dict,
     unparsed_fields: list,
+    detected_document_type: Optional[str] = None,
+    evidence_summary: Optional[str] = None,
 ) -> DocumentExtractionResult:
     """
     [INSERT] AI(data_gateway)가 문서에서 추출한 정형 데이터를
     document_extraction_results에 적재합니다.
- 
+
     * request_id / document_id는 str·UUID 둘 다 받아 여기서 UUID로 정규화한다.
       (호출부 출처마다 타입이 다름: document_id=str, request_id=UUID.
        변환 책임을 이 경계 한 곳에 모아 호출부가 타입을 신경쓰지 않게 한다.)
@@ -178,6 +180,8 @@ async def create_extraction_result(
         parsed_fields=parsed_fields,
         confidence_map=confidence_map,
         unparsed_fields=unparsed_fields,
+        detected_document_type=detected_document_type,
+        evidence_summary=evidence_summary,
     )
     db.add(record)
     await db.flush()

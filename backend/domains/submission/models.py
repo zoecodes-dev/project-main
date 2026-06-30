@@ -148,6 +148,8 @@ class DocumentExtractionResult(Base):
     parsed_fields: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     confidence_map: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     unparsed_fields: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    detected_document_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    evidence_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     supplier_confirmed: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, server_default="false", nullable=True)
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)

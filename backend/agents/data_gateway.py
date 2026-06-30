@@ -343,6 +343,8 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
         parsed_fields=parsed_fields,
         confidence_map=confidence_map,
         unparsed_fields=unparsed_fields,
+        detected_document_type=detected_doc_type or None,
+        evidence_summary=evidence_summary or None,
     )
     # AI 분류 결과를 submission_documents.doc_category에도 반영 (기존 컬럼, 동일 트랜잭션)
     await db.execute(
