@@ -43,6 +43,7 @@ from backend.domains.submission.models import (
     ExtractionResultOut,
 )
 
+from backend.domains.submission import repository as submission_repo
 from backend.agents.graph import create_batch
 from backend.infrastructure.queue import (
     enqueue,
@@ -128,7 +129,7 @@ async def list_ai_extractions_endpoint(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """협력사 자료요청 AI 파싱 결과(parsed_fields + confidence) 목록. HITL 검토·승인용."""
-    return await list_ai_extractions(db)
+    return await list_ai_extractions(db, current_user.tenant_id)
 # [REVERT-NON-SUPPLIER:END]
 
 
@@ -426,6 +427,32 @@ async def get_extraction_result(
     if not row:
         raise HTTPException(status_code=404, detail="Extraction result not found")
     return row
+
+
+@submission_documents_router.post("/{document_id}/confirm")
+async def confirm_extraction_endpoint(
+    document_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    [API] POST /submission-documents/{document_id}/confirm
+
+    해당 document_id 최신 추출결과를 검토 확정(supplier_confirmed=TRUE)한다.
+    - tenant 격리: SQL 단계에서 document → supplier → tenant_id 경로로 검증.
+    - 멱등 재호출: 이미 확정된 경우 confirmed_at을 갱신하지 않고 200 반환.
+    - tenant 불일치 또는 document 없음 모두 404 (존재 여부 노출하지 않음).
+    """
+    row = await submission_repo.confirm_extraction_result(
+        db, document_id, current_user.tenant_id
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Extraction result not found")
+    return {
+        "document_id": str(row["document_id"]),
+        "supplier_confirmed": row["supplier_confirmed"],
+        "confirmed_at": row["confirmed_at"],
+    }
 
 
 @submissions_router.patch("/{submission_id}/reject")
