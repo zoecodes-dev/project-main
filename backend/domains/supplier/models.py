@@ -56,6 +56,7 @@ class Supplier(Base):
     smelter_type: Mapped[Optional[str]] = mapped_column(String(20))  # smelter 세부 구분(rmi/private)
     core_minerals: Mapped[Optional[dict]] = mapped_column(JSONB)  # 소재 구성: 핵심광물 함량(%) {"Li":..,"Co":..,"Ni":..}
     country: Mapped[Optional[str]] = mapped_column(String(2))  # 소재 국가(ISO 3166-1 alpha-2)
+    address: Mapped[Optional[str]] = mapped_column(Text)  # 회사 주소(전체 문자열). 공장 주소와 별개 — 회사 소재지
     business_reg_doc_url: Mapped[Optional[str]] = mapped_column(String(500))  # 사업자등록증 업로드 URL
     environmental_report_url: Mapped[Optional[str]] = mapped_column(String(500))  # 환경성적서(회원가입 수집) 업로드 URL
     self_assessment_doc_url: Mapped[Optional[str]] = mapped_column(String(500))  # 실사 자가진단 보고서 업로드 URL

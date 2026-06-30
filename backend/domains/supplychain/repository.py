@@ -162,9 +162,20 @@ class SupplyChainRepository:
         map_header_id = await self._ensure_map_header(bom_version_id)  # [REVERT-NON-SUPPLIER]
         query = text("""
             INSERT INTO supply_chain_map
-                (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id)
+                (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level)
             VALUES
-                (:map_header_id, :bom_version_id, :parent_supplier_id, :child_supplier_id, :part_id)
+                (:map_header_id, :bom_version_id, :parent_supplier_id, :child_supplier_id, :part_id,
+                 -- 차수: 루트(부모 없음)=0, 자식=부모 엣지 hop_level+1.
+                 -- 설정 안 하면 NULL → n-tier 재귀 CTE(scm.hop_level=parent+1)에서 누락된다.
+                 CASE
+                     WHEN :parent_supplier_id IS NULL THEN 0
+                     ELSE COALESCE((SELECT scm2.hop_level + 1
+                                    FROM supply_chain_map scm2
+                                    WHERE scm2.child_supplier_id = :parent_supplier_id
+                                      AND scm2.bom_version_id = :bom_version_id
+                                    ORDER BY scm2.hop_level
+                                    LIMIT 1), 1)
+                 END)
             RETURNING edge_id AS map_id, parent_supplier_id, child_supplier_id, part_id;
         """)
         result = await self.session.execute(query, {
@@ -371,8 +382,6 @@ class SupplyChainRepository:
           has_carbon_intensity          : manufacturer_details.carbon_intensity 존재 여부
           has_factory_carbon_decl       : factory_carbon_declarations 행 존재 여부
           has_mine_coordinates          : miner_details.mine_coordinates 존재 여부
-          has_feoc_direct_ownership     : risk_profiles.feoc_direct_ownership 존재 여부
-          has_feoc_indirect_ownership   : risk_profiles.feoc_indirect_ownership 존재 여부
         """
         query = text("""
             WITH RECURSIVE sc_tree AS (
@@ -421,16 +430,11 @@ class SupplyChainRepository:
                     WHERE sf.supplier_id = us.supplier_id AND fcd.is_active = TRUE
                 )                                                            AS has_factory_carbon_decl,
                 -- Miner: mine_coordinates (PostGIS POINT)
-                (smind.mine_coordinates IS NOT NULL)                         AS has_mine_coordinates,
-                -- Trader/Manufacturer: FEOC 직접 지분 (risk_profiles)
-                (srp.feoc_direct_ownership IS NOT NULL)                      AS has_feoc_direct_ownership,
-                -- Trader/Manufacturer: FEOC 간접 지분 (risk_profiles)
-                (srp.feoc_indirect_ownership IS NOT NULL)                    AS has_feoc_indirect_ownership
+                (smind.mine_coordinates IS NOT NULL)                         AS has_mine_coordinates
             FROM unique_suppliers us
             LEFT JOIN root_suppliers rs                  ON rs.child_supplier_id = us.supplier_id
             LEFT JOIN supplier_manufacturer_details smd ON smd.supplier_id = us.supplier_id
             LEFT JOIN supplier_miner_details smind       ON smind.supplier_id = us.supplier_id
-            LEFT JOIN supplier_risk_profiles srp         ON srp.supplier_id = us.supplier_id
             ORDER BY us.depth, us.provider_type;
         """)
         result = await self.session.execute(query, {"product_id": product_id})
