@@ -234,6 +234,19 @@ CREATE TABLE data_provision_consents (
 CREATE INDEX idx_data_consent_supplier ON data_provision_consents(supplier_id);
 CREATE INDEX idx_data_consent_status   ON data_provision_consents(status);
 
+-- [테이블 역할] ISO 14001, Bettercoal 등 일반 품질/환경/안전 인증서 마스터.
+CREATE TABLE supplier_certifications (
+    cert_id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    supplier_id        UUID REFERENCES suppliers(supplier_id) ON DELETE CASCADE,
+    certification_type VARCHAR(100),
+    certification_no   VARCHAR(100),
+    issued_at          DATE,
+    expires_at         DATE,
+    issuing_body       VARCHAR(255),
+    document_url       VARCHAR(500)
+);
+
+
 -- ============================================================
 -- 영역 3. Provider Type별 CTI 상세 (B 담당)
 -- ============================================================
@@ -248,6 +261,28 @@ CREATE TABLE supplier_manufacturer_details (
     carbon_intensity      NUMERIC(10,4)
 );
 
+-- [테이블 역할] 재활용 비율(Co/Ni/Li 분량) 및 소스 상세. (EU 배터리법 재활용 요구 증빙)
+CREATE TABLE supplier_recycler_details (
+    detail_id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    supplier_id             UUID REFERENCES suppliers(supplier_id) ON DELETE CASCADE,
+    recycled_materials      JSONB,
+    recycling_certification VARCHAR(255),
+    input_source            VARCHAR(50),
+    recycled_content_ratio  NUMERIC(5,2),
+    -- [MF 섹션 2 · W5] 소재별 회수율(%). recycled_content_ratio(완제품 내 함량)와 독립축.
+    -- 예: {"Li":80,"Co":90,"Ni":85}
+    recycling_efficiency    JSONB
+);
+
+-- [테이블 역할] 중개 트레이더 및 상위 공급망 원산지 자율 공개율.
+CREATE TABLE supplier_trader_details (
+    detail_id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    supplier_id             UUID REFERENCES suppliers(supplier_id) ON DELETE CASCADE,
+    trading_license         VARCHAR(100),
+    broker_certification    VARCHAR(255),
+    disclosure_completeness NUMERIC(5,2) DEFAULT 0
+);
+
 -- [테이블 역할] 원료 광산 상세 정보. (Geo Audit Agent의 신장 및 DRC 위험 검증의 기준점)
 CREATE TABLE supplier_miner_details (
     detail_id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -258,6 +293,15 @@ CREATE TABLE supplier_miner_details (
     mine_coordinates   GEOMETRY(POINT, 4326),
     active_period_from DATE,
     active_period_to   DATE
+);
+
+-- [테이블 역할] 트레이더의 상위 협력사별 공개율 의무 상태 관리. (FEOC 우회 추적용 정보)
+CREATE TABLE trader_disclosure_obligation (
+    obligation_id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    trader_supplier_id      UUID REFERENCES suppliers(supplier_id) ON DELETE CASCADE,
+    upstream_supplier_id    UUID REFERENCES suppliers(supplier_id),
+    disclosure_completeness NUMERIC(5,2),
+    last_audited_at         TIMESTAMPTZ
 );
 
 
@@ -317,6 +361,96 @@ CREATE TABLE supplier_audit_records (
     created_at         TIMESTAMPTZ DEFAULT now()
 );
 
+-- [테이블 역할] 광산 등 고위험 노드의 아동 노동 및 인권 실사 리포트 이슈 목록.
+CREATE TABLE supplier_human_rights_issues (
+    issue_id    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    supplier_id UUID REFERENCES suppliers(supplier_id) ON DELETE CASCADE,
+    factory_id  UUID REFERENCES supplier_factories(factory_id) ON DELETE SET NULL,
+    issue_type  VARCHAR(50) CONSTRAINT chk_issue_type CHECK (issue_type IN ('forced_labor', 'child_labor', 'freedom_of_association', 'discrimination', 'harassment', 'wages', 'working_hours', 'other')),
+    severity    VARCHAR(20) CONSTRAINT chk_issue_severity CHECK (severity IN ('critical', 'major', 'minor')),
+    description TEXT,
+    detected_at TIMESTAMPTZ,
+    status      VARCHAR(30) CONSTRAINT chk_issue_status CHECK (status IN ('open', 'in_remediation', 'resolved', 'monitoring')),
+    source      VARCHAR(255),
+    resolved_at TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+-- [테이블 역할] 사업장 사고 재해율 및 소송 이력 관리 대장.
+CREATE TABLE supplier_industrial_accidents (
+    accident_id       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    supplier_id       UUID REFERENCES suppliers(supplier_id) ON DELETE CASCADE,
+    factory_id        UUID REFERENCES supplier_factories(factory_id) ON DELETE SET NULL,
+    accident_date     DATE NOT NULL,
+    accident_type     VARCHAR(30) CONSTRAINT chk_accident_type CHECK (accident_type IN ('fatality', 'serious_injury', 'minor_injury', 'near_miss', 'environmental')),
+    description       TEXT,
+    casualties        INT DEFAULT 0,
+    ltifr             NUMERIC(6,2),
+    status            VARCHAR(20) CONSTRAINT chk_accident_status CHECK (status IN ('reported', 'investigating', 'closed')),
+    corrective_action TEXT,
+    created_at        TIMESTAMPTZ DEFAULT now()
+);
+
+
+-- ============================================================
+-- 영역 5. 원산지 증명서 수집 전용 대장 (B 담당)
+-- ============================================================
+
+-- [테이블 역할] 포괄원산지확인서 등 협력사가 업로드한 증빙 서류의 수집 및 만료 검증을 위한 테이블. (KIRA는 증명서를 발급하지 않음)
+CREATE TABLE origin_certificates (
+    cert_id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    supplier_id       UUID REFERENCES suppliers(supplier_id) ON DELETE CASCADE,
+    factory_id        UUID REFERENCES supplier_factories(factory_id) ON DELETE SET NULL,
+    cert_type         VARCHAR(30) NOT NULL CONSTRAINT chk_cert_type CHECK (cert_type IN ('FTA', 'GSP', 'UFLPA_REBUTTAL', 'IRA_ORIGIN', 'CONFLICT_FREE', 'GENERAL')),
+    cert_number       VARCHAR(100),
+    issuing_authority VARCHAR(255),
+    issued_at         DATE,
+    expires_at        DATE NOT NULL, -- 원산지포괄확인서 기준 12개월 만료 자동 검증
+    origin_country    VARCHAR(2),
+    covered_minerals  JSONB,
+    status            VARCHAR(20) DEFAULT 'valid' CONSTRAINT chk_cert_status CHECK (status IN ('valid', 'expiring_soon', 'expired', 'under_review')),
+    document_url      VARCHAR(500),
+    created_at        TIMESTAMPTZ DEFAULT now(),
+    updated_at        TIMESTAMPTZ DEFAULT now()
+);
+
+
+-- ============================================================
+-- 영역 6. 교육 관리 (B 담당)
+-- ============================================================
+
+-- [테이블 역할] 법적 의무 공급망 이수 교육 마스터 카탈로그.
+CREATE TABLE training_materials (
+    material_id      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title            VARCHAR(255) NOT NULL,
+    title_en         VARCHAR(255),
+    category         VARCHAR(50) CONSTRAINT chk_training_category CHECK (category IN ('human_rights', 'safety', 'environmental', 'anti_corruption', 'conflict_minerals', 'data_protection', 'esg_general')),
+    description      TEXT,
+    format           VARCHAR(20) CONSTRAINT chk_training_format CHECK (format IN ('pdf', 'video', 'online', 'onsite')),
+    duration_minutes INT,
+    required_for     JSONB, -- 예: ["CSDDD"] 의무화 규제 리스트
+    version          VARCHAR(20),
+    url              VARCHAR(500),
+    updated_at       TIMESTAMPTZ DEFAULT now()
+);
+
+-- [테이블 역할] 협력사별/사업장별 연간 이수 증빙 및 진척도 추적.
+CREATE TABLE training_records (
+    record_id       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    supplier_id     UUID REFERENCES suppliers(supplier_id) ON DELETE CASCADE,
+    factory_id      UUID REFERENCES supplier_factories(factory_id) ON DELETE SET NULL,
+    material_id     UUID REFERENCES training_materials(material_id),
+    trainee_count   INT DEFAULT 0,
+    total_eligible  INT DEFAULT 0,
+    completion_rate NUMERIC(5,2) DEFAULT 0,
+    completed_at    TIMESTAMPTZ,
+    due_date        DATE NOT NULL,
+    status            VARCHAR(20) DEFAULT 'not_started' CONSTRAINT chk_training_status CHECK (status IN ('completed', 'in_progress', 'overdue', 'not_started')),
+    instructor      VARCHAR(255),
+    notes           TEXT,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now()
+);
 
 
 -- ============================================================
@@ -626,6 +760,22 @@ CREATE TABLE regulation_required_fields (
     is_mandatory               BOOLEAN DEFAULT TRUE
 );
 
+-- [테이블 역할 — C-1 신규] 규제 원문 조항 단위 청킹 + 임베딩. (가산적·무회귀: regulations 컬럼 불변)
+-- search_regulations()가 regulation_code=UNIQUE 1행에 갇혀 cited_clauses 강제가 데이터로
+-- enforce되지 않던 문제를 해결한다. citation(조항번호)+content(조항원문) 단위로 RAG 검색 대상을 만든다.
+CREATE TABLE regulation_clauses (
+    clause_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    regulation_id    UUID NOT NULL REFERENCES regulations(regulation_id) ON DELETE CASCADE,
+    citation         VARCHAR(100) NOT NULL,  -- 예: 'Art.7(2)', 'Annex XII §3'
+    content          TEXT NOT NULL,          -- 조항 원문(또는 정제된 조항 텍스트)
+    embedding_status VARCHAR(20) DEFAULT 'pending'
+        CONSTRAINT chk_clause_embedding_status CHECK (embedding_status IN ('pending', 'indexed')),
+    embedding        vector(1536), -- regulations.embedding과 동일 차원(Cohere embed-v4)
+    created_at       TIMESTAMPTZ DEFAULT now(),
+
+    CONSTRAINT uq_regulation_clause_citation UNIQUE (regulation_id, citation)
+);
+
 -- [테이블 역할] 업종 마스터별 필수 제출 서류 및 필수 키-값 쌍 스키마 사양서.
 CREATE TABLE onboarding_data_requirements (
     requirement_id   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -686,19 +836,9 @@ CREATE TABLE submission_documents (
     file_name     VARCHAR(255),
     file_type     VARCHAR(30)
         CONSTRAINT chk_doc_file_type CHECK (file_type IN ('pdf', 'xlsx', 'csv', 'image', 'docx', 'other')),
-    -- 업로드 서류의 업무상 분류. AI 파싱 전 doc_type 판별 → 유형별 파싱 프롬프트 분기 기준.
-    --   공통: business_registration / origin_certificate / dd_audit_report / feoc_ownership_declaration
-    --   manufacturer: product_spec / manufacturing_process_doc / carbon_footprint_declaration / recycled_content_report
-    --   miner: mining_permit / mineral_production_report / safety_health_report / environmental_impact_assessment
-    --   smelter: rmap_certificate / cmrt_declaration / cbam_declaration / uflpa_documentation / smelter_identification
+    -- 업로드 서류의 업무상 분류 (원산지/공장/FEOC 증빙/인증서/기타)
     doc_category  VARCHAR(50)
-        CONSTRAINT chk_doc_category CHECK (doc_category IN (
-            'business_registration', 'origin_certificate', 'dd_audit_report', 'feoc_ownership_declaration',
-            'product_spec', 'manufacturing_process_doc', 'carbon_footprint_declaration', 'recycled_content_report',
-            'mining_permit', 'mineral_production_report', 'safety_health_report', 'environmental_impact_assessment',
-            'rmap_certificate', 'cmrt_declaration', 'cbam_declaration', 'uflpa_documentation', 'smelter_identification',
-            'other'
-        )),
+        CONSTRAINT chk_doc_category CHECK (doc_category IN ('origin_cert', 'factory_doc', 'feoc_proof', 'certification', 'audit_report', 'carbon_data', 'other')),
     file_hash     VARCHAR(64), -- SHA-256, document_integrity_rule(서류-폼 불일치) 대조용
     uploaded_by   UUID REFERENCES users(user_id),
     uploaded_at   TIMESTAMPTZ DEFAULT now()
@@ -971,7 +1111,11 @@ CREATE INDEX idx_files_tenant            ON files(tenant_id);
 CREATE INDEX idx_factories_location      ON supplier_factories USING GIST(location);
 CREATE INDEX idx_miner_coords            ON supplier_miner_details USING GIST(mine_coordinates);
 
--- 2) 자재 트리 인덱스
+-- 2) 원산지 및 자재 트리 인덱스
+CREATE INDEX idx_origin_certs_supplier   ON origin_certificates(supplier_id);
+CREATE INDEX idx_origin_certs_expiry     ON origin_certificates(expires_at) WHERE status IN ('valid', 'expiring_soon');
+CREATE INDEX idx_training_records_supplier ON training_records(supplier_id);
+CREATE INDEX idx_training_records_due    ON training_records(due_date) WHERE status IN ('in_progress', 'not_started');
 CREATE INDEX idx_parts_parent            ON parts(parent_part_id);
 CREATE INDEX idx_parts_hs_code           ON parts(hs_code);
 
@@ -986,6 +1130,9 @@ CREATE INDEX idx_bom_versions_period     ON bom_versions(production_from, produc
 CREATE INDEX idx_batches_status          ON batches(status);
 CREATE INDEX idx_batches_tenant_status   ON batches(tenant_id, status);
 CREATE INDEX idx_regulations_embedding   ON regulations USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX idx_regulation_clauses_embedding ON regulation_clauses USING hnsw (embedding vector_cosine_ops); -- C-1 신규
+CREATE INDEX idx_regulation_clauses_regulation_id ON regulation_clauses(regulation_id); -- C-1 신규
+CREATE INDEX idx_regulation_clauses_pending   ON regulation_clauses(regulation_id) WHERE embedding_status = 'pending'; -- C-1 신규: 임베딩 시드 배치 조회용
 CREATE INDEX idx_compliance_supplier     ON compliance_results(supplier_id);
 
 -- 4) 워크플로우 추적 및 파싱 임시 인덱스

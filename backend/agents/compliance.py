@@ -211,39 +211,122 @@ async def search_regulations(
     """
     pgvector 코사인 유사도로 관련 규제 조항을 검색한다.
 
+    ──────────────────────────────────────────────────────────────────
+    [C-1 변경 — 은지, 2026-06-30] 조항 단위 RAG로 전환
+    ──────────────────────────────────────────────────────────────────
+
+      【변경 전 — 문제】
+        regulations 테이블 자체를 검색했다. regulation_code가 UNIQUE라
+        top_k 랭킹을 해도 후보가 항상 1행(그 규제 자신)으로 고정됐다.
+        judge가 받는 "조항"이 사실상 규제 이름+한줄설명뿐이라
+        "cited_clauses를 지어내지 마라" 룰이 데이터로 강제되지 않았다.
+
+      【변경 후 — 해결】
+        regulation_clauses JOIN regulations로 검색 대상을 바꿨다.
+        같은 regulation_code 안에서 조항 N개가 코사인 유사도로
+        진짜 랭킹된다. 반환 dict에 citation(조항번호)·content(조항원문)을
+        추가해, judge가 실제 조항을 인용할 수 있게 한다.
+
+      【시그니처·기존 키 — 절대 불변】
+        (query_text, regulation_code, db, top_k=3) → list[dict] 그대로.
+        반환 dict의 기존 키(regulation_id, regulation_code, name,
+        description, similarity)도 전부 유지 — judge 5곳 무수정 동작.
+
+      【폴백 — 시드 전 안전동작】
+        regulation_clauses에 해당 regulation_code의 indexed 행이 0개면
+        (조항 시드/임베딩 전, 또는 embeddings.py 미실행 환경) 기존
+        regulations 테이블 검색으로 자동 폴백한다. 이 경로에서는
+        citation/content가 None — _call_llm_for_verdict가 기존 방식
+        (name/description)으로 자연히 처리한다(아래 함수 참조).
+
     동작 흐름:
       1. query_text 를 벡터로 변환 (generate_embedding 호출)
-      2. regulations 테이블에서 regulation_code 필터 + embedding_status='indexed' 조건으로
-         코사인 거리(<=> 연산자)가 가장 작은(= 의미가 가장 가까운) row top_k 개 반환
-      3. 각 row를 dict로 변환해 judge 함수에 전달
+      2. regulation_clauses에서 해당 regulation_code의 indexed 조항 중
+         코사인 거리(<=> 연산자)가 가장 작은 row top_k 개 반환 시도
+      3. 0행이면 → 기존 regulations 테이블 검색으로 폴백
+      4. 각 row를 dict로 변환해 judge 함수에 전달
 
     주의:
       - embedding_status = 'indexed' 인 row만 검색 대상이다.
-        seed_regulations.py 를 먼저 실행해 임베딩을 생성해야 한다.
-      - idx_regulations_embedding (hnsw, vector_cosine_ops) 인덱스가
-        schema.sql에 이미 정의돼 있어 대용량에도 빠르게 동작한다.
+        embeddings.py의 seed_regulation_clauses() + reindex_pending_clause_embeddings()
+        를 먼저 실행해야 조항 검색이 활성화된다.
+      - idx_regulation_clauses_embedding (hnsw, vector_cosine_ops) 인덱스가
+        schema.sql에 정의돼 있어 대용량에도 빠르게 동작한다.
     """
     query_vector = await generate_embedding(query_text)
 
-    sql = text("""
+    # ── 1차: 조항 단위 검색 (regulation_clauses JOIN regulations) ──
+    clause_sql = text("""
         SELECT
-            regulation_id::text,
-            regulation_code,
-            name,
-            description,
-            1.0 - (embedding <=> :query_vector::vector) AS similarity
-        FROM regulations
+            r.regulation_id::text,
+            r.regulation_code,
+            r.name,
+            r.description,
+            rc.citation,
+            rc.content,
+            1.0 - (rc.embedding <=> cast(:query_vector as vector)) AS similarity
+        FROM regulation_clauses rc
+        JOIN regulations r ON r.regulation_id = rc.regulation_id
         WHERE
-            regulation_code  = :regulation_code
-            AND embedding_status = 'indexed'
-            AND embedding IS NOT NULL
-        ORDER BY embedding <=> :query_vector::vector
+            r.regulation_code      = :regulation_code
+            AND rc.embedding_status = 'indexed'
+            AND rc.embedding IS NOT NULL
+        ORDER BY rc.embedding <=> cast(:query_vector as vector)
         LIMIT :top_k
     """)
 
     rows = (
         await db.execute(
-            sql,
+            clause_sql,
+            {
+                "query_vector": str(query_vector),
+                "regulation_code": regulation_code,
+                "top_k": top_k,
+            },
+        )
+    ).fetchall()
+
+    if rows:
+        return [
+            {
+                "regulation_id": row.regulation_id,
+                "regulation_code": row.regulation_code,
+                "name": row.name,
+                "description": row.description,
+                "citation": row.citation,
+                "content": row.content,
+                "similarity": float(row.similarity),
+            }
+            for row in rows
+        ]
+
+    # ── 2차: 폴백 — regulation_clauses 미시드/미인덱싱 시 기존 규제 단위 검색 ──
+    # (변경 전 search_regulations 본문과 동일한 쿼리 — 시드 전 안전동작 보장)
+    logger.warning(
+        "regulation_code=%s 의 regulation_clauses indexed 행이 없어요. "
+        "regulations 테이블 폴백 검색으로 진행해요 — embeddings.py 조항 시드를 확인해주세요.",
+        regulation_code,
+    )
+
+    fallback_sql = text("""
+        SELECT
+            regulation_id::text,
+            regulation_code,
+            name,
+            description,
+            1.0 - (embedding <=> cast(:query_vector as vector)) AS similarity
+        FROM regulations
+        WHERE
+            regulation_code  = :regulation_code
+            AND embedding_status = 'indexed'
+            AND embedding IS NOT NULL
+        ORDER BY embedding <=> cast(:query_vector as vector)
+        LIMIT :top_k
+    """)
+
+    fallback_rows = (
+        await db.execute(
+            fallback_sql,
             {
                 "query_vector": str(query_vector),
                 "regulation_code": regulation_code,
@@ -258,9 +341,11 @@ async def search_regulations(
             "regulation_code": row.regulation_code,
             "name": row.name,
             "description": row.description,
+            "citation": None,   # [C-1] 폴백 경로 — 조항 인덱싱 전이라 citation 없음
+            "content": None,    # [C-1] _call_llm_for_verdict가 description으로 자동 폴백
             "similarity": float(row.similarity),
         }
-        for row in rows
+        for row in fallback_rows
     ]
 
 
@@ -342,9 +427,30 @@ async def _call_llm_for_verdict(
          → 내부적으로 Bedrock Converse API를 호출
       4. 응답에서 .content를 추출해 JSON 파싱한다.
     """
+    # ──────────────────────────────────────────────────────────────────────
+    # [C-1 변경 — 은지] clauses_text 조립 — citation/content 우선, 폴백 시 기존 방식
+    #
+    #   변경 전: f"[{i+1}] {c.get('name', regulation_code)} — {c.get('description', '')}"
+    #            → search_regulations()가 늘 규제 이름+한줄설명만 반환했으므로 이걸로 충분했다.
+    #
+    #   변경 후: search_regulations()가 이제 조항 단위 citation/content를 줄 수 있다.
+    #            c.get('content')가 있으면(=조항 단위 검색 성공) "[citation] content" 형태로
+    #            실제 조항을 인용하고, 없으면(=search_regulations 폴백 경로, regulation_clauses
+    #            미시드 상태) 기존 name/description 방식으로 자연히 떨어진다.
+    #            → search_regulations 쪽 시그니처·반환 키가 그대로이므로 이 함수도 수정 없이도
+    #              동작은 했겠지만, 조항이 있을 때 "citation 번호"를 LLM에게 보여줘야
+    #              cited_clauses.citation이 실제 조번호가 되므로 이 부분만 교체한다.
+    # ──────────────────────────────────────────────────────────────────────
+    def _format_clause(i: int, c: dict) -> str:
+        if c.get("content"):
+            # 조항 단위 검색 성공 — 실제 citation(조항번호) + content(조항원문) 사용
+            citation = c.get("citation") or f"clause-{i+1}"
+            return f"[{i+1}] {citation} — {c['content']}"
+        # 폴백 경로 — regulation_clauses 미시드 시 기존 규제 요약 방식
+        return f"[{i+1}] {c.get('name', regulation_code)} — {c.get('description', '')}"
+
     clauses_text = "\n".join(
-        f"[{i+1}] {c.get('name', regulation_code)} — {c.get('description', '')}"
-        for i, c in enumerate(clauses)
+        _format_clause(i, c) for i, c in enumerate(clauses)
     ) or (
         "(관련 조항을 찾지 못했어요. "
         "cited_clauses를 비우지 말고 verdict='compliance_reject'으로 판정하세요.)"
