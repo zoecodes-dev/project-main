@@ -760,6 +760,22 @@ CREATE TABLE regulation_required_fields (
     is_mandatory               BOOLEAN DEFAULT TRUE
 );
 
+-- [테이블 역할 — C-1 신규] 규제 원문 조항 단위 청킹 + 임베딩. (가산적·무회귀: regulations 컬럼 불변)
+-- search_regulations()가 regulation_code=UNIQUE 1행에 갇혀 cited_clauses 강제가 데이터로
+-- enforce되지 않던 문제를 해결한다. citation(조항번호)+content(조항원문) 단위로 RAG 검색 대상을 만든다.
+CREATE TABLE regulation_clauses (
+    clause_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    regulation_id    UUID NOT NULL REFERENCES regulations(regulation_id) ON DELETE CASCADE,
+    citation         VARCHAR(100) NOT NULL,  -- 예: 'Art.7(2)', 'Annex XII §3'
+    content          TEXT NOT NULL,          -- 조항 원문(또는 정제된 조항 텍스트)
+    embedding_status VARCHAR(20) DEFAULT 'pending'
+        CONSTRAINT chk_clause_embedding_status CHECK (embedding_status IN ('pending', 'indexed')),
+    embedding        vector(1536), -- regulations.embedding과 동일 차원(Cohere embed-v4)
+    created_at       TIMESTAMPTZ DEFAULT now(),
+
+    CONSTRAINT uq_regulation_clause_citation UNIQUE (regulation_id, citation)
+);
+
 -- [테이블 역할] 업종 마스터별 필수 제출 서류 및 필수 키-값 쌍 스키마 사양서.
 CREATE TABLE onboarding_data_requirements (
     requirement_id   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1112,6 +1128,9 @@ CREATE INDEX idx_bom_versions_period     ON bom_versions(production_from, produc
 CREATE INDEX idx_batches_status          ON batches(status);
 CREATE INDEX idx_batches_tenant_status   ON batches(tenant_id, status);
 CREATE INDEX idx_regulations_embedding   ON regulations USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX idx_regulation_clauses_embedding ON regulation_clauses USING hnsw (embedding vector_cosine_ops); -- C-1 신규
+CREATE INDEX idx_regulation_clauses_regulation_id ON regulation_clauses(regulation_id); -- C-1 신규
+CREATE INDEX idx_regulation_clauses_pending   ON regulation_clauses(regulation_id) WHERE embedding_status = 'pending'; -- C-1 신규: 임베딩 시드 배치 조회용
 CREATE INDEX idx_compliance_supplier     ON compliance_results(supplier_id);
 
 -- 4) 워크플로우 추적 및 파싱 임시 인덱스

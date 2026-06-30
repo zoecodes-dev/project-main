@@ -30,6 +30,20 @@ backend/domains/regulation/models.py  (담당: 팀원 C — 은지)
 [TODO — D(영수) 선행 머지 후 활성화]
   regulation_required_fields 테이블: D가 DDL을 작성 중(C1 작업).
   DDL 머지 후 하단의 RegulationRequiredField ORM 주석을 해제한다.
+
+[C-1 — 은지] regulation_clauses 테이블 ORM 추가 (2026-06-30)
+  AI_보강_가이드.md C-1: 조항 단위 RAG 적재.
+  search_regulations()가 regulation_code(UNIQUE) 1행에 갇혀 cited_clauses 강제가
+  데이터로 enforce되지 않던 문제 — 신규 테이블만 추가, 기존 Regulation 컬럼 불변.
+
+  regulation_clauses 테이블 (docker/01_schema.sql 신규):
+    clause_id        UUID PK          → RegulationClause.clause_id
+    regulation_id    UUID FK          → RegulationClause.regulation_id
+    citation         VARCHAR(100)     → RegulationClause.citation
+    content          TEXT             → RegulationClause.content
+    embedding_status VARCHAR(20)      → RegulationClause.embedding_status (pending / indexed)
+    embedding        vector(1536)     → ❌ ORM 매핑 제외 (Regulation.embedding과 동일 이유)
+    created_at       TIMESTAMPTZ      → RegulationClause.created_at
 """
 
 from __future__ import annotations
@@ -39,9 +53,9 @@ from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel
-from sqlalchemy import Date, DateTime, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.infrastructure.database import Base
 
@@ -93,12 +107,97 @@ class Regulation(Base):
     #       메모리에 로드되어 비효율적. raw SQL로 필요할 때만 접근한다.
     #       (compliance.py search_regulations, seed_regulation_embeddings.py 참조)
 
+    # ── [C-1 신규] regulation_clauses relationship ──
+    # 조항 단위 RAG 적재. search_regulations()는 raw SQL JOIN으로 조회하므로
+    # 이 relationship은 ORM 측 편의용(예: 시드 스크립트에서 reg.clauses 순회)이며
+    # judge 호출 경로(compliance.py)는 사용하지 않는다.
+    clauses: Mapped[list["RegulationClause"]] = relationship(
+        "RegulationClause",
+        back_populates="regulation",
+        cascade="all, delete-orphan",
+    )
+
     # ── TODO: D 머지 후 regulation_required_fields relationship 추가 ──
     # required_fields = relationship("RegulationRequiredField", back_populates="regulation")
 
 
 # ============================================================
-# 2. [TODO] regulation_required_fields 테이블 ORM
+# 2. regulation_clauses 테이블 ORM (C-1 신규 — 은지)
+# ============================================================
+
+class RegulationClause(Base):
+    """
+    규제 원문 조항 단위 청킹 (AI_보강_가이드.md C-1).
+
+    [왜 필요한가]
+      기존엔 Regulation.embedding 하나로 규제 전체(이름+설명)를 벡터화했다.
+      regulation_code가 UNIQUE라 search_regulations()의 top_k 랭킹이
+      항상 후보 1개(자기 자신)에 갇혔고, judge가 받는 "조항"이 사실상
+      한 줄 설명뿐이라 "cited_clauses를 지어내지 마라" 프롬프트 규칙을
+      데이터로 강제할 수 없었다.
+
+      이 테이블은 규제 1개당 조항 N개를 청킹해 각각 임베딩한다.
+      search_regulations()는 이제 regulation_id 스코프 내에서 이 테이블을
+      코사인 유사도로 랭킹해 실제 citation/content를 반환한다.
+
+    [컬럼 매핑 — schema.sql regulation_clauses 1:1 대응]
+      clause_id        UUID PK
+      regulation_id    UUID FK → regulations.regulation_id (ON DELETE CASCADE)
+      citation         VARCHAR(100)  — 조항 번호 (예: 'Art.7(2)', 'Annex XII §3')
+      content          TEXT          — 조항 원문/정제 텍스트
+      embedding_status VARCHAR(20)   — pending / indexed (Regulation과 동일 컨벤션)
+      embedding        vector(1536)  — ❌ ORM 매핑 제외, raw SQL로만 접근
+      created_at       TIMESTAMPTZ
+
+    [UNIQUE 제약]
+      (regulation_id, citation) — 같은 규제 안에서 같은 조항이 중복 시드되는 것을
+      DB 레벨에서 막는다. 시드 스크립트가 재실행돼도 안전(IF NOT EXISTS류 멱등 보장).
+    """
+    __tablename__ = "regulation_clauses"
+
+    # ── PK ──
+    clause_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    # ── FK ──
+    regulation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("regulations.regulation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # ── 기본 속성 ──
+    citation: Mapped[str] = mapped_column(String(100), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # ── 임베딩 상태 — Regulation.embedding_status와 동일 컨벤션 ──
+    embedding_status: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        default="pending",   # CHECK (embedding_status IN ('pending', 'indexed'))
+    )
+
+    # ── embedding vector(1536) 컬럼은 ORM에 매핑하지 않음 ──
+    # 이유: Regulation.embedding과 동일 — pgvector 타입은 raw SQL(text())로만 접근.
+    #       (search_regulations()의 신규 JOIN 쿼리, embeddings.py의
+    #        reindex_pending_clause_embeddings() 참조)
+
+    created_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    # ── relationship — Regulation.clauses의 역방향 ──
+    regulation: Mapped["Regulation"] = relationship(
+        "Regulation",
+        back_populates="clauses",
+    )
+
+
+# ============================================================
+# 3. [TODO] regulation_required_fields 테이블 ORM
 #    D(영수)의 C1 작업(DDL 배포) 완료 후 주석 해제
 # ============================================================
 
@@ -141,7 +240,7 @@ class Regulation(Base):
 
 
 # ============================================================
-# 3. Pydantic 응답 DTO (router.py가 반환하는 응답 스키마)
+# 4. Pydantic 응답 DTO (router.py가 반환하는 응답 스키마)
 # ============================================================
 
 class RegulationResponse(BaseModel):
@@ -179,5 +278,28 @@ class RequiredFieldResponse(BaseModel):
     field_type: Optional[str] = None
     is_mandatory: bool = True
     provider_type_applicable: Optional[list[str]] = None
+
+    model_config = {"from_attributes": True}
+
+
+class RegulationClauseResponse(BaseModel):
+    """
+    RegulationClause ORM → 검증/로깅용 DTO (C-1).
+
+    [HTTP 미노출] AI_보강_가이드.md §2 합의대로 regulation/router.py는
+    조항 검색을 엔드포인트로 노출하지 않는다. 이 DTO는 시드 스크립트
+    검증(예: `RegulationClauseResponse.model_validate(row)`)이나
+    내부 디버깅 로깅 용도로만 쓴다.
+
+    search_regulations()가 raw SQL로 반환하는 dict와 키를 맞춰뒀다
+    (regulation_id, regulation_code, citation, content, similarity).
+    """
+    clause_id: Optional[uuid.UUID] = None
+    regulation_id: uuid.UUID
+    regulation_code: Optional[str] = None
+    citation: str
+    content: str
+    embedding_status: Optional[str] = None
+    similarity: Optional[float] = None
 
     model_config = {"from_attributes": True}
