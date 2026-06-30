@@ -7,6 +7,7 @@ from uuid import UUID
 
 import asyncio
 import boto3
+import fitz  # PyMuPDF
 from pdf2image import convert_from_bytes
 from botocore.exceptions import ClientError
 
@@ -27,7 +28,9 @@ from backend.events.types import ValidationResult
 from backend.domains.supplier.masterform_prefill import catalog_prompt_lines
 
 CONFIDENCE_THRESHOLD = 0.85
-MAX_PDF_PAGES_FOR_VISION = 5
+MAX_PDF_PAGES_FOR_VISION = 5   # 이미지/텍스트 공통 상한 (Vision 요청 크기 제한)
+MIN_PDF_TEXT_CHARS = 300        # 이 미만이면 스캔 PDF로 판정 → 이미지 fallback
+MAX_PDF_TEXT_CHARS = 20000      # Bedrock 요청 크기 고려 상한 (초과분 truncate)
 
 # 모델에 "이 형식으로만 답하라"고 못박는 지시. JSON만 받아야 json.loads가 안전하다.
 # AP: 임의 키가 아니라 '마스터폼 필드명'으로 추출하게 카탈로그를 주입한다(LLM tool-use
@@ -78,6 +81,34 @@ async def _load_document_bytes(s3_key: str) -> bytes:
         raise FileNotFoundError(f"S3 object load failed (key={s3_key}): {exc}") from exc
 
 
+def _pdf_extract_text(raw_bytes: bytes, max_pages: int) -> tuple[str, bool]:
+    """PyMuPDF로 PDF 텍스트 추출. (text, page_truncated) 반환. 실패 시 예외 발생."""
+    doc = fitz.open(stream=raw_bytes, filetype="pdf")
+    total = doc.page_count
+    truncated = total > max_pages
+    parts = [
+        f"--- page {i + 1} ---\n{doc[i].get_text()}"
+        for i in range(min(total, max_pages))
+    ]
+    doc.close()
+    return "\n".join(parts), truncated
+
+
+def _pdf_to_image_blocks(raw_bytes: bytes, max_pages: int) -> tuple[list[dict], bool]:
+    """PDF 페이지를 PNG image block 리스트로 변환. (blocks, page_truncated) 반환. 실패 시 예외 발생."""
+    pages = convert_from_bytes(raw_bytes, fmt="png")
+    truncated = len(pages) > max_pages
+    if truncated:
+        pages = pages[:max_pages]
+    blocks = []
+    for page in pages:
+        buf = io.BytesIO()
+        page.save(buf, format="PNG")
+        page_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        blocks.append({"type": "image", "base64": page_b64, "mime_type": "image/png"})
+    return blocks, truncated
+
+
 @trace_tool("parse_document")
 async def parse_document(document_id: str, db: AsyncSession) -> dict:
     """
@@ -117,32 +148,45 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
         }
     ]
     pdf_truncated = False
+    pdf_text_truncated = False
+    pdf_text_extract_fallback = False
 
     if file_type == "image":
         content_blocks.append(
             {"type": "image", "base64": b64, "mime_type": _IMAGE_MIME["image"]}
         )
     elif file_type == "pdf":
-        # PDF pages are rendered to PNG images before being sent as vision blocks.
+        # Text-based PDFs are parsed via extracted text; scanned PDFs fall back to
+        # rendered page images for vision parsing.
+        text_ok = False
+        extracted_text = ""
         try:
-            pages = convert_from_bytes(raw_bytes, fmt="png")
-            if len(pages) > MAX_PDF_PAGES_FOR_VISION:
-                pages = pages[:MAX_PDF_PAGES_FOR_VISION]
-                pdf_truncated = True
-            for page in pages:
-                buf = io.BytesIO()
-                page.save(buf, format="PNG")
-                page_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-                content_blocks.append(
-                    {"type": "image", "base64": page_b64, "mime_type": "image/png"}
-                )
-        except Exception as exc:
-            error_summary = str(exc)[:100]
-            return {
-                "parsed_fields": {},
-                "confidence_map": {},
-                "unparsed_fields": [f"pdf_conversion_failed:{error_summary}"],
-            }
+            extracted_text, page_truncated = _pdf_extract_text(raw_bytes, MAX_PDF_PAGES_FOR_VISION)
+            if len("".join(extracted_text.split())) >= MIN_PDF_TEXT_CHARS:
+                text_ok = True
+                if page_truncated:
+                    pdf_truncated = True
+        except Exception:
+            pdf_text_extract_fallback = True
+
+        if text_ok:
+            if len(extracted_text) > MAX_PDF_TEXT_CHARS:
+                extracted_text = extracted_text[:MAX_PDF_TEXT_CHARS]
+                pdf_text_truncated = True
+            content_blocks[0]["text"] += f"\n\nDocument content:\n{extracted_text}"
+        else:
+            try:
+                image_blocks, page_truncated = _pdf_to_image_blocks(raw_bytes, MAX_PDF_PAGES_FOR_VISION)
+                if page_truncated:
+                    pdf_truncated = True
+                content_blocks.extend(image_blocks)
+            except Exception as exc:
+                error_summary = str(exc)[:100]
+                return {
+                    "parsed_fields": {},
+                    "confidence_map": {},
+                    "unparsed_fields": [f"pdf_conversion_failed:{error_summary}"],
+                }
     # [BYPASS:B3]
     else:
         # xlsx/csv/docx 등은 Vision 대상이 아니다. 텍스트 추출 경로가 따로 필요.
@@ -176,6 +220,10 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
 
     if pdf_truncated:
         unparsed_fields.append("pdf_truncated:processed_first_5_pages")
+    if pdf_text_truncated:
+        unparsed_fields.append("pdf_text_truncated:max_20000_chars")
+    if pdf_text_extract_fallback:
+        unparsed_fields.append("pdf_text_extract_failed:fallback_to_images")
 
     # ── 6) document_extraction_results 적재 (submission repository 위임) ──────
     #   JSONB 컬럼이라 dict/list를 그대로 넘긴다 (json.dumps로 문자열화하면
