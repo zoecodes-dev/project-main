@@ -15,10 +15,11 @@ AP(AI 파싱 강화)의 목표: 협력사가 양식을 직접 못 채워도, 보
      낮은(<임계치) 필드 목록(협력사 확인 요청 대상).
 
 스코프: '한 문서에서 단일값으로 신뢰성 있게 뽑히는' 스칼라 필드만 자동 채움 대상이다.
-다건/구조화 섹션(공장 목록·연락처·인증서·인권/실사/교육·소재별 재활용 함량·탄소
-선언 다건)은 AI 단일 추출로 안전하게 못 채우므로 협력사가 직접 입력한다.
-recycling_efficiency·recycled_materials(소재별 회수율/함량 dict)도 단일 스칼라가
-아니라 구조화 값이라 카탈로그에서 제외(협력사가 직접 입력).
+다건/구조화 섹션(공장 목록·연락처·탄소 선언 다건)은 AI 단일 추출로 안전하게 못
+채우므로 협력사가 직접 입력한다.
+[W6] master-form에서 제거된 섹션(재활용·원산지·지분FEOC, 연관 테이블 삭제)의 필드는
+저장 위치가 없으므로 카탈로그에서도 제외했다. 현재 자동 채움 대상은 company·
+manufacturing 스칼라뿐이다.
 """
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -52,22 +53,8 @@ FIELD_CATALOG: Dict[str, _FIELD] = {
     "capacity":              ("manufacturing", "str",   "생산 능력"),
     "carbon_intensity":      ("manufacturing", "float", "탄소집약도(kgCO2eq/kg)"),
 
-    # 섹션 2 — 재활용 (supplier_recycler_details · recycling_efficiency 제외=D 대기)
-    "recycling_certification": ("recycling", "str",   "재활용 인증"),
-    "input_source":            ("recycling", "str",   "투입 원료 출처"),
-    "recycled_content_ratio":  ("recycling", "float", "재활용 함량 비율(%)"),
-
-    # 섹션 3 — 원산지 (supplier_miner_details 스칼라 · GPS/증명서는 직접입력)
-    "mine_name":         ("origin", "str",   "광산명"),
-    "mining_method":     ("origin", "str",   "채굴 방식"),
-    "extraction_volume": ("origin", "float", "채굴량"),
-
-    # 섹션 4 — 지분·FEOC (supplier_trader_details + risk_profile FEOC)
-    "trading_license":         ("ownership", "str",   "거래 라이선스"),
-    "broker_certification":    ("ownership", "str",   "브로커 인증"),
-    "disclosure_completeness": ("ownership", "float", "공개 완성도(%)"),
-    "feoc_direct_ownership":   ("ownership", "float", "FEOC 직접 지분(%)"),
-    "feoc_indirect_ownership": ("ownership", "float", "FEOC 간접 지분(%)"),
+    # [W6 정리] 재활용(recycling)·원산지(origin)·지분FEOC(ownership) 섹션은 master-form에서
+    # 제거됨(연관 테이블 삭제) → 저장 위치가 없는 필드는 AI 추출 대상에서도 제외한다.
 }
 
 

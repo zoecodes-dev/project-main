@@ -14,10 +14,8 @@ Supplier 도메인 SQLAlchemy ORM + Pydantic DTO.
   hidden_regulations, operating_period_from/to, monthly_capacity,
   destination_detail, supply_ratio_percent, supply_quantity.
 - CTI 4종 누락 컬럼 보강(manufacturing_process/capacity, recycled_materials 등).
-- 누락 부속 테이블 ORM 추가: supplier_contacts, supplier_onboarding,
-  supplier_certifications, origin_certificates, training_materials,
-  training_records, supplier_audit_records, supplier_human_rights_issues,
-  supplier_industrial_accidents, trader_disclosure_obligation.
+- 부속 테이블 ORM: supplier_contacts, supplier_onboarding,
+  supplier_audit_records.
 """
 import uuid
 from datetime import date, datetime
@@ -26,7 +24,6 @@ from typing import Optional
 from geoalchemy2 import Geometry
 from pydantic import BaseModel
 
-from backend.events.types import RecycledMaterialsSchema
 from sqlalchemy import (
     Boolean, Date, DateTime, ForeignKey, Integer, NUMERIC, String, Text, func,
 )
@@ -81,13 +78,10 @@ class Supplier(Base):
 
     # CTI / 관계
     manufacturer_detail = relationship("SupplierManufacturerDetail", back_populates="supplier", uselist=False)
-    recycler_detail = relationship("SupplierRecyclerDetail", back_populates="supplier", uselist=False)
-    trader_detail = relationship("SupplierTraderDetail", back_populates="supplier", uselist=False)
     miner_detail = relationship("SupplierMinerDetail", back_populates="supplier", uselist=False)
     factories = relationship("SupplierFactory", back_populates="supplier")
     contacts = relationship("SupplierContact", back_populates="supplier")
     onboarding = relationship("SupplierOnboarding", back_populates="supplier", uselist=False)
-    certifications = relationship("SupplierCertification", back_populates="supplier")
     risk_profile = relationship("SupplierRiskProfile", back_populates="supplier", uselist=False)
     parent_supplier = relationship("Supplier", remote_side=[supplier_id], back_populates="child_suppliers")
     child_suppliers = relationship("Supplier", back_populates="parent_supplier")
@@ -167,24 +161,6 @@ class SupplierOnboarding(Base):
     supplier = relationship("Supplier", back_populates="onboarding")
 
 
-class SupplierCertification(Base):
-    """ISO 14001, Bettercoal 등 일반 품질/환경/안전 인증서 마스터."""
-    __tablename__ = "supplier_certifications"
-
-    cert_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
-    )
-    certification_type: Mapped[Optional[str]] = mapped_column(String(100))
-    certification_no: Mapped[Optional[str]] = mapped_column(String(100))
-    issued_at: Mapped[Optional[date]] = mapped_column(Date)
-    expires_at: Mapped[Optional[date]] = mapped_column(Date)
-    issuing_body: Mapped[Optional[str]] = mapped_column(String(255))
-    document_url: Mapped[Optional[str]] = mapped_column(String(500))
-
-    supplier = relationship("Supplier", back_populates="certifications")
-
-
 # ============================================================
 # 영역 3. Provider Type별 CTI 상세
 # ============================================================
@@ -222,33 +198,6 @@ class FactoryCarbonDeclaration(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-class SupplierRecyclerDetail(Base):
-    __tablename__ = "supplier_recycler_details"
-    detail_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE"), nullable=False
-    )
-    recycled_materials: Mapped[Optional[dict]] = mapped_column(JSONB)
-    recycling_certification: Mapped[Optional[str]] = mapped_column(String(255))
-    input_source: Mapped[Optional[str]] = mapped_column(String(50))
-    recycled_content_ratio: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
-    # W5 DDL 신규 컬럼: 소재별 회수율. {"Li":80,"Co":90,"Ni":85}
-    recycling_efficiency: Mapped[Optional[dict]] = mapped_column(JSONB)
-    supplier = relationship("Supplier", back_populates="recycler_detail")
-
-
-class SupplierTraderDetail(Base):
-    __tablename__ = "supplier_trader_details"
-    detail_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE"), nullable=False
-    )
-    trading_license: Mapped[Optional[str]] = mapped_column(String(100))
-    broker_certification: Mapped[Optional[str]] = mapped_column(String(255))
-    disclosure_completeness: Mapped[float] = mapped_column(NUMERIC(5, 2), default=0)
-    supplier = relationship("Supplier", back_populates="trader_detail")
-
-
 class SupplierMinerDetail(Base):
     __tablename__ = "supplier_miner_details"
     detail_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -262,20 +211,6 @@ class SupplierMinerDetail(Base):
     active_period_from: Mapped[Optional[date]] = mapped_column(Date)
     active_period_to: Mapped[Optional[date]] = mapped_column(Date)
     supplier = relationship("Supplier", back_populates="miner_detail")
-
-
-class TraderDisclosureObligation(Base):
-    """트레이더의 상위 협력사별 공개율 의무 상태(FEOC 우회 추적용)."""
-    __tablename__ = "trader_disclosure_obligation"
-    obligation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    trader_supplier_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
-    )
-    upstream_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id")
-    )
-    disclosure_completeness: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
-    last_audited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 # ============================================================
@@ -332,125 +267,6 @@ class SupplierAuditRecord(Base):
     next_audit_due: Mapped[Optional[date]] = mapped_column(Date)
     report_url: Mapped[Optional[str]] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class SupplierHumanRightsIssue(Base):
-    __tablename__ = "supplier_human_rights_issues"
-
-    issue_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
-    )
-    factory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="SET NULL")
-    )
-    issue_type: Mapped[Optional[str]] = mapped_column(String(50))
-    severity: Mapped[Optional[str]] = mapped_column(String(20))     # critical/major/minor
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    detected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    status: Mapped[Optional[str]] = mapped_column(String(30))       # open/in_remediation/resolved/monitoring
-    source: Mapped[Optional[str]] = mapped_column(String(255))
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class SupplierIndustrialAccident(Base):
-    __tablename__ = "supplier_industrial_accidents"
-
-    accident_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
-    )
-    factory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="SET NULL")
-    )
-    accident_date: Mapped[date] = mapped_column(Date, nullable=False)
-    accident_type: Mapped[Optional[str]] = mapped_column(String(30))  # fatality/serious_injury/...
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    casualties: Mapped[int] = mapped_column(Integer, default=0)
-    ltifr: Mapped[Optional[float]] = mapped_column(NUMERIC(6, 2))
-    status: Mapped[Optional[str]] = mapped_column(String(20))         # reported/investigating/closed
-    corrective_action: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-# ============================================================
-# 영역 5. 원산지 증명서 수집 전용 (발급 아님 · 수집/만료 검증)
-# ============================================================
-class OriginCertificate(Base):
-    __tablename__ = "origin_certificates"
-
-    cert_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
-    )
-    factory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="SET NULL")
-    )
-    cert_type: Mapped[str] = mapped_column(String(30), nullable=False)  # FTA/GSP/UFLPA_REBUTTAL/...
-    cert_number: Mapped[Optional[str]] = mapped_column(String(100))
-    issuing_authority: Mapped[Optional[str]] = mapped_column(String(255))
-    issued_at: Mapped[Optional[date]] = mapped_column(Date)
-    expires_at: Mapped[date] = mapped_column(Date, nullable=False)      # 12개월 만료 자동 검증
-    origin_country: Mapped[Optional[str]] = mapped_column(String(2))
-    covered_minerals: Mapped[Optional[dict]] = mapped_column(JSONB)
-    status: Mapped[str] = mapped_column(String(20), default="valid")    # valid/expiring_soon/expired/under_review
-    document_url: Mapped[Optional[str]] = mapped_column(String(500))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-
-# ============================================================
-# 영역 6. 교육 관리
-# ============================================================
-class TrainingMaterial(Base):
-    __tablename__ = "training_materials"
-
-    material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    title_en: Mapped[Optional[str]] = mapped_column(String(255))
-    category: Mapped[Optional[str]] = mapped_column(String(50))         # human_rights/safety/...
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    format: Mapped[Optional[str]] = mapped_column(String(20))           # pdf/video/online/onsite
-    duration_minutes: Mapped[Optional[int]] = mapped_column(Integer)
-    required_for: Mapped[Optional[dict]] = mapped_column(JSONB)         # 예: ["CSDDD"]
-    version: Mapped[Optional[str]] = mapped_column(String(20))
-    url: Mapped[Optional[str]] = mapped_column(String(500))
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-
-class TrainingRecord(Base):
-    __tablename__ = "training_records"
-
-    record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    supplier_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("suppliers.supplier_id", ondelete="CASCADE")
-    )
-    factory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("supplier_factories.factory_id", ondelete="SET NULL")
-    )
-    material_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("training_materials.material_id")
-    )
-    trainee_count: Mapped[int] = mapped_column(Integer, default=0)
-    total_eligible: Mapped[int] = mapped_column(Integer, default=0)
-    completion_rate: Mapped[float] = mapped_column(NUMERIC(5, 2), default=0)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    due_date: Mapped[date] = mapped_column(Date, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="not_started")  # completed/in_progress/overdue/not_started
-    instructor: Mapped[Optional[str]] = mapped_column(String(255))
-    notes: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    # material_id FK 기반 단방향 관계(교육 자료 제목/카테고리 노출용). ORM 매핑만 — 스키마 무변경.
-    material = relationship("TrainingMaterial")
 
 
 # ============================================================
@@ -525,21 +341,6 @@ class ManufacturerDetailDTO(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class RecyclerDetailDTO(BaseModel):
-    recycled_materials: Optional[dict] = None
-    recycling_certification: Optional[str] = None
-    input_source: Optional[str] = None
-    recycled_content_ratio: Optional[float] = None
-    model_config = {"from_attributes": True}
-
-
-class TraderDetailDTO(BaseModel):
-    trading_license: Optional[str] = None
-    broker_certification: Optional[str] = None
-    disclosure_completeness: Optional[float] = None
-    model_config = {"from_attributes": True}
-
-
 class MinerDetailDTO(BaseModel):
     mine_name: Optional[str] = None
     mining_method: Optional[str] = None
@@ -576,101 +377,11 @@ class SupplierDetailResponse(BaseModel):
     risk_level: str
     feoc_status: str
     manufacturer_detail: Optional[ManufacturerDetailDTO] = None
-    recycler_detail: Optional[RecyclerDetailDTO] = None
-    trader_detail: Optional[TraderDetailDTO] = None
     miner_detail: Optional[MinerDetailDTO] = None
     model_config = {"from_attributes": True}
 
 
-# ----- BE-3: 7탭 모달 조회 DTO (기존 테이블 SELECT 전용) -----
-# ESG 탭: 인증서(E) + 인권 이슈/산업재해(S) + 실사 기록(G)을 한 번에 노출.
-class CertificationDTO(BaseModel):
-    cert_id: uuid.UUID
-    certification_type: Optional[str] = None
-    certification_no: Optional[str] = None
-    issued_at: Optional[date] = None
-    expires_at: Optional[date] = None
-    issuing_body: Optional[str] = None
-    document_url: Optional[str] = None
-    model_config = {"from_attributes": True}
-
-
-class HumanRightsIssueDTO(BaseModel):
-    issue_id: uuid.UUID
-    factory_id: Optional[uuid.UUID] = None
-    issue_type: Optional[str] = None
-    severity: Optional[str] = None
-    description: Optional[str] = None
-    detected_at: Optional[datetime] = None
-    status: Optional[str] = None
-    source: Optional[str] = None
-    resolved_at: Optional[datetime] = None
-    model_config = {"from_attributes": True}
-
-
-class IndustrialAccidentDTO(BaseModel):
-    accident_id: uuid.UUID
-    factory_id: Optional[uuid.UUID] = None
-    accident_date: date
-    accident_type: Optional[str] = None
-    description: Optional[str] = None
-    casualties: int = 0
-    ltifr: Optional[float] = None
-    status: Optional[str] = None
-    corrective_action: Optional[str] = None
-    model_config = {"from_attributes": True}
-
-
-class AuditRecordDTO(BaseModel):
-    audit_record_id: uuid.UUID
-    audit_date: date
-    audit_type: Optional[str] = None
-    auditor: Optional[str] = None
-    audit_status: Optional[str] = None
-    result: Optional[str] = None
-    next_audit_due: Optional[date] = None
-    report_url: Optional[str] = None
-    model_config = {"from_attributes": True}
-
-
-class SupplierEsgResponse(BaseModel):
-    supplier_id: uuid.UUID
-    certifications: list[CertificationDTO] = []
-    human_rights_issues: list[HumanRightsIssueDTO] = []
-    industrial_accidents: list[IndustrialAccidentDTO] = []
-    audit_records: list[AuditRecordDTO] = []
-
-
-# Training 탭: training_records + training_materials(자료 메타) 조인.
-class TrainingMaterialDTO(BaseModel):
-    material_id: uuid.UUID
-    title: str
-    category: Optional[str] = None
-    format: Optional[str] = None
-    duration_minutes: Optional[int] = None
-    model_config = {"from_attributes": True}
-
-
-class TrainingRecordDTO(BaseModel):
-    record_id: uuid.UUID
-    factory_id: Optional[uuid.UUID] = None
-    trainee_count: int = 0
-    total_eligible: int = 0
-    completion_rate: Optional[float] = None
-    completed_at: Optional[datetime] = None
-    due_date: date
-    status: str
-    instructor: Optional[str] = None
-    notes: Optional[str] = None
-    material: Optional[TrainingMaterialDTO] = None
-    model_config = {"from_attributes": True}
-
-
-class SupplierTrainingResponse(BaseModel):
-    supplier_id: uuid.UUID
-    records: list[TrainingRecordDTO] = []
-
-
+# ----- BE-3: 탭 모달 조회 DTO (기존 테이블 SELECT 전용) -----
 # 사업장(공장/광산) 탭: supplier_factories. location(PostGIS POINT)은 lat/lng로 분해해 노출.
 class FactoryDTO(BaseModel):
     factory_id: uuid.UUID
@@ -727,25 +438,6 @@ class SupplierCompletenessResponse(BaseModel):
     completion_rate: Optional[float] = None
     missing_fields: list[str] = []
     last_updated_at: Optional[datetime] = None
-
-
-# 원산지/규제 증빙 — origin_certificates.
-class OriginCertDTO(BaseModel):
-    cert_id: uuid.UUID
-    cert_type: Optional[str] = None
-    cert_number: Optional[str] = None
-    issuing_authority: Optional[str] = None
-    issued_at: Optional[date] = None
-    expires_at: Optional[date] = None
-    origin_country: Optional[str] = None
-    status: Optional[str] = None
-    document_url: Optional[str] = None
-    model_config = {"from_attributes": True}
-
-
-class SupplierOriginCertsResponse(BaseModel):
-    supplier_id: uuid.UUID
-    origin_certificates: list[OriginCertDTO] = []
 
 
 # 환경성적서(탄소발자국, EU 배터리법 Art7) — 공장별 factory_carbon_declarations.
@@ -822,16 +514,10 @@ class SupplierReliabilityResponse(BaseModel):
 # 섹션 → 저장 테이블 매핑(§4):
 #   0 회사·공장·PIC      → suppliers / supplier_factories / supplier_contacts          (B)
 #   1 탄소발자국         → supplier_manufacturer_details / factory_carbon_declarations (B)
-#   2 재활용 패널·함량율 → supplier_recycler_details (recycling_efficiency 신규 DDL)    (B)
-#   3 원산지·GPS         → supplier_miner_details / origin_certificates   (C 원산지 · D GPS/geo)
-#   4 지분·FEOC          → supplier_trader_details                                      (E)
-#   5 인권·중대·교육     → supplier_human_rights_issues / supplier_audit_records /
-#                          supplier_industrial_accidents / training_records             (E)
-#   6 EoL·인증서         → supplier_certifications                                       (E)
 #
 # 좌표는 ordering 혼선(PostGIS=lng/lat, Leaflet=lat/lng)을 구조적으로 차단하기
-# 위해 latitude/longitude 명시 필드(GeoPoint)로 받는다. POINT 변환은 각 도메인의
-# write 함수가 담당한다(섹션 0 공장 location = B, 섹션 3 mine_coordinates = D).
+# 위해 latitude/longitude 명시 필드(GeoPoint)로 받는다. POINT 변환은
+# write 함수가 담당한다(섹션 0 공장 location = B).
 # ============================================================
 class GeoPoint(BaseModel):
     """좌표 — 입력은 lat/lng 명시, POINT(srid=4326) 변환은 write 함수가 수행."""
@@ -859,6 +545,7 @@ class MasterFormCompany(BaseModel):
     country: Optional[str] = None  # 소재 국가(ISO 3166-1 alpha-2)
     business_reg_doc_url: Optional[str] = None  # 사업자등록증 업로드 URL
     environmental_report_url: Optional[str] = None  # 환경성적서 업로드 URL
+    self_assessment_doc_url: Optional[str] = None  # 실사 자가진단 보고서 업로드 URL
     established_year: Optional[int] = None
     employee_count: Optional[int] = None
 
@@ -917,138 +604,18 @@ class MasterFormManufacturing(BaseModel):
     factory_declarations: list[MasterFormFactoryCarbon] = []
 
 
-# ----- 섹션 2: 재활용 패널·함량율 (supplier_recycler_details) -----
-class MasterFormRecycling(BaseModel):
-    """섹션 2 재활용 — supplier_recycler_details."""
-    recycled_materials: Optional[RecycledMaterialsSchema] = None  # 소재별 재활용 함량 %(B·C 공유 계약)
-    recycling_certification: Optional[str] = None
-    input_source: Optional[str] = None
-    recycled_content_ratio: Optional[float] = None   # 완성품 내 재활용 패널 비율 %
-    # 신규 DDL(recycling_efficiency JSONB): 소재별 회수율(함량과 별개). 예 {"Li":80,"Co":90,"Ni":85}
-    recycling_efficiency: Optional[dict] = None
-
-
-# ----- 섹션 3: 원산지·GPS (supplier_miner_details=D / origin_certificates=C) -----
-class MasterFormOriginCert(BaseModel):
-    """섹션 3 원산지 증명서 — origin_certificates (다건). 담당: C."""
-    cert_type: str                           # FTA/GSP/UFLPA_REBUTTAL/IRA_ORIGIN/CONFLICT_FREE/GENERAL
-    cert_number: Optional[str] = None
-    issuing_authority: Optional[str] = None
-    issued_at: Optional[date] = None
-    expires_at: date                         # 12개월 만료 자동 검증 대상
-    origin_country: Optional[str] = None      # ISO 3166-1 alpha-2
-    covered_minerals: Optional[dict] = None
-    document_url: Optional[str] = None
-
-
-class MasterFormOrigin(BaseModel):
-    """섹션 3 원산지·GPS — supplier_miner_details(D) + origin_certificates(C)."""
-    mine_name: Optional[str] = None
-    mining_method: Optional[str] = None
-    extraction_volume: Optional[float] = None
-    mine_coordinates: Optional[GeoPoint] = None   # GPS — D가 POINT 변환
-    active_period_from: Optional[date] = None
-    active_period_to: Optional[date] = None
-    origin_certificates: list[MasterFormOriginCert] = []
-
-
-# ----- 섹션 4: 지분·FEOC (supplier_trader_details, FEOC 라우팅은 E) -----
-class MasterFormOwnership(BaseModel):
-    """섹션 4 지분·FEOC — supplier_trader_details (FEOC 지분 라우팅은 E 결정)."""
-    trading_license: Optional[str] = None
-    broker_certification: Optional[str] = None
-    disclosure_completeness: Optional[float] = None
-    feoc_direct_ownership: Optional[float] = None    # %
-    feoc_indirect_ownership: Optional[float] = None   # %
-
-
-# ----- 섹션 5: 인권·중대·교육 (E) -----
-class MasterFormHumanRightsIssue(BaseModel):
-    """supplier_human_rights_issues (다건)."""
-    issue_type: Optional[str] = None     # forced_labor/child_labor/.../other
-    severity: Optional[str] = None       # critical/major/minor
-    description: Optional[str] = None
-    status: Optional[str] = None         # open/in_remediation/resolved/monitoring
-    source: Optional[str] = None
-
-
-class MasterFormAuditRecord(BaseModel):
-    """supplier_audit_records (다건)."""
-    audit_date: date
-    audit_type: Optional[str] = None     # on_site/remote/document_review/third_party
-    auditor: Optional[str] = None
-    audit_scope: Optional[str] = None
-    result: Optional[str] = None         # pass/conditional_pass/fail/pending
-    next_audit_due: Optional[date] = None
-    report_url: Optional[str] = None
-
-
-class MasterFormAccident(BaseModel):
-    """supplier_industrial_accidents (다건)."""
-    accident_date: date
-    accident_type: Optional[str] = None  # fatality/serious_injury/minor_injury/near_miss/environmental
-    description: Optional[str] = None
-    casualties: int = 0
-    ltifr: Optional[float] = None
-    status: Optional[str] = None         # reported/investigating/closed
-    corrective_action: Optional[str] = None
-
-
-class MasterFormTrainingRecord(BaseModel):
-    """training_records (다건)."""
-    material_id: Optional[uuid.UUID] = None
-    factory_index: Optional[int] = None  # factories 리스트 내 인덱스(선택)
-    trainee_count: int = 0
-    total_eligible: int = 0
-    completion_rate: Optional[float] = None
-    completed_at: Optional[datetime] = None
-    due_date: date
-    status: str = "not_started"          # completed/in_progress/overdue/not_started
-    instructor: Optional[str] = None
-    notes: Optional[str] = None
-
-
-class MasterFormSocial(BaseModel):
-    """섹션 5 인권·중대·교육 — 4개 테이블 묶음 (E)."""
-    human_rights_issues: list[MasterFormHumanRightsIssue] = []
-    audit_records: list[MasterFormAuditRecord] = []
-    industrial_accidents: list[MasterFormAccident] = []
-    training_records: list[MasterFormTrainingRecord] = []
-
-
-# ----- 섹션 6: EoL·인증서 (supplier_certifications, E) -----
-class MasterFormCertification(BaseModel):
-    """supplier_certifications (다건)."""
-    certification_type: Optional[str] = None
-    certification_no: Optional[str] = None
-    issued_at: Optional[date] = None
-    expires_at: Optional[date] = None
-    issuing_body: Optional[str] = None
-    document_url: Optional[str] = None
-
-
-class MasterFormCertifications(BaseModel):
-    """섹션 6 EoL·인증서 — supplier_certifications 묶음 (E)."""
-    certifications: list[MasterFormCertification] = []
-
-
 # ----- 최상위 마스터폼 요청/응답 -----
 class MasterFormRequest(BaseModel):
     """
     마스터폼 전체 요청 — POST /suppliers/{supplier_id}/master-form.
 
-    섹션 0~6 전체. 역할에 해당없는 섹션은 None 허용(섹션 0 company만 필수).
+    섹션 0~1 전체. 역할에 해당없는 섹션은 None 허용(섹션 0 company만 필수).
     service가 섹션별로 쪼개 각 도메인 write 함수 호출 → 단일 트랜잭션 commit(atomic).
     """
     company: MasterFormCompany                                  # 섹션 0 (필수)
     factories: list[MasterFormFactory] = []                     # 섹션 0
     contacts: list[MasterFormContact] = []                      # 섹션 0
     manufacturing: Optional[MasterFormManufacturing] = None     # 섹션 1
-    recycling: Optional[MasterFormRecycling] = None             # 섹션 2
-    origin: Optional[MasterFormOrigin] = None                   # 섹션 3
-    ownership: Optional[MasterFormOwnership] = None             # 섹션 4
-    social: Optional[MasterFormSocial] = None                   # 섹션 5
-    certifications: Optional[MasterFormCertifications] = None    # 섹션 6
     # 규제 — 실사 자가진단 결과(협력사 자가신고). low/medium/high (→ risk_profiles.self_reported_risk_level)
     self_reported_risk_level: Optional[str] = None
 
