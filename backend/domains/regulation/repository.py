@@ -214,12 +214,7 @@ _TEMP_REQUIRED_FIELDS: dict[str, list[dict[str, Any]]] = {
         {"field_name": "geo_risk_flags", "field_type": "jsonb",
          "is_mandatory": False, "provider_type_applicable": ["miner"]},
     ],
-    "IRA": [
-        {"field_name": "feoc_direct_ownership", "field_type": "number",
-         "is_mandatory": True, "provider_type_applicable": ["trader", "manufacturer"]},
-        {"field_name": "feoc_indirect_ownership", "field_type": "number",
-         "is_mandatory": False, "provider_type_applicable": ["trader", "manufacturer"]},
-    ],
+    # IRA(FEOC 지분)는 스코프 축소로 제거 — feoc_* 필드/테이블 삭제.
 }
 
 
