@@ -107,8 +107,13 @@ _EXTRACTION_SYSTEM = (
     + catalog_prompt_lines()
 )
 
-# image 블록에 넣을 mime 매핑 (schema file_type → mime_type)
-_IMAGE_MIME = {"image": "image/png"}  # 필요 시 jpg 등 세분화
+# 확장자 → Bedrock Converse image block mime_type (gif는 미검증이므로 제외)
+_IMAGE_FORMAT_BY_EXT = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+}
 
 # 협력사 문서 비공개 버킷 (서울). file_url 컬럼엔 이 버킷 안의 "키"가 저장된다.
 #   예: "submissions/req-001/factory_cert.pdf"   (영구 URL이 아니라 키)
@@ -202,11 +207,17 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     pdf_truncated = False
     pdf_text_truncated = False
     pdf_text_extract_failed = False
+    image_mime_type = None  # image 경로 여부 추적 (Bedrock 오류 처리용)
 
     if file_type == "image":
-        # 검증된 멀티모달 형식: text + base64 image (mime_type 필수)
+        # 파일명 확장자로 실제 mime_type 결정 — 고정 image/png 전송 금지
+        ext = file_name.rsplit(".", 1)[-1].lower() if file_name and "." in file_name else ""
+        image_mime_type = _IMAGE_FORMAT_BY_EXT.get(ext)
+        if image_mime_type is None:
+            flag = f"unsupported_image_extension:{ext}" if ext else "image_mime_type_unknown"
+            return {"parsed_fields": {}, "confidence_map": {}, "unparsed_fields": [flag]}
         b64 = base64.b64encode(raw_bytes).decode("utf-8")
-        content_blocks.append({"type": "image", "base64": b64, "mime_type": _IMAGE_MIME["image"]})
+        content_blocks.append({"type": "image", "base64": b64, "mime_type": image_mime_type})
     elif file_type == "pdf":
         # Try text extraction first; fall back to image rendering for scanned PDFs.
         pdf_text = None
@@ -267,7 +278,14 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
         SystemMessage(content=_EXTRACTION_SYSTEM),
         HumanMessage(content=content_blocks),
     ]
-    resp = await llm.ainvoke(messages)
+    try:
+        resp = await llm.ainvoke(messages)
+    except ClientError as exc:
+        if image_mime_type is not None:
+            error_summary = str(exc)[:120]
+            return {"parsed_fields": {}, "confidence_map": {},
+                    "unparsed_fields": [f"image_mime_type_mismatch:{error_summary}"]}
+        raise
 
     # ── 5) 응답 JSON 안전 파싱 (모델이 펜스를 붙이면 제거) ─────────────────────
     text_out = resp.content if isinstance(resp.content, str) else str(resp.content)
