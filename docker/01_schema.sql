@@ -706,8 +706,17 @@ CREATE TABLE submission_documents (
     file_type     VARCHAR(30)
         CONSTRAINT chk_doc_file_type CHECK (file_type IN ('pdf', 'xlsx', 'csv', 'image', 'docx', 'other')),
     -- 업로드 서류의 업무상 분류 (원산지/공장/FEOC 증빙/인증서/기타)
+    -- 허용값 SSOT = data_gateway._DOC_CATEGORY_ENUM (AI 분류 + supplier_document_ingest 매핑이 쓰는 값과 1:1).
+    -- enum 확장 시 양쪽을 함께 갱신한다.
     doc_category  VARCHAR(50)
-        CONSTRAINT chk_doc_category CHECK (doc_category IN ('origin_cert', 'factory_doc', 'feoc_proof', 'certification', 'audit_report', 'carbon_data', 'other')),
+        CONSTRAINT chk_doc_category CHECK (doc_category IN (
+            'business_registration', 'origin_certificate', 'dd_audit_report',
+            'feoc_ownership_declaration', 'product_spec', 'manufacturing_process_doc',
+            'carbon_footprint_declaration', 'recycled_content_report', 'mining_permit',
+            'mineral_production_report', 'safety_health_report', 'environmental_impact_assessment',
+            'smelter_identification', 'rmap_certificate', 'cmrt_declaration',
+            'cbam_declaration', 'uflpa_documentation', 'other'
+        )),
     file_hash     VARCHAR(64), -- SHA-256, document_integrity_rule(서류-폼 불일치) 대조용
     uploaded_by   UUID REFERENCES users(user_id),
     uploaded_at   TIMESTAMPTZ DEFAULT now()
