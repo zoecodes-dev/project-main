@@ -40,6 +40,7 @@ from backend.domains.submission.models import (
     SubmissionBriefOut,
     SubmissionDetailOut,
     SubmissionActionIn,
+    ExtractionResultOut,
 )
 
 from backend.agents.graph import create_batch
@@ -398,6 +399,33 @@ async def rework_submission(
         type("Req", (), {"actor_id": current_user.user_id, "reason": body.reason})(),
         reason=body.reason,
     )
+
+
+submission_documents_router = APIRouter(prefix="/submission-documents", tags=["Submission"])
+
+
+@submission_documents_router.get(
+    "/{document_id}/extraction-result",
+    response_model=ExtractionResultOut,
+)
+async def get_extraction_result(
+    document_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    [API] GET /submission-documents/{document_id}/extraction-result
+
+    특정 문서의 AI 파싱 결과(최신 1건)를 반환한다.
+    tenant 격리: 요청자의 tenant_id가 해당 문서 supplier의 tenant_id와 일치해야 한다.
+    미일치 또는 결과 없음 모두 404 — 타 tenant 문서 존재 여부를 노출하지 않는다.
+    """
+    row = await submission_repo.get_latest_extraction_result_by_document_id(
+        db, document_id, current_user.tenant_id
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Extraction result not found")
+    return row
 
 
 @submissions_router.patch("/{submission_id}/reject")

@@ -293,6 +293,45 @@ async def mark_job_done(
     await db.flush()
  
  
+async def get_latest_extraction_result_by_document_id(
+    db: AsyncSession,
+    document_id: uuid.UUID,
+    tenant_id,
+) -> Optional[dict]:
+    """
+    [SELECT] document_id 기준 최신 추출결과 1건을 tenant 격리 후 반환.
+
+    SQL에서 tenant_id를 JOIN + WHERE로 필터링한다(애플리케이션 레이어 사후 필터 금지).
+    document_extraction_results → submission_documents → suppliers 3단 조인.
+    tenant 불일치 또는 추출결과 없으면 None — 호출부가 동일하게 404 처리.
+    """
+    row = (await db.execute(
+        text("""
+            SELECT
+                e.extraction_id,
+                e.document_id,
+                e.parsed_fields,
+                e.confidence_map,
+                e.unparsed_fields,
+                e.detected_document_type,
+                e.evidence_summary,
+                e.supplier_confirmed,
+                e.confirmed_at,
+                e.created_at,
+                sd.doc_category
+            FROM document_extraction_results e
+            JOIN submission_documents sd ON sd.document_id = e.document_id
+            JOIN suppliers s ON s.supplier_id = sd.supplier_id
+            WHERE e.document_id = :document_id
+              AND s.tenant_id = :tenant_id
+            ORDER BY e.created_at DESC
+            LIMIT 1
+        """),
+        {"document_id": document_id, "tenant_id": str(tenant_id)},
+    )).mappings().first()
+    return dict(row) if row else None
+
+
 async def mark_job_failed(
     db: AsyncSession,
     *,
