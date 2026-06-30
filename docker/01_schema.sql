@@ -98,6 +98,7 @@ CREATE TABLE suppliers (
     smelter_type        VARCHAR(20) CONSTRAINT chk_smelter_type CHECK (smelter_type IN ('rmi', 'private')),  -- smelter 세부 구분(RMI/private)
     core_minerals       JSONB,  -- 소재 구성: 핵심광물 함량(%) {"Li":12.5,"Co":8.0,"Ni":60.0}
     country             VARCHAR(2),  -- 기본정보: 소재 국가(ISO 3166-1 alpha-2)
+    address             TEXT,  -- 기본정보: 회사 주소(전체 주소 문자열). 공장 주소(supplier_factories.address)와 별개 — 회사 소재지
     business_reg_doc_url    VARCHAR(500),  -- 필요문서: 사업자등록증(기업정보 서류) 업로드 URL
     environmental_report_url VARCHAR(500),  -- 필요문서: 환경성적서(회원가입 시 수집) 업로드 URL
     self_assessment_doc_url VARCHAR(500),  -- 규제: 실사 자가진단 보고서 업로드 URL(내 기업 정보에서 제출·확인)
