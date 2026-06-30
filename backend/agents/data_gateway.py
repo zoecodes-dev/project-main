@@ -32,18 +32,76 @@ MAX_PDF_PAGES_FOR_VISION = 5
 MIN_PDF_TEXT_CHARS = 300      # 이 이상이면 텍스트 PDF로 판단
 MAX_PDF_TEXT_CHARS = 20_000   # 초과분은 잘라서 전달
 
+_DOC_CATEGORY_ENUM = frozenset({
+    "business_registration",
+    "origin_certificate",
+    "dd_audit_report",
+    "feoc_ownership_declaration",
+    "product_spec",
+    "manufacturing_process_doc",
+    "carbon_footprint_declaration",
+    "recycled_content_report",
+    "mining_permit",
+    "mineral_production_report",
+    "safety_health_report",
+    "environmental_impact_assessment",
+    "smelter_identification",
+    "rmap_certificate",
+    "cmrt_declaration",
+    "cbam_declaration",
+    "uflpa_documentation",
+    "other",
+})
+_DOC_CATEGORY_PROMPT = " | ".join(sorted(_DOC_CATEGORY_ENUM - {"other"})) + " | other"
+
+# provider_type별 기대 doc_category 집합 (검증용, manufacturer/miner/smelter만 정의)
+_PROVIDER_CATEGORY_MAP: dict[str, frozenset] = {
+    "manufacturer": frozenset({
+        "business_registration", "dd_audit_report", "feoc_ownership_declaration",
+        "product_spec", "manufacturing_process_doc", "carbon_footprint_declaration",
+        "recycled_content_report",
+    }),
+    "miner": frozenset({
+        "business_registration", "origin_certificate", "dd_audit_report",
+        "feoc_ownership_declaration", "mining_permit", "mineral_production_report",
+        "safety_health_report", "environmental_impact_assessment",
+    }),
+    "smelter": frozenset({
+        "business_registration", "origin_certificate", "dd_audit_report",
+        "feoc_ownership_declaration", "smelter_identification", "rmap_certificate",
+        "cmrt_declaration", "cbam_declaration", "uflpa_documentation",
+    }),
+}
+# smelter가 이 카테고리 문서 제출 시 smelter 식별 필드 존재 여부를 체크한다
+_SMELTER_REF_CATEGORIES = frozenset({
+    "rmap_certificate", "cmrt_declaration", "cbam_declaration", "uflpa_documentation",
+})
+
 # 모델에 "이 형식으로만 답하라"고 못박는 지시. JSON만 받아야 json.loads가 안전하다.
 # AP: 임의 키가 아니라 '마스터폼 필드명'으로 추출하게 카탈로그를 주입한다(LLM tool-use
 #   미사용 — 구조화 JSON 프롬프트 방식, CLAUDE.md 규약). 문서에 없는 필드는 생략한다.
+#   doc_category는 문서 유형 분류용(_DOC_CATEGORY_ENUM), catalog_prompt_lines()는 추출 필드명 SSOT.
 _EXTRACTION_SYSTEM = (
     "You are a document data-extraction engine for a battery supply-chain "
     "compliance system. Read the document and return ONLY a JSON object — "
-    "no prose, no markdown fences. Schema:\n"
-    '{"parsed_fields": {<field>: <value>, ...}, '
-    '"confidence_map": {<field>: <0.0~1.0 float>, ...}, '
-    '"unparsed_fields": [<field name you could not read>, ...]}\n'
-    "confidence_map must have the same keys as parsed_fields.\n"
-    "Use ONLY the following master-form field names as keys. Omit any field "
+    "no prose, no markdown fences.\n\n"
+    "JSON schema:\n"
+    '{\n'
+    '  "doc_category": "<one of the allowed values>",\n'
+    '  "detected_document_type": "<human-readable document type in original language>",\n'
+    '  "parsed_fields": {<field>: <value>, ...},\n'
+    '  "confidence_map": {<field>: <0.0-1.0 float>, ...},\n'
+    '  "unparsed_fields": ["<field you could not extract>", ...],\n'
+    '  "evidence_summary": "<1-2 sentence summary of document content>"\n'
+    '}\n\n'
+    "doc_category rules:\n"
+    "  - Use EXACTLY one of: " + _DOC_CATEGORY_PROMPT + "\n"
+    "  - Use \"other\" when the document type is uncertain.\n"
+    "  - detected_document_type: human-readable original name "
+    "(e.g., \"Product Carbon Footprint Report\", \"RMAP Certificate\").\n\n"
+    "parsed_fields / confidence_map rules:\n"
+    "  - confidence_map must have the same keys as parsed_fields.\n"
+    "  - Use ONLY the following master-form field names as keys. Omit any field "
     "not present in the document (do NOT guess). Group labels are hints only — "
     "the JSON keys must be the quoted field names:\n"
     + catalog_prompt_lines()
@@ -95,6 +153,15 @@ def _extract_pdf_text(raw_bytes: bytes) -> tuple[str, int]:
         doc.close()
 
 
+def _is_present(value) -> bool:
+    """None 또는 공백 문자열은 없는 값, 그 외(0, False 포함)는 있는 값으로 판단."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
 @trace_tool("parse_document")
 async def parse_document(document_id: str, db: AsyncSession) -> dict:
     """
@@ -102,13 +169,15 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     document_extraction_results에 적재한다. db를 인자로 받으므로 audit_trail에 기록된다.
     반환: {"parsed_fields": {...}, "confidence_map": {...}, "unparsed_fields": [...]}
     """
-    # ── 1) 원본 문서 메타 조회 (schema: file_url / file_name / file_type) ──────
+    # ── 1) 원본 문서 메타 조회 (file_url / file_name / file_type / provider_type) ──────
     row = await db.execute(
         text(
             """
-            SELECT request_id, file_url, file_name, file_type
-            FROM submission_documents
-            WHERE document_id = :document_id
+            SELECT sd.request_id, sd.file_url, sd.file_name, sd.file_type,
+                   s.provider_type
+            FROM submission_documents sd
+            LEFT JOIN suppliers s ON s.supplier_id = sd.supplier_id
+            WHERE sd.document_id = :document_id
             """
         ),
         {"document_id": document_id},
@@ -117,7 +186,7 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     if doc is None:
         return {"parsed_fields": {}, "confidence_map": {},
                 "unparsed_fields": ["document_not_found"]}
-    request_id, file_url, file_name, file_type = doc
+    request_id, file_url, file_name, file_type, provider_type = doc
 
     # ── 2) 파일 바이트 확보 ─────────────────────────────────────────────────────
     # file_url 컬럼엔 S3 키가 저장돼 있다 (영구 URL 아님). 그 키로 바이트를 읽는다.
@@ -210,17 +279,58 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
         extracted = {"parsed_fields": {}, "confidence_map": {},
                      "unparsed_fields": ["llm_non_json_response"]}
 
-    parsed_fields = extracted.get("parsed_fields", {})
+    # extracted_fields → parsed_fields 정규화 (AI가 키 이름을 달리 쓸 경우 방어)
+    parsed_fields = extracted.get("parsed_fields") or extracted.get("extracted_fields") or {}
+    if not isinstance(parsed_fields, dict):
+        parsed_fields = {}
     confidence_map = extracted.get("confidence_map", {})
+    if not isinstance(confidence_map, dict):
+        confidence_map = {}
     unparsed_fields = extracted.get("unparsed_fields", [])
     if not isinstance(unparsed_fields, list):
         unparsed_fields = []
+
+    # doc_category 검증 — enum 밖 값이면 "other"로 강제 보정
+    raw_cat = extracted.get("doc_category", "other")
+    if not isinstance(raw_cat, str) or raw_cat not in _DOC_CATEGORY_ENUM:
+        unparsed_fields.append(f"invalid_doc_category_corrected:{raw_cat}")
+        doc_category = "other"
+    else:
+        doc_category = raw_cat
+
+    # Keep document metadata out of parsed_fields; return it at the top level.
+    detected_doc_type = extracted.get("detected_document_type", "")
+    evidence_summary = extracted.get("evidence_summary", "")
+
+    # PDF 파이프라인 플래그
     if pdf_truncated:
         unparsed_fields.append("pdf_truncated:processed_first_5_pages")
     if pdf_text_truncated:
         unparsed_fields.append("pdf_text_truncated:max_20000_chars")
     if pdf_text_extract_failed:
         unparsed_fields.append("pdf_text_extract_failed:fallback_to_images")
+
+    # provider_type vs doc_category 정합성 (provider_type이 있고 doc_category가 "other"가 아닐 때만)
+    if provider_type and provider_type in _PROVIDER_CATEGORY_MAP and doc_category != "other":
+        if doc_category not in _PROVIDER_CATEGORY_MAP[provider_type]:
+            unparsed_fields.append(
+                f"category_not_expected_for_provider:{provider_type}:{doc_category}"
+            )
+
+    # smelter 식별 경고: smelter가 참조 문서 제출 시 식별 필드가 없는 경우
+    smelter_identity_values = (
+        parsed_fields.get("smelter_name"),
+        parsed_fields.get("cid"),
+        parsed_fields.get("smelter_location"),
+    )
+    has_smelter_identity = any(_is_present(v) for v in smelter_identity_values)
+
+    if (
+        provider_type == "smelter"
+        and doc_category in _SMELTER_REF_CATEGORIES
+        and not has_smelter_identity
+    ):
+        unparsed_fields.append("missing_reference_document:smelter_identification")
 
     # ── 6) document_extraction_results 적재 (submission repository 위임) ──────
     #   JSONB 컬럼이라 dict/list를 그대로 넘긴다 (json.dumps로 문자열화하면
@@ -234,12 +344,20 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
         confidence_map=confidence_map,
         unparsed_fields=unparsed_fields,
     )
+    # AI 분류 결과를 submission_documents.doc_category에도 반영 (기존 컬럼, 동일 트랜잭션)
+    await db.execute(
+        text("UPDATE submission_documents SET doc_category = :cat WHERE document_id = :doc_id"),
+        {"cat": doc_category, "doc_id": document_id},
+    )
     await db.commit()   # 노드(도구)가 트랜잭션 경계 소유 — repository는 flush까지만
     
     
     return {"parsed_fields": parsed_fields,
             "confidence_map": confidence_map,
-            "unparsed_fields": unparsed_fields}
+            "unparsed_fields": unparsed_fields,
+            "doc_category": doc_category,
+            "detected_document_type": detected_doc_type,
+            "evidence_summary": evidence_summary}
 
 
 # ── validate_schema (spec 3-5 핵심 함수) ──────────────────────────────────
