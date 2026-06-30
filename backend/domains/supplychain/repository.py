@@ -418,6 +418,7 @@ class SupplyChainRepository:
             )
             SELECT
                 us.supplier_id,
+                s.company_name,
                 us.provider_type,
                 us.depth,
                 (rs.child_supplier_id IS NOT NULL) AS is_root_anchor,
@@ -432,6 +433,7 @@ class SupplyChainRepository:
                 -- Miner: mine_coordinates (PostGIS POINT)
                 (smind.mine_coordinates IS NOT NULL)                         AS has_mine_coordinates
             FROM unique_suppliers us
+            LEFT JOIN suppliers s                        ON s.supplier_id = us.supplier_id
             LEFT JOIN root_suppliers rs                  ON rs.child_supplier_id = us.supplier_id
             LEFT JOIN supplier_manufacturer_details smd ON smd.supplier_id = us.supplier_id
             LEFT JOIN supplier_miner_details smind       ON smind.supplier_id = us.supplier_id

@@ -402,3 +402,52 @@ async def update_map_status_endpoint(
         raise HTTPException(status_code=404, detail="Supply chain map not found")
     return result
 # [REVERT-NON-SUPPLIER:END]
+
+
+@router.get("/current-supply-source")
+async def get_current_supply_source(
+    bom_version_id: str,
+    part_id: str,
+    parent_supplier_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    자가신고 폼 '기존 공급사' 조회 — bom_version_id·part_id·parent_supplier_id 기준으로
+    supply_chain_map에서 현재 child 공급사 정보를 반환한다.
+    """
+    from sqlalchemy import text
+    result = await db.execute(
+        text("""
+            SELECT
+                s.company_name,
+                s.country,
+                p.part_name,
+                p.material_type,
+                sc.email AS contact_email
+            FROM supply_chain_map scm
+            JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
+            JOIN parts p ON p.part_id = scm.part_id
+            LEFT JOIN supplier_contacts sc
+                   ON sc.supplier_id = scm.child_supplier_id AND sc.is_primary = TRUE
+            WHERE scm.bom_version_id = :bom_version_id
+              AND scm.part_id        = :part_id
+              AND scm.parent_supplier_id = :parent_supplier_id
+            ORDER BY scm.created_at DESC
+            LIMIT 1
+        """),
+        {
+            "bom_version_id": bom_version_id,
+            "part_id": part_id,
+            "parent_supplier_id": parent_supplier_id,
+        },
+    )
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="현재 공급원 정보를 찾을 수 없습니다.")
+    return {
+        "name": row["company_name"] or "",
+        "country": row["country"] or "",
+        "material": row["part_name"] or row["material_type"] or "",
+        "contact": row["contact_email"] or "",
+    }
