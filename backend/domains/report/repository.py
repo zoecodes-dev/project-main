@@ -206,6 +206,101 @@ class ReportRepository:
         )
         return list(result.scalars().all())
 
+    # ── 리스크 요약 집계 (risk-summary) ───────────────────────────
+
+    async def aggregate_risk_summary(
+        self, tenant_id: Optional[uuid.UUID]
+    ) -> dict:
+        """
+        공급망 리스크 관리 요약용 raw 집계. 비율 계산/문장화는 service에서 수행.
+        tenant_id=None(관리 토큰)이면 전체 집계, 아니면 해당 테넌트로 격리(§0.2).
+        compliance/chain은 tenant_id 컬럼이 없어 batches / suppliers 조인으로 스코프.
+        """
+        tid = str(tenant_id) if tenant_id else None
+
+        # ① 협력사 수 + 고위험(high/critical) 수
+        sup = (await self.db.execute(text(
+            """
+            SELECT
+                COUNT(*)                                                         AS supplier_total,
+                COUNT(*) FILTER (WHERE rp.risk_level IN ('high', 'critical'))     AS high_risk_count
+            FROM suppliers s
+            LEFT JOIN supplier_risk_profiles rp ON rp.supplier_id = s.supplier_id
+            WHERE (CAST(:tid AS uuid) IS NULL OR s.tenant_id = CAST(:tid AS uuid))
+            """
+        ), {"tid": tid})).mappings().one()
+
+        # ② 실사 수행 협력사 수 + 적합 판정(pass/conditional_pass) — pending/null 제외
+        aud = (await self.db.execute(text(
+            """
+            SELECT
+                COUNT(DISTINCT a.supplier_id)                                    AS audited_suppliers,
+                COUNT(*) FILTER (WHERE a.result IN ('pass', 'conditional_pass'))  AS audit_pass,
+                COUNT(*) FILTER (WHERE a.result IN ('pass', 'conditional_pass', 'fail')) AS audit_decided
+            FROM supplier_audit_records a
+            JOIN suppliers s ON s.supplier_id = a.supplier_id
+            WHERE (CAST(:tid AS uuid) IS NULL OR s.tenant_id = CAST(:tid AS uuid))
+            """
+        ), {"tid": tid})).mappings().one()
+
+        # ③ 시정조치(CAPA) — corrective_actions JSONB 배열을 펼쳐 완료 비율 산출.
+        #    status는 JSONB 내부 자유문자열이라 완료 후보값을 넓게 잡는다.
+        capa = (await self.db.execute(text(
+            """
+            SELECT
+                COUNT(*)                                                         AS capa_total,
+                COUNT(*) FILTER (
+                    WHERE lower(item->>'status')
+                          IN ('closed', 'completed', 'resolved', 'verified', 'done')
+                )                                                                AS capa_closed
+            FROM supplier_audit_records a
+            JOIN suppliers s ON s.supplier_id = a.supplier_id
+            CROSS JOIN LATERAL jsonb_array_elements(
+                CASE WHEN jsonb_typeof(a.corrective_actions) = 'array'
+                     THEN a.corrective_actions ELSE '[]'::jsonb END
+            ) AS item
+            WHERE (CAST(:tid AS uuid) IS NULL OR s.tenant_id = CAST(:tid AS uuid))
+            """
+        ), {"tid": tid})).mappings().one()
+
+        # ④ 컴플라이언스 통과율 (기존 dashboard 패턴 재사용)
+        comp = (await self.db.execute(text(
+            """
+            SELECT
+                COUNT(*)                                                         AS compliance_total,
+                COUNT(*) FILTER (WHERE cr.verdict = 'compliance_passed')          AS compliance_passed
+            FROM compliance_results cr
+            JOIN batches b ON b.batch_id = cr.batch_id
+            WHERE (CAST(:tid AS uuid) IS NULL OR b.tenant_id = CAST(:tid AS uuid))
+            """
+        ), {"tid": tid})).mappings().one()
+
+        # ⑤ 공급망 연결 검증율 (parent_supplier → suppliers.tenant_id 로 스코프)
+        chain = (await self.db.execute(text(
+            """
+            SELECT
+                COUNT(*)                                                         AS chain_total,
+                COUNT(*) FILTER (WHERE scm.verification_status = 'verified')      AS chain_verified
+            FROM supply_chain_map scm
+            JOIN suppliers s ON s.supplier_id = scm.parent_supplier_id
+            WHERE (CAST(:tid AS uuid) IS NULL OR s.tenant_id = CAST(:tid AS uuid))
+            """
+        ), {"tid": tid})).mappings().one()
+
+        return {
+            "supplier_total":    int(sup["supplier_total"] or 0),
+            "high_risk_count":   int(sup["high_risk_count"] or 0),
+            "audited_suppliers": int(aud["audited_suppliers"] or 0),
+            "audit_pass":        int(aud["audit_pass"] or 0),
+            "audit_decided":     int(aud["audit_decided"] or 0),
+            "capa_total":        int(capa["capa_total"] or 0),
+            "capa_closed":       int(capa["capa_closed"] or 0),
+            "compliance_total":  int(comp["compliance_total"] or 0),
+            "compliance_passed": int(comp["compliance_passed"] or 0),
+            "chain_total":       int(chain["chain_total"] or 0),
+            "chain_verified":    int(chain["chain_verified"] or 0),
+        }
+
     # ── 쓰기 ──────────────────────────────────────────────────────
 
     async def add_report(self, report: Report) -> Report:

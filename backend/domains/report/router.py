@@ -71,6 +71,19 @@ async def get_inbox(
     return items
 
 
+# ── GET /reports/risk-summary  (/{reportId} 보다 먼저 선언) ──────
+
+@router.get("/risk-summary")
+async def get_risk_summary(
+    locale: str = Query(default="ko"),
+    current_user: CurrentUser = Depends(get_current_user),
+    service: ReportService = Depends(_get_service),
+):
+    """공급망 리스크 관리 요약문 + metrics. 고객사 전송용 요약의 원천.
+    locale: ko(기본). en/de는 B 단계 전까지 ko로 fallback."""
+    return await service.build_risk_summary(current_user.tenant_id, locale)
+
+
 # ── 3.2b GET /reports/{reportId} ─────────────────────────────────
 
 @router.get("/{report_id}")
@@ -96,6 +109,7 @@ async def create_report(
     try:
         report = await service.create_report(
             requester_id=current_user.user_id,
+            tenant_id=current_user.tenant_id,
             title=body.title,
             type=body.type,
             batch_id=body.related_batch,

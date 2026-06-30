@@ -5,7 +5,18 @@ from typing import List, Optional
 from backend.domains.report.models import Report, ReportApprovalStep
 from backend.domains.report.repository import ReportRepository
 from backend.domains.report.state_machine import ReportStateMachine
+from backend.domains.report.summary_templates import (
+    DEFAULT_LOCALE,
+    render_key_points,
+    render_summary,
+    section_title,
+)
 from backend.infrastructure.event_bus import publish
+
+
+def _safe_rate(numerator: int, denominator: int) -> int:
+    """0-division 방어. 정수 퍼센트 반환."""
+    return int(round(100.0 * numerator / denominator)) if denominator else 0
 
 
 class ReportService:
@@ -24,6 +35,41 @@ class ReportService:
 
     async def count_reports(self, tenant_id: Optional[uuid.UUID]) -> int:
         return await self.repo.count_reports(tenant_id)
+
+    # ── 리스크 관리 요약 (risk-summary) ─────────────────────────
+
+    def _compute_metrics(self, raw: dict) -> dict:
+        """raw 집계 → 프론트 노출 metrics(비율 정수화)."""
+        return {
+            "supplier_total":       raw["supplier_total"],
+            "high_risk_count":      raw["high_risk_count"],
+            "audited_suppliers":    raw["audited_suppliers"],
+            # audit_decided=0(전부 pending/미판정)이면 pass_rate는 0이 되어 오해를 부르므로
+            # 렌더러가 이 값으로 실사 문장 노출 여부를 판단한다.
+            "audit_decided":        raw["audit_decided"],
+            "audit_pass_rate":      _safe_rate(raw["audit_pass"], raw["audit_decided"]),
+            "capa_total":           raw["capa_total"],
+            "capa_closed":          raw["capa_closed"],
+            "capa_rate":            _safe_rate(raw["capa_closed"], raw["capa_total"]),
+            "compliance_pass_rate": _safe_rate(raw["compliance_passed"], raw["compliance_total"]),
+            "chain_verified_rate":  _safe_rate(raw["chain_verified"], raw["chain_total"]),
+        }
+
+    async def build_risk_summary(
+        self,
+        tenant_id: Optional[uuid.UUID],
+        locale: str = DEFAULT_LOCALE,
+    ) -> dict:
+        """공급망 리스크 관리 요약문 + metrics 생성. (조회/자동채움 공용)"""
+        raw = await self.repo.aggregate_risk_summary(tenant_id)
+        metrics = self._compute_metrics(raw)
+        return {
+            "section_title": section_title(locale),
+            "summary_text": render_summary(metrics, locale),
+            "key_points": render_key_points(metrics, locale),
+            "locale": locale,
+            "metrics": metrics,
+        }
 
     # ── 상세 (3.2b) ─────────────────────────────────────────────
 
@@ -54,15 +100,26 @@ class ReportService:
         self,
         *,
         requester_id: uuid.UUID,
+        tenant_id: Optional[uuid.UUID],
         title: str,
         type: str,
         batch_id: Optional[uuid.UUID],
         summary: Optional[str],
         approver_ids: List[uuid.UUID],
     ) -> Report:
-        """보고서 초안 생성 + 결재선 구성. approver_ids 순서대로 단계 배정."""
+        """보고서 초안 생성 + 결재선 구성. approver_ids 순서대로 단계 배정.
+
+        summary 미입력 시 공급망 리스크 관리 요약을 자동 생성해 채운다(스냅샷).
+        description=요약 본문, key_points=핵심 포인트 bullet.
+        """
         if not approver_ids:
             raise ValueError("approverIds 는 최소 1명 이상이어야 합니다.")
+
+        key_points: List[str] = []
+        if not summary:
+            built = await self.build_risk_summary(tenant_id)
+            summary = built["summary_text"]
+            key_points = built["key_points"]
 
         report = Report(
             requester_id=requester_id,
@@ -70,6 +127,7 @@ class ReportService:
             type=type,
             batch_id=batch_id,
             description=summary,
+            key_points=key_points,
             status="draft",
             current_step=1,
         )
