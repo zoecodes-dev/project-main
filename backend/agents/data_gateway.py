@@ -1,11 +1,13 @@
 # backend/agents/data_gateway.py
 
 import base64
+import io
 import json
 from uuid import UUID
 
 import asyncio
 import boto3
+from pdf2image import convert_from_bytes
 from botocore.exceptions import ClientError
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -25,6 +27,7 @@ from backend.events.types import ValidationResult
 from backend.domains.supplier.masterform_prefill import catalog_prompt_lines
 
 CONFIDENCE_THRESHOLD = 0.85
+MAX_PDF_PAGES_FOR_VISION = 5
 
 # 모델에 "이 형식으로만 답하라"고 못박는 지시. JSON만 받아야 json.loads가 안전하다.
 # AP: 임의 키가 아니라 '마스터폼 필드명'으로 추출하게 카탈로그를 주입한다(LLM tool-use
@@ -105,16 +108,41 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     b64 = base64.b64encode(raw_bytes).decode("utf-8")
 
     # ── 3) 파일 타입별 content 블록 구성 ──────────────────────────────────────
+    # text block은 항상 앞에 고정; 이미지/PDF 블록을 뒤에 추가한다.
+    content_blocks = [
+        {
+            "type": "text",
+            "text": f"Extract all compliance-relevant fields from this document "
+                    f"(filename: {file_name}).",
+        }
+    ]
+    pdf_truncated = False
+
     if file_type == "image":
-        # 검증된 멀티모달 형식: text + base64 image (mime_type 필수)
-        doc_block = {"type": "image", "base64": b64, "mime_type": _IMAGE_MIME["image"]}
-    # [BYPASS:B2]
+        content_blocks.append(
+            {"type": "image", "base64": b64, "mime_type": _IMAGE_MIME["image"]}
+        )
     elif file_type == "pdf":
-        # 주의: ChatBedrockConverse의 base64 PDF(document) 지원이 버전마다 다르다.
-        #       Converse document 블록 형식이 확정되면 여기에 넣는다.
-        #       당장 안 되면 PDF→이미지 변환(pdf2image) 후 image 블록으로 우회.
-        #       (PDF 파싱 라이브러리 검토는 W3 B 과제 — 그 결과로 이 분기를 확정한다.)
-        doc_block = {"type": "image", "base64": b64, "mime_type": "image/png"}  # 임시: 변환 전제
+        # PDF pages are rendered to PNG images before being sent as vision blocks.
+        try:
+            pages = convert_from_bytes(raw_bytes, fmt="png")
+            if len(pages) > MAX_PDF_PAGES_FOR_VISION:
+                pages = pages[:MAX_PDF_PAGES_FOR_VISION]
+                pdf_truncated = True
+            for page in pages:
+                buf = io.BytesIO()
+                page.save(buf, format="PNG")
+                page_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                content_blocks.append(
+                    {"type": "image", "base64": page_b64, "mime_type": "image/png"}
+                )
+        except Exception as exc:
+            error_summary = str(exc)[:100]
+            return {
+                "parsed_fields": {},
+                "confidence_map": {},
+                "unparsed_fields": [f"pdf_conversion_failed:{error_summary}"],
+            }
     # [BYPASS:B3]
     else:
         # xlsx/csv/docx 등은 Vision 대상이 아니다. 텍스트 추출 경로가 따로 필요.
@@ -126,12 +154,7 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     llm = get_llm_for_agent("data_gateway")
     messages = [
         SystemMessage(content=_EXTRACTION_SYSTEM),
-        HumanMessage(content=[
-            {"type": "text",
-             "text": f"Extract all compliance-relevant fields from this document "
-                     f"(filename: {file_name})."},
-            doc_block,
-        ]),
+        HumanMessage(content=content_blocks),
     ]
     resp = await llm.ainvoke(messages)
 
@@ -148,6 +171,11 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     parsed_fields = extracted.get("parsed_fields", {})
     confidence_map = extracted.get("confidence_map", {})
     unparsed_fields = extracted.get("unparsed_fields", [])
+    if not isinstance(unparsed_fields, list):
+        unparsed_fields = []
+
+    if pdf_truncated:
+        unparsed_fields.append("pdf_truncated:processed_first_5_pages")
 
     # ── 6) document_extraction_results 적재 (submission repository 위임) ──────
     #   JSONB 컬럼이라 dict/list를 그대로 넘긴다 (json.dumps로 문자열화하면
