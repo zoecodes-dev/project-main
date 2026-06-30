@@ -1,12 +1,15 @@
 # backend/agents/data_gateway.py
 
 import base64
+import io
 import json
 from uuid import UUID
 
 import asyncio
 import boto3
 from botocore.exceptions import ClientError
+import fitz  # PyMuPDF
+from pdf2image import convert_from_bytes, pdfinfo_from_bytes
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import text
@@ -25,6 +28,9 @@ from backend.events.types import ValidationResult
 from backend.domains.supplier.masterform_prefill import catalog_prompt_lines
 
 CONFIDENCE_THRESHOLD = 0.85
+MAX_PDF_PAGES_FOR_VISION = 5
+MIN_PDF_TEXT_CHARS = 300      # 이 이상이면 텍스트 PDF로 판단
+MAX_PDF_TEXT_CHARS = 20_000   # 초과분은 잘라서 전달
 
 # 모델에 "이 형식으로만 답하라"고 못박는 지시. JSON만 받아야 json.loads가 안전하다.
 # AP: 임의 키가 아니라 '마스터폼 필드명'으로 추출하게 카탈로그를 주입한다(LLM tool-use
@@ -75,6 +81,20 @@ async def _load_document_bytes(s3_key: str) -> bytes:
         raise FileNotFoundError(f"S3 object load failed (key={s3_key}): {exc}") from exc
 
 
+def _extract_pdf_text(raw_bytes: bytes) -> tuple[str, int]:
+    """PyMuPDF로 첫 MAX_PDF_PAGES_FOR_VISION 페이지의 텍스트를 추출한다. Returns (text, total_page_count)."""
+    doc = fitz.open(stream=raw_bytes, filetype="pdf")
+    try:
+        total_pages = doc.page_count
+        parts = []
+        for i in range(min(MAX_PDF_PAGES_FOR_VISION, total_pages)):
+            page_text = doc[i].get_text()
+            parts.append(f"--- page {i + 1} ---\n{page_text}")
+        return "\n".join(parts), total_pages
+    finally:
+        doc.close()
+
+
 @trace_tool("parse_document")
 async def parse_document(document_id: str, db: AsyncSession) -> dict:
     """
@@ -99,26 +119,76 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
                 "unparsed_fields": ["document_not_found"]}
     request_id, file_url, file_name, file_type = doc
 
-    # ── 2) 파일 바이트 확보 → base64 ──────────────────────────────────────────
+    # ── 2) 파일 바이트 확보 ─────────────────────────────────────────────────────
     # file_url 컬럼엔 S3 키가 저장돼 있다 (영구 URL 아님). 그 키로 바이트를 읽는다.
-    raw_bytes = await _load_document_bytes(file_url)        # ← 저장 방식 확정 후 구현
-    b64 = base64.b64encode(raw_bytes).decode("utf-8")
+    raw_bytes = await _load_document_bytes(file_url)
 
     # ── 3) 파일 타입별 content 블록 구성 ──────────────────────────────────────
+    text_block = {
+        "type": "text",
+        "text": f"Extract all compliance-relevant fields from this document "
+                f"(filename: {file_name}).",
+    }
+    content_blocks = [text_block]
+    pdf_truncated = False
+    pdf_text_truncated = False
+    pdf_text_extract_failed = False
+
     if file_type == "image":
         # 검증된 멀티모달 형식: text + base64 image (mime_type 필수)
-        doc_block = {"type": "image", "base64": b64, "mime_type": _IMAGE_MIME["image"]}
-    # [BYPASS:B2]
+        b64 = base64.b64encode(raw_bytes).decode("utf-8")
+        content_blocks.append({"type": "image", "base64": b64, "mime_type": _IMAGE_MIME["image"]})
     elif file_type == "pdf":
-        # 주의: ChatBedrockConverse의 base64 PDF(document) 지원이 버전마다 다르다.
-        #       Converse document 블록 형식이 확정되면 여기에 넣는다.
-        #       당장 안 되면 PDF→이미지 변환(pdf2image) 후 image 블록으로 우회.
-        #       (PDF 파싱 라이브러리 검토는 W3 B 과제 — 그 결과로 이 분기를 확정한다.)
-        doc_block = {"type": "image", "base64": b64, "mime_type": "image/png"}  # 임시: 변환 전제
-    # [BYPASS:B3]
+        # Try text extraction first; fall back to image rendering for scanned PDFs.
+        pdf_text = None
+        total_pages_from_text = None
+        try:
+            pdf_text, total_pages_from_text = _extract_pdf_text(raw_bytes)
+        except Exception:
+            pdf_text_extract_failed = True
+
+        use_text_path = (
+            pdf_text is not None
+            and len(pdf_text.replace(" ", "").replace("\n", "")) >= MIN_PDF_TEXT_CHARS
+        )
+
+        if use_text_path:
+            if total_pages_from_text > MAX_PDF_PAGES_FOR_VISION:
+                pdf_truncated = True
+            if len(pdf_text) > MAX_PDF_TEXT_CHARS:
+                pdf_text = pdf_text[:MAX_PDF_TEXT_CHARS]
+                pdf_text_truncated = True
+            content_blocks[0] = {
+                "type": "text",
+                "text": (
+                    f"Extract all compliance-relevant fields from this document "
+                    f"(filename: {file_name}).\n\nDocument content:\n{pdf_text}"
+                ),
+            }
+        else:
+            # Scanned PDF or insufficient text: render pages as images.
+            try:
+                info = pdfinfo_from_bytes(raw_bytes)
+                total_pages = info.get("Pages", 0)
+                if total_pages > MAX_PDF_PAGES_FOR_VISION:
+                    pdf_truncated = True
+                pages = convert_from_bytes(
+                    raw_bytes,
+                    first_page=1,
+                    last_page=MAX_PDF_PAGES_FOR_VISION,
+                    fmt="png",
+                )
+                for page_img in pages:
+                    buf = io.BytesIO()
+                    page_img.save(buf, format="PNG")
+                    page_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                    content_blocks.append({"type": "image", "base64": page_b64, "mime_type": "image/png"})
+            except Exception as exc:
+                error_summary = str(exc)[:120]
+                return {"parsed_fields": {}, "confidence_map": {},
+                        "unparsed_fields": [f"pdf_conversion_failed:{error_summary}"]}
     else:
         # xlsx/csv/docx 등은 Vision 대상이 아니다. 텍스트 추출 경로가 따로 필요.
-        # 추측해서 이미지로 보내면 깨지므로, 일단 미파싱으로 표시해 넘긴다.
         return {"parsed_fields": {}, "confidence_map": {},
                 "unparsed_fields": [f"unsupported_for_vision:{file_type}"]}
 
@@ -126,12 +196,7 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     llm = get_llm_for_agent("data_gateway")
     messages = [
         SystemMessage(content=_EXTRACTION_SYSTEM),
-        HumanMessage(content=[
-            {"type": "text",
-             "text": f"Extract all compliance-relevant fields from this document "
-                     f"(filename: {file_name})."},
-            doc_block,
-        ]),
+        HumanMessage(content=content_blocks),
     ]
     resp = await llm.ainvoke(messages)
 
@@ -148,6 +213,14 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     parsed_fields = extracted.get("parsed_fields", {})
     confidence_map = extracted.get("confidence_map", {})
     unparsed_fields = extracted.get("unparsed_fields", [])
+    if not isinstance(unparsed_fields, list):
+        unparsed_fields = []
+    if pdf_truncated:
+        unparsed_fields.append("pdf_truncated:processed_first_5_pages")
+    if pdf_text_truncated:
+        unparsed_fields.append("pdf_text_truncated:max_20000_chars")
+    if pdf_text_extract_failed:
+        unparsed_fields.append("pdf_text_extract_failed:fallback_to_images")
 
     # ── 6) document_extraction_results 적재 (submission repository 위임) ──────
     #   JSONB 컬럼이라 dict/list를 그대로 넘긴다 (json.dumps로 문자열화하면
