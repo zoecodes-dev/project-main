@@ -227,6 +227,7 @@ class SupplyChainService:
 
             nodes.append({
                 "supplier_id":    str(row["supplier_id"]),
+                "company_name":   row.get("company_name") or "",
                 "provider_type":  provider_type,
                 "depth":          row["depth"],
                 "is_root_anchor": bool(row.get("is_root_anchor", False)),

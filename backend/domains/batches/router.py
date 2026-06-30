@@ -2,6 +2,7 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.database import get_db
@@ -86,3 +87,39 @@ async def get_kpis(
     (내 테넌트로 격리 — §0.2)
     """
     return await get_dashboard_kpis(db, current_user.tenant_id)
+
+
+@dashboard_router.get("/supplier-stats")
+async def get_dashboard_supplier_stats(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    대시보드 협력사 집계 — suppliers 테이블에서 1쿼리로 반환.
+      - total_count        전체 협력사 수
+      - verified_count     검증 완료(supplier_verified) 수
+      - high_risk_count    고위험 이상(high/critical) 수
+      - incomplete_count   입력 미완료(completeness_score < 80) 수
+      - average_completeness  평균 완성도(%)
+    """
+    result = await db.execute(
+        text("""
+            SELECT
+                COUNT(*)                                                        AS total_count,
+                COUNT(*) FILTER (WHERE status = 'supplier_verified')           AS verified_count,
+                COUNT(*) FILTER (WHERE risk_level IN ('high', 'critical'))     AS high_risk_count,
+                COUNT(*) FILTER (WHERE completeness_score < 80)                AS incomplete_count,
+                COALESCE(ROUND(AVG(completeness_score)), 0)                    AS average_completeness
+            FROM suppliers
+            WHERE (CAST(:tenant_id AS uuid) IS NULL OR tenant_id = CAST(:tenant_id AS uuid))
+        """),
+        {"tenant_id": str(current_user.tenant_id) if current_user.tenant_id else None},
+    )
+    row = result.mappings().one()
+    return {
+        "total_count":          row["total_count"],
+        "verified_count":       row["verified_count"],
+        "high_risk_count":      row["high_risk_count"],
+        "incomplete_count":     row["incomplete_count"],
+        "average_completeness": int(row["average_completeness"]),
+    }
