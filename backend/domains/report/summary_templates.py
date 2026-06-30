@@ -6,8 +6,8 @@ domains/report/summary_templates.py
 설계 메모:
   - 요약문은 "집계 숫자 → 템플릿 렌더링" 방식이다(자유 텍스트/LLM 아님).
     같은 metrics로 KO/EN/DE를 결정론적으로 재렌더할 수 있어 다국어 확장이 쉽다.
-  - A 단계: "ko"만 구현. en/de 요청은 ko로 fallback(아래 _pick).
-    B 단계에서 TEMPLATES["en"], TEMPLATES["de"]만 추가하면 끝.
+  - 지원 locale: ko(내부 기본) / en(고객사 기본) / de(독일 고객사).
+    미지원 locale 요청은 default(ko)로 fallback(_pick).
   - 방어 규칙:
       · supplier_total == 0      → "집계할 데이터 없음" 단일 문장
       · audited_suppliers == 0   → 실사 문장 생략
@@ -104,7 +104,7 @@ def resolve_outbound_locales(country: str | None) -> list[str]:
 
 
 def _pick(locale: str) -> Dict[str, str]:
-    """미구현 locale(en/de)은 default(ko)로 fallback. B 붙이면 자동으로 실제 번역."""
+    """지원: ko/en/de. 그 외 locale은 default(ko)로 fallback."""
     return TEMPLATES.get(locale) or TEMPLATES[DEFAULT_LOCALE]
 
 
