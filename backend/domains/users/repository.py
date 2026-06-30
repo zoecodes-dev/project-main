@@ -26,6 +26,43 @@ class UserRepository:
         result = await self.db.execute(select(User).where(User.email == email))
         return result.scalar_one_or_none()
 
+    async def create_user(
+        self,
+        email: str,
+        password_hash: str,
+        role: str,
+        supplier_id: Optional[uuid.UUID] = None,
+        tenant_id: Optional[uuid.UUID] = None,
+        name: Optional[str] = None,
+        is_active: bool = True,
+    ) -> User:
+        """
+        계정 신규 생성. 협력사 온보딩 제출 시 supplier service가 동기 호출한다(회원가입).
+        커밋하지 않는다(flush만) — 온보딩의 단일 트랜잭션을 호출 service가 한 번에 커밋.
+        이메일 UNIQUE 중복은 호출부가 get_by_email 로 선검사해 409로 매핑한다.
+        """
+        user = User(
+            email=email,
+            password_hash=password_hash,
+            role=role,
+            supplier_id=supplier_id,
+            tenant_id=tenant_id,
+            name=name,
+            is_active=is_active,
+        )
+        self.db.add(user)
+        await self.db.flush()
+        return user
+
+    async def get_active_by_supplier_id(self, supplier_id: uuid.UUID) -> Optional[User]:
+        """supplier 의 활성 계정 단건. 온보딩 재제출 가드(이미 가입된 supplier → 409)용."""
+        result = await self.db.execute(
+            select(User).where(
+                User.supplier_id == supplier_id, User.is_active.is_(True)
+            )
+        )
+        return result.scalars().first()
+
     async def get_manager_chain(self, user_id: uuid.UUID) -> List[User]:
         """
         user_id 에서 manager_id 를 따라 NULL 에 도달할 때까지 순회.

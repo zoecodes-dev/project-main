@@ -159,11 +159,13 @@ async def create_extraction_result(
     parsed_fields: dict,
     confidence_map: dict,
     unparsed_fields: list,
+    detected_document_type: Optional[str] = None,
+    evidence_summary: Optional[str] = None,
 ) -> DocumentExtractionResult:
     """
     [INSERT] AI(data_gateway)가 문서에서 추출한 정형 데이터를
     document_extraction_results에 적재합니다.
- 
+
     * request_id / document_id는 str·UUID 둘 다 받아 여기서 UUID로 정규화한다.
       (호출부 출처마다 타입이 다름: document_id=str, request_id=UUID.
        변환 책임을 이 경계 한 곳에 모아 호출부가 타입을 신경쓰지 않게 한다.)
@@ -178,6 +180,8 @@ async def create_extraction_result(
         parsed_fields=parsed_fields,
         confidence_map=confidence_map,
         unparsed_fields=unparsed_fields,
+        detected_document_type=detected_document_type,
+        evidence_summary=evidence_summary,
     )
     db.add(record)
     await db.flush()
@@ -216,14 +220,16 @@ async def list_extraction_results_by_suppliers(
 
 # [REVERT-NON-SUPPLIER:BEGIN] HITL 협력사 승인 — AI 추출(parsed_fields+confidence) + 협력사 + hitl_reviews 연결.
 #   submission 도메인(비-supplier). 최종 작업 시 이 함수 + 엔드포인트 원복.
-async def list_extractions_for_review(db: AsyncSession) -> list[dict]:
+async def list_extractions_for_review(db: AsyncSession, tenant_id) -> list[dict]:
     """AI 파싱 추출결과 + 협력사명 + 요청유형/상태 + (연결된 경우) hitl_reviews 검토 상태."""
     q = text("""
         SELECT e.request_id, e.parsed_fields, e.confidence_map, e.unparsed_fields,
+               e.detected_document_type, e.evidence_summary,
                d.target_supplier_id, d.requested_data_type, d.submission_status, d.batch_id,
                s.company_name,
-               sd.file_url   AS doc_s3_key,
-               sd.file_name  AS doc_file_name,
+               sd.file_url      AS doc_s3_key,
+               sd.file_name     AS doc_file_name,
+               sd.doc_category,
                h.review_id  AS hitl_review_id,
                h.status     AS hitl_status,
                h.reason     AS hitl_reason
@@ -232,9 +238,10 @@ async def list_extractions_for_review(db: AsyncSession) -> list[dict]:
         JOIN suppliers s        ON s.supplier_id = d.target_supplier_id
         LEFT JOIN submission_documents sd ON sd.document_id = e.document_id
         LEFT JOIN hitl_reviews h ON h.batch_id = d.batch_id
+        WHERE s.tenant_id = :tenant_id
         ORDER BY e.created_at DESC
     """)
-    result = await db.execute(q)
+    result = await db.execute(q, {"tenant_id": str(tenant_id)})
     return [dict(r) for r in result.mappings().all()]
 # [REVERT-NON-SUPPLIER:END]
 
@@ -289,6 +296,45 @@ async def mark_job_done(
     await db.flush()
  
  
+async def get_latest_extraction_result_by_document_id(
+    db: AsyncSession,
+    document_id: uuid.UUID,
+    tenant_id,
+) -> Optional[dict]:
+    """
+    [SELECT] document_id 기준 최신 추출결과 1건을 tenant 격리 후 반환.
+
+    SQL에서 tenant_id를 JOIN + WHERE로 필터링한다(애플리케이션 레이어 사후 필터 금지).
+    document_extraction_results → submission_documents → suppliers 3단 조인.
+    tenant 불일치 또는 추출결과 없으면 None — 호출부가 동일하게 404 처리.
+    """
+    row = (await db.execute(
+        text("""
+            SELECT
+                e.extraction_id,
+                e.document_id,
+                e.parsed_fields,
+                e.confidence_map,
+                e.unparsed_fields,
+                e.detected_document_type,
+                e.evidence_summary,
+                e.supplier_confirmed,
+                e.confirmed_at,
+                e.created_at,
+                sd.doc_category
+            FROM document_extraction_results e
+            JOIN submission_documents sd ON sd.document_id = e.document_id
+            JOIN suppliers s ON s.supplier_id = sd.supplier_id
+            WHERE e.document_id = :document_id
+              AND s.tenant_id = :tenant_id
+            ORDER BY e.created_at DESC
+            LIMIT 1
+        """),
+        {"document_id": document_id, "tenant_id": str(tenant_id)},
+    )).mappings().first()
+    return dict(row) if row else None
+
+
 async def mark_job_failed(
     db: AsyncSession,
     *,
@@ -302,3 +348,42 @@ async def mark_job_failed(
         job.error_text = error_text
         job.retry_count = (job.retry_count or 0) + 1
     await db.flush()
+
+
+async def confirm_extraction_result(
+    db: AsyncSession,
+    document_id: uuid.UUID,
+    tenant_id,
+) -> Optional[dict]:
+    """
+    [UPDATE] document_id 최신 추출결과를 supplier_confirmed=TRUE로 확정.
+
+    tenant 격리: document_extraction_results → submission_documents → suppliers.tenant_id
+    를 SQL JOIN + WHERE 에서 검증한다 (애플리케이션 레이어 사후 체크 금지).
+
+    멱등성: 이미 supplier_confirmed=TRUE이면 confirmed_at을 갱신하지 않는다.
+    tenant 불일치 또는 document_id 없음 모두 None 반환 — 호출부가 404 처리.
+    """
+    row = (await db.execute(
+        text("""
+            UPDATE document_extraction_results
+            SET
+                supplier_confirmed = TRUE,
+                confirmed_at = CASE WHEN supplier_confirmed = TRUE THEN confirmed_at ELSE now() END
+            WHERE extraction_id = (
+                SELECT e.extraction_id
+                FROM document_extraction_results e
+                JOIN submission_documents sd ON sd.document_id = e.document_id
+                JOIN suppliers s ON s.supplier_id = sd.supplier_id
+                WHERE e.document_id = :document_id
+                  AND s.tenant_id = :tenant_id
+                ORDER BY e.created_at DESC
+                LIMIT 1
+            )
+            RETURNING extraction_id, document_id, supplier_confirmed, confirmed_at
+        """),
+        {"document_id": document_id, "tenant_id": str(tenant_id)},
+    )).mappings().first()
+    if row:
+        await db.commit()
+    return dict(row) if row else None

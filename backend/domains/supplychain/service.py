@@ -185,8 +185,7 @@ class SupplyChainService:
             "carbon_intensity":          "has_carbon_intensity",
             "factory_carbon_declarations": "has_factory_carbon_decl",
             "mine_coordinates":          "has_mine_coordinates",
-            "feoc_direct_ownership":     "has_feoc_direct_ownership",
-            "feoc_indirect_ownership":   "has_feoc_indirect_ownership",
+            # FEOC(feoc_direct/indirect_ownership)는 스코프 축소로 제거됨.
             # geo_risk_flags: 지오 감사에서 실시간 계산 — 항상 보유로 간주
         }
 

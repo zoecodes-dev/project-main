@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
-from typing import Optional, List
+from typing import Any, Optional, List
 from decimal import Decimal
 import uuid
 from pydantic import BaseModel, ConfigDict
@@ -148,6 +148,8 @@ class DocumentExtractionResult(Base):
     parsed_fields: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     confidence_map: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     unparsed_fields: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    detected_document_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    evidence_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     supplier_confirmed: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, server_default="false", nullable=True)
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
@@ -289,3 +291,19 @@ class SubmissionDetailOut(SubmissionBriefOut):
 class SubmissionActionIn(BaseModel):
     """4.1c/d/e 요청 바디"""
     reason: Optional[str] = None
+
+
+class ExtractionResultOut(BaseModel):
+    """GET /submission-documents/{document_id}/extraction-result 응답 스키마."""
+    document_id: uuid.UUID
+    doc_category: Optional[str] = None
+    detected_document_type: Optional[str] = None
+    evidence_summary: Optional[str] = None
+    parsed_fields: Optional[dict] = None
+    confidence_map: Optional[dict] = None
+    unparsed_fields: Optional[Any] = None  # JSONB — list in practice
+    created_at: Optional[datetime] = None
+    supplier_confirmed: Optional[bool] = None
+    confirmed_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)

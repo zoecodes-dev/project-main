@@ -56,9 +56,11 @@ class Supplier(Base):
     smelter_type: Mapped[Optional[str]] = mapped_column(String(20))  # smelter 세부 구분(rmi/private)
     core_minerals: Mapped[Optional[dict]] = mapped_column(JSONB)  # 소재 구성: 핵심광물 함량(%) {"Li":..,"Co":..,"Ni":..}
     country: Mapped[Optional[str]] = mapped_column(String(2))  # 소재 국가(ISO 3166-1 alpha-2)
+    address: Mapped[Optional[str]] = mapped_column(Text)  # 회사 주소(전체 문자열). 공장 주소와 별개 — 회사 소재지
     business_reg_doc_url: Mapped[Optional[str]] = mapped_column(String(500))  # 사업자등록증 업로드 URL
     environmental_report_url: Mapped[Optional[str]] = mapped_column(String(500))  # 환경성적서(회원가입 수집) 업로드 URL
     self_assessment_doc_url: Mapped[Optional[str]] = mapped_column(String(500))  # 실사 자가진단 보고서 업로드 URL
+    is_unverified: Mapped[bool] = mapped_column(Boolean, default=False)  # 회원가입: 사업자등록증 미보유 '미확인 등록'
     parent_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("suppliers.supplier_id")
     )
@@ -639,3 +641,66 @@ class MasterFormPrefillResponse(BaseModel):
     unconfirmed_documents: int = 0   # 협력사 미확인(confirm 전) 문서 수
     prefill: dict = {}               # {"company": {...}, "manufacturing": {...}, ...}
     low_confidence_fields: list[dict] = []
+
+
+# ============================================================
+# 협력사 회원가입(공개 온보딩) — prefill / submit 계약 (담당: 팀원 B)
+#
+# 진입은 초대 링크 ?supplierId= 키잉(invite token 없음, decision #8). 두 엔드포인트
+# 모두 무토큰 공개. prefill 은 비민감 필드만, submit 은 단일 트랜잭션으로 회사정보 +
+# 문서 + PIC + 동의 전이 + 활성 계정 생성을 한 번에 영속화한다(§4).
+# ============================================================
+class OnboardingPrefillResponse(BaseModel):
+    """공개 prefill — 비민감 필드만(회사명/유형/국가). 1차 협력사 진입 시 확인용."""
+    company_name: str
+    provider_type: str
+    country: Optional[str] = None
+    model_config = {"from_attributes": True}
+
+
+class OnboardingAccount(BaseModel):
+    """로그인 계정 — 제출 즉시 활성 계정 생성(비번 즉시 설정, 설정링크 X)."""
+    email: str
+    password: str
+
+
+class OnboardingCompany(BaseModel):
+    """회사 기본정보 — suppliers 갱신(department 는 PIC 부서라 대표 contact 로 이관)."""
+    company_name: str
+    country: Optional[str] = None
+    business_reg_no: Optional[str] = None
+    duns_number: Optional[str] = None
+    address: Optional[str] = None
+    department: Optional[str] = None
+
+
+class OnboardingDoc(BaseModel):
+    """사업자등록증 업로드 결과 — POST /files 반환 s3_key/file_name."""
+    s3_key: str
+    file_name: Optional[str] = None
+
+
+class OnboardingContact(BaseModel):
+    """담당자(PIC) — supplier_contacts 로 저장. 대표 1명 is_primary=true."""
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    is_primary: bool = False
+    role: Optional[str] = None
+    department: Optional[str] = None
+
+
+class OnboardingSubmitRequest(BaseModel):
+    """공개 submit 요청 — §6 계약. consent_agreed 는 entry 동의 게이트 통과 표식."""
+    account: OnboardingAccount
+    company: OnboardingCompany
+    business_reg_doc: Optional[OnboardingDoc] = None
+    unverified: bool = False
+    consent_agreed: bool = False
+    contacts: list[OnboardingContact] = []
+
+
+class OnboardingSubmitResponse(BaseModel):
+    supplier_id: uuid.UUID
+    status: str                      # 'supplier_review' (원청 승인 대기)
+    onboarding_complete: bool = True

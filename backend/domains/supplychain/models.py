@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from typing import List
 
-from sqlalchemy import Column, Date, ForeignKey, Numeric, String
+from sqlalchemy import Column, Date, ForeignKey, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, relationship
 from sqlalchemy.sql import func
@@ -67,7 +67,8 @@ class SupplyChainMap(Base):
     parent_supplier_id = Column(UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"))
     child_supplier_id = Column(UUID(as_uuid=True), ForeignKey("suppliers.supplier_id"), nullable=True)
     part_id = Column(UUID(as_uuid=True), ForeignKey("parts.part_id"))
-    
+    hop_level = Column(Integer, comment="차수(원청 0 기준 경로 순번). n-tier 재귀 CTE 조인 키")
+
     po_number = Column(String(50))
     invoice_number = Column(String(50))
     supply_period_from = Column(Date)

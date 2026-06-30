@@ -34,6 +34,9 @@ from backend.domains.supplier.models import (
     MasterFormRequest,
     MasterFormResponse,
     MasterFormPrefillResponse,
+    OnboardingPrefillResponse,
+    OnboardingSubmitRequest,
+    OnboardingSubmitResponse,
 )
 
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
@@ -108,6 +111,42 @@ async def get_master_form_prefill_endpoint(
     if data is None:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return data
+
+
+# ============================================================
+# 협력사 회원가입(공개 온보딩) — 무토큰. ?supplierId= 키잉(invite token 없음, decision #8).
+#   ★ get_current_user 의존성을 일부러 걸지 않는다(공개). 가드는 service 의 재제출/중복 409.
+#   라우트 등록 순서상 /{supplier_id} 보다 위에 둬 경로 매칭 모호성을 피한다.
+# ============================================================
+@router.get("/{supplier_id}/onboarding/prefill", response_model=OnboardingPrefillResponse)
+async def get_onboarding_prefill_endpoint(
+    supplier_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """공개 prefill — 비민감 필드(회사명/유형/국가)만. 없으면 404."""
+    data = await service.get_onboarding_prefill(db, supplier_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return data
+
+
+@router.post("/{supplier_id}/onboarding/submit", response_model=OnboardingSubmitResponse)
+async def submit_onboarding_endpoint(
+    supplier_id: UUID,
+    body: OnboardingSubmitRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    공개 submit — 회사정보+문서+PIC+동의+활성 계정 생성을 단일 트랜잭션으로(§4).
+    재제출/이메일 중복 → 409, 없는 supplier_id → 404.
+    """
+    try:
+        result = await service.submit_onboarding(db, supplier_id, body)
+    except service.OnboardingConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return result
 
 
 @router.get("/{supplier_id}", response_model=SupplierBrief)

@@ -157,6 +157,7 @@ async def export_audit_package(
     # tenant_id 없는 유저는 패키지 접근 불가 — SQL의 NULL 우회 방지
     if current_user.tenant_id is None:
         raise HTTPException(status_code=403, detail="테넌트 정보가 없어 접근할 수 없습니다.")
+    # 패키지 번들을 JSON 증빙 파일로 S3 업로드 → presigned URL 반환.
     try:
         return await service.export_audit_package(db, package_id, current_user.tenant_id)
     except BatchNotFound:

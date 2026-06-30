@@ -52,6 +52,7 @@ FIELD_CATALOG: Dict[str, _FIELD] = {
     "energy_source":         ("manufacturing", "str",   "에너지원"),
     "capacity":              ("manufacturing", "str",   "생산 능력"),
     "carbon_intensity":      ("manufacturing", "float", "탄소집약도(kgCO2eq/kg)"),
+    "verification_status":   ("manufacturing", "str",   "제3자 검증 여부(예: third-party verified / self-declared / not verified) — 명시된 경우만 추출, 미명시 시 unparsed_fields에 포함"),
 
     # [W6 정리] 재활용(recycling)·원산지(origin)·지분FEOC(ownership) 섹션은 master-form에서
     # 제거됨(연관 테이블 삭제) → 저장 위치가 없는 필드는 AI 추출 대상에서도 제외한다.

@@ -71,6 +71,9 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
         "tenant_id": str(user.tenant_id) if user.tenant_id else None,
         "supplier_id": supplier_id,
         "display_name": user.name,
+        # 회원가입 게이팅 명시(전방호환). Phase1: 계정은 온보딩 제출 시에만 생기므로
+        # '계정 존재 ⇒ 온보딩 완료'. (Phase2에서 미완료 단계 도입 시 여기서 분기)
+        "onboarding_complete": True,
     }
 
 
@@ -91,6 +94,8 @@ async def get_me(
         "supplier_id": str(current_user.supplier_id) if current_user.supplier_id else None,
         "display_name": user.name,
         "email": user.email,
+        # 회원가입 게이팅 명시(전방호환). Phase1: 계정 존재 ⇒ 온보딩 완료.
+        "onboarding_complete": True,
     }
 
 

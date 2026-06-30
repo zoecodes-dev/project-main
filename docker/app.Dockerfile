@@ -3,10 +3,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# PostgreSQL 클라이언트 빌드 종속성 (asyncpg/psycopg2용)
+# PostgreSQL 클라이언트 빌드 종속성 (asyncpg/psycopg2용) + poppler (pdf2image용)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # 레이어 캐싱: requirements만 먼저 복사 → 패키지 미변경 시 캐시 히트
