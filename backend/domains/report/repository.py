@@ -301,6 +301,34 @@ class ReportRepository:
             "chain_verified":    int(chain["chain_verified"] or 0),
         }
 
+    async def get_outbound_customer(
+        self, customer_id: uuid.UUID, tenant_id: Optional[uuid.UUID]
+    ) -> Optional[dict]:
+        """전송 대상 고객사 단건(국가 포함). 테넌트가 해당 고객사 제품을 보유할 때만 노출.
+        타 테넌트/미보유면 None(→404, 존재 은닉 §4). customers엔 tenant_id가 없어
+        products(customer_id, tenant_id)로 스코프."""
+        stmt = text(
+            """
+            SELECT c.customer_id, c.customer_name, c.country
+            FROM customers c
+            WHERE c.customer_id = CAST(:cid AS uuid)
+              AND (
+                CAST(:tid AS uuid) IS NULL
+                OR EXISTS (
+                    SELECT 1 FROM products p
+                    WHERE p.customer_id = c.customer_id
+                      AND p.tenant_id = CAST(:tid AS uuid)
+                )
+              )
+            """
+        )
+        result = await self.db.execute(
+            stmt,
+            {"cid": str(customer_id), "tid": str(tenant_id) if tenant_id else None},
+        )
+        row = result.mappings().one_or_none()
+        return dict(row) if row else None
+
     # ── 쓰기 ──────────────────────────────────────────────────────
 
     async def add_report(self, report: Report) -> Report:

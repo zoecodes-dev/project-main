@@ -9,6 +9,7 @@ from backend.domains.report.summary_templates import (
     DEFAULT_LOCALE,
     render_key_points,
     render_summary,
+    resolve_outbound_locales,
     section_title,
 )
 from backend.infrastructure.event_bus import publish
@@ -71,6 +72,50 @@ class ReportService:
             "metrics": metrics,
         }
 
+    def _render_locale(self, metrics: dict, locale: str) -> dict:
+        return {
+            "locale": locale,
+            "section_title": section_title(locale),
+            "summary_text": render_summary(metrics, locale),
+            "key_points": render_key_points(metrics, locale),
+        }
+
+    async def build_outbound_summary(
+        self,
+        tenant_id: Optional[uuid.UUID],
+        customer_id: uuid.UUID,
+    ) -> Optional[dict]:
+        """고객사 전송용 다국어 프리뷰. 고객사 국가로 언어 자동 결정(독일=EN+DE, 그 외=EN).
+        국가 미상이면 EN만 내되 country_known=False로 사람이 언어를 고르도록 신호.
+        타 테넌트/미보유 고객사면 None(→404)."""
+        customer = await self.repo.get_outbound_customer(customer_id, tenant_id)
+        if customer is None:
+            return None
+
+        country = customer.get("country")
+        locales = resolve_outbound_locales(country)
+        country_known = bool(country)
+
+        raw = await self.repo.aggregate_risk_summary(tenant_id)
+        metrics = self._compute_metrics(raw)
+
+        note = None
+        if not country_known:
+            note = "고객사 국가 정보가 없습니다 — 전송 언어를 직접 선택하세요(독일이면 DE 추가)."
+
+        return {
+            "customer": {
+                "customer_id": customer["customer_id"],
+                "customer_name": customer["customer_name"],
+                "country": country,
+            },
+            "country_known": country_known,
+            "locales": locales,
+            "renders": [self._render_locale(metrics, loc) for loc in locales],
+            "metrics": metrics,
+            "note": note,
+        }
+
     # ── 상세 (3.2b) ─────────────────────────────────────────────
 
     async def get_report_detail(
@@ -115,8 +160,10 @@ class ReportService:
         if not approver_ids:
             raise ValueError("approverIds 는 최소 1명 이상이어야 합니다.")
 
+        # summary 미입력 시 자동 생성. 단 tenant_id=None(관리 토큰)이면 전체 테넌트가
+        # 집계에 섞이므로 자동채움을 건너뛴다(잘못된 요약 방지).
         key_points: List[str] = []
-        if not summary:
+        if not summary and tenant_id is not None:
             built = await self.build_risk_summary(tenant_id)
             summary = built["summary_text"]
             key_points = built["key_points"]

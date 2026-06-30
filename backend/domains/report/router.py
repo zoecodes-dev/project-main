@@ -79,9 +79,25 @@ async def get_risk_summary(
     current_user: CurrentUser = Depends(get_current_user),
     service: ReportService = Depends(_get_service),
 ):
-    """공급망 리스크 관리 요약문 + metrics. 고객사 전송용 요약의 원천.
-    locale: ko(기본). en/de는 B 단계 전까지 ko로 fallback."""
+    """공급망 리스크 관리 요약문 + metrics. 내부 확인용(기본 ko)."""
     return await service.build_risk_summary(current_user.tenant_id, locale)
+
+
+# ── GET /reports/risk-summary/outbound  (고객사 전송 다국어 프리뷰) ──────
+
+@router.get("/risk-summary/outbound")
+async def get_outbound_risk_summary(
+    customer_id: uuid.UUID = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
+    service: ReportService = Depends(_get_service),
+):
+    """고객사 전송용 다국어 요약 프리뷰. 고객사 국가로 언어 자동 결정
+    (독일=EN+DE, 그 외=EN). 국가 미상이면 EN + country_known=False(사람이 선택).
+    타 테넌트/미보유 고객사면 404."""
+    result = await service.build_outbound_summary(current_user.tenant_id, customer_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return result
 
 
 # ── 3.2b GET /reports/{reportId} ─────────────────────────────────

@@ -43,9 +43,64 @@ TEMPLATES: Dict[str, Dict[str, str]] = {
         "kp_compliance": "컴플라이언스 통과율 {compliance_pass_rate}%",
         "kp_chain": "공급망 검증율 {chain_verified_rate}%",
     },
-    # "en": { ... },  # ← B 단계 추가 (영어 기본)
-    # "de": { ... },  # ← B 단계 추가 (독일 고객사일 때)
+    "en": {
+        "title": "Supply Chain Risk Management Status",
+        "empty": "No suppliers are registered yet, so there is no risk management data to report.",
+        "suppliers_high": (
+            "We currently manage {supplier_total} suppliers, of which {high_risk_count} "
+            "are classified as high-risk (high/critical) and are under focused "
+            "due-diligence and corrective action."
+        ),
+        "suppliers_clean": (
+            "We currently manage {supplier_total} suppliers, with none classified "
+            "as high-risk (high/critical)."
+        ),
+        "audit": "Across the {audited_suppliers} suppliers audited, the pass rate is {audit_pass_rate}%.",
+        "capa": "Of {capa_total} corrective actions (CAPA), {capa_closed} ({capa_rate}%) have been completed.",
+        "compliance": (
+            "The compliance pass rate is {compliance_pass_rate}%, and {chain_verified_rate}% "
+            "of supply-chain links are verified and continuously tracked."
+        ),
+        "kp_high_risk": "High-risk suppliers: {high_risk_count}",
+        "kp_capa": "CAPA completion rate: {capa_rate}%",
+        "kp_compliance": "Compliance pass rate: {compliance_pass_rate}%",
+        "kp_chain": "Supply-chain verification rate: {chain_verified_rate}%",
+    },
+    "de": {
+        "title": "Status des Lieferketten-Risikomanagements",
+        "empty": "Es sind noch keine Lieferanten registriert, daher liegen keine Risikomanagement-Daten vor.",
+        "suppliers_high": (
+            "Wir betreuen derzeit {supplier_total} Lieferanten, davon sind {high_risk_count} "
+            "als hochriskant (high/critical) eingestuft und werden gezielt durch "
+            "Sorgfaltsprüfungen und Korrekturmaßnahmen überwacht."
+        ),
+        "suppliers_clean": (
+            "Wir betreuen derzeit {supplier_total} Lieferanten, wobei keiner "
+            "als hochriskant (high/critical) eingestuft ist."
+        ),
+        "audit": "Bei den {audited_suppliers} geprüften Lieferanten liegt die Bestehensquote bei {audit_pass_rate}%.",
+        "capa": "Von {capa_total} Korrekturmaßnahmen (CAPA) sind {capa_closed} ({capa_rate}%) abgeschlossen.",
+        "compliance": (
+            "Die Compliance-Bestehensquote beträgt {compliance_pass_rate}%, und {chain_verified_rate}% "
+            "der Lieferketten-Verbindungen sind verifiziert und werden kontinuierlich nachverfolgt."
+        ),
+        "kp_high_risk": "Hochriskante Lieferanten: {high_risk_count}",
+        "kp_capa": "CAPA-Abschlussquote: {capa_rate}%",
+        "kp_compliance": "Compliance-Bestehensquote: {compliance_pass_rate}%",
+        "kp_chain": "Lieferketten-Verifizierungsquote: {chain_verified_rate}%",
+    },
 }
+
+# ── 고객사 국가 → 전송 언어 결정 ────────────────────────────────────────────
+# 기본 EN. 독일(DE)이면 DE 추가. country 미상이면 EN + country_known=False(사람이 선택).
+GERMANY = "DE"
+
+
+def resolve_outbound_locales(country: str | None) -> list[str]:
+    """고객사 country(ISO alpha-2) → 전송할 locale 목록. 독일이면 EN+DE, 그 외 EN."""
+    if country and country.strip().upper() == GERMANY:
+        return ["en", "de"]
+    return ["en"]
 
 
 def _pick(locale: str) -> Dict[str, str]:
