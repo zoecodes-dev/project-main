@@ -33,12 +33,12 @@ async def execute_stage_risk(req: StageRiskRequest, db: AsyncSession = Depends(g
 
 @router.get("/scores")
 @trace_tool("get_risk_scores")
-async def get_risk_scores(status: str | None = None, level: str | None = None, db: AsyncSession = Depends(get_db)):
+async def get_risk_scores(level: str | None = None, db: AsyncSession = Depends(get_db)):
     """
     [API] GET /risk/scores
     프론트엔드 대시보드를 위한 리스크 목록, 점수, 등급별 조회 API입니다.
     """
-    return await RiskRepository.list_profiles(db, status=status, level=level)
+    return await RiskRepository.list_profiles(db, level=level)
 
 @router.get("/{batch_id_or_supplier_id}")
 @trace_tool("get_risk_score_detail")

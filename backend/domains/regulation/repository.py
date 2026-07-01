@@ -407,7 +407,11 @@ async def get_regulation_results(
     [반환 필드]
       result_id, material, supplier_id, supplier_name, regulation,
       verdict(passed/violation/warning/reject), confidence,
-      needs_human_review(bool), evidence(배열)
+      needs_human_review(bool),
+      hitl_reason(geographical_risk/low_confidence/None — 시급도 랭킹용),
+      supplier_risk_level(low/medium/high/critical/None — 협력사 상시 등급),
+      nearest_due_date(ISO/None — 가장 임박한 미이행 마감 SLA),
+      evidence(배열)
 
     [evidence 구조]
       compliance_results에 별도 evidence 테이블이 없으므로
@@ -431,7 +435,25 @@ async def get_regulation_results(
             cr.confidence_score             AS confidence,   -- 추출항목/판정 신뢰도(AI 파싱뷰와 동일 기준)
             cr.needs_human_review,
             cr.cited_clauses,                              -- 대조한 규제 조항(jsonb 배열)
-            cr.reasoning_text                              -- AI 판단 근거(어느 근거↔조항 대조 결과)
+            cr.reasoning_text,                             -- AI 판단 근거(어느 근거↔조항 대조 결과)
+            ga.risk_detected                AS geo_risk_detected,  -- 지리 감사(신장/EUDR) 위험 검출 여부
+            (SELECT srp.risk_level
+               FROM supplier_risk_profiles srp
+              WHERE srp.supplier_id = cr.supplier_id
+              ORDER BY srp.updated_at DESC NULLS LAST
+              LIMIT 1)                       AS supplier_risk_level,  -- 협력사 상시 리스크 등급(low/medium/high/critical)
+            LEAST(
+                (SELECT MIN(drl.due_date)
+                   FROM data_request_log drl
+                  WHERE drl.target_supplier_id = cr.supplier_id
+                    AND drl.response_status <> 'response_responded'  -- 미이행 자료요청
+                    AND drl.due_date IS NOT NULL),
+                (SELECT MIN(dc.due_date)
+                   FROM detention_cases dc
+                  WHERE dc.batch_id = cr.batch_id
+                    AND dc.status NOT IN ('released', 'seized')      -- 미종결 통관 억류
+                    AND dc.due_date IS NOT NULL)
+            )                                AS nearest_due_date    -- 가장 임박한 미이행 마감(SLA). LEAST는 NULL 무시
         FROM compliance_results cr
         INNER JOIN batches b
             ON cr.batch_id = b.batch_id
@@ -442,14 +464,41 @@ async def get_regulation_results(
             ON cr.supplier_id = s.supplier_id
         LEFT JOIN products p
             ON p.product_id = b.product_id                 -- 자재명(제품명) 조인
+        LEFT JOIN geo_audit_results ga
+            ON ga.batch_id = cr.batch_id                   -- batch 단위 지리 리스크 권위 결과
         ORDER BY cr.created_at DESC
         LIMIT :limit OFFSET :offset
     """)
 
     rows = (await db.execute(sql, params)).fetchall()
 
-    return [
-        {
+    def _hitl_reason(row, needs_review: bool) -> str | None:
+        """
+        HITL/에스컬레이션 사유 코드 — 대시보드 시급도 랭킹용(신뢰도-저하보다 지리/FEOC를 위로).
+
+        compliance_results에는 사유 컬럼이 없고 compliance 노드는 항상 'low_confidence'만
+        세팅하므로, 지리 리스크는 batch 단위 권위 결과(geo_audit_results)에서 파생한다.
+        교차오염 방지를 위해 사유는 그 관심사를 '소유'한 규제 결과에만 귀속:
+          - UFLPA/EUDR(지리)   + geo_risk_detected   → 'geographical_risk'
+          - 그 외 사람검토 필요                        → 'low_confidence'
+          - 해당 없음                                  → None
+        (FEOC/IRA는 스코프 아웃 — verification 기반 사유 미포함)
+        """
+        reg = (row.regulation or "").upper()
+        if reg in ("UFLPA", "EUDR") and row.geo_risk_detected is True:
+            return "geographical_risk"
+        if needs_review:
+            return "low_confidence"
+        return None
+
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        # confidence가 없거나 임계값 미만이면 HITL 후보
+        needs_review = bool(
+            row.needs_human_review
+            or (row.confidence is not None and float(row.confidence) < _HITL_THRESHOLD)
+        )
+        results.append({
             "result_id":          str(row.result_id),
             "material":           str(row.material) if row.material else None,
             "supplier_id":        str(row.supplier_id),
@@ -457,17 +506,15 @@ async def get_regulation_results(
             "regulation":         row.regulation,
             "verdict":            _VERDICT_MAP.get(row.verdict, row.verdict),
             "confidence":         float(row.confidence) if row.confidence is not None else None,
-            # confidence가 없거나 임계값 미만이면 HITL 후보
-            "needs_human_review": (
-                row.needs_human_review
-                or (row.confidence is not None and float(row.confidence) < _HITL_THRESHOLD)
-            ),
+            "needs_human_review": needs_review,
+            "hitl_reason":        _hitl_reason(row, needs_review),   # HITL 사유(시급도 랭킹용)
+            "supplier_risk_level": row.supplier_risk_level,          # 협력사 상시 리스크 등급(시급도 신호)
+            "nearest_due_date":   row.nearest_due_date.isoformat() if row.nearest_due_date else None,  # 가장 임박한 미이행 마감(SLA)
             "evidence":           [],  # TODO: submission_documents 연계 후 채움
             "cited_clauses":      row.cited_clauses or [],   # 대조한 규제 조항
             "reasoning_text":     row.reasoning_text,        # AI 판단 근거
-        }
-        for row in rows
-    ]
+        })
+    return results
 
 
 async def count_regulation_results(

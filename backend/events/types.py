@@ -210,33 +210,6 @@ class SubmissionStatusChangedEvent:
 
 
 # ============================================================
-# Verification (E) — 폴더·큐·도메인·state·이벤트 모두 verification
-# ============================================================
-@dataclass
-class VerificationStartedEvent:
-    batch_id: Optional[UUID] = None
-    rules_applied: list = field(default_factory=list)
-    event_name: str = "VerificationStarted"
-    occurred_at: datetime = field(default_factory=_now_utc)
-
-
-@dataclass
-class VerificationFailedEvent:
-    batch_id: Optional[UUID] = None
-    violated_rules: list = field(default_factory=list)
-    event_name: str = "VerificationFailed"
-    occurred_at: datetime = field(default_factory=_now_utc)
-
-
-@dataclass
-class VerificationCompletedEvent:
-    batch_id: Optional[UUID] = None
-    results: list = field(default_factory=list)
-    event_name: str = "VerificationCompleted"
-    occurred_at: datetime = field(default_factory=_now_utc)
-
-
-# ============================================================
 # SupplyChain / Geo (D · 영수) — 본 도메인에서 실제 발행
 # ============================================================
 @dataclass

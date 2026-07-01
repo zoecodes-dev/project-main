@@ -71,7 +71,6 @@ class Supplier(Base):
     # 상태값은 schema.sql 접두어 표기 그대로. 타입은 VARCHAR(30).
     status: Mapped[str] = mapped_column(String(30), default="supplier_pending")
     risk_level: Mapped[str] = mapped_column(String(20), default="low")
-    feoc_status: Mapped[str] = mapped_column(String(20), default="unknown")
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -232,11 +231,6 @@ class SupplierRiskProfile(Base):
     risk_level: Mapped[str] = mapped_column(String(20), default="low")
     # 협력사 실사 자가진단(self-assessed) 결과 — low/medium/high/critical/unknown. (시스템 risk_level과 별개)
     self_reported_risk_level: Mapped[str] = mapped_column(String(20), default="unknown")
-    feoc_status: Mapped[str] = mapped_column(String(20), default="unknown")
-    feoc_direct_ownership: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
-    feoc_indirect_ownership: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
-    feoc_last_assessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    feoc_cert_expiry: Mapped[Optional[date]] = mapped_column(Date)
     is_high_risk_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     high_risk_reasons: Mapped[Optional[dict]] = mapped_column(JSONB)
     last_risk_review_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -299,7 +293,6 @@ class RiskProfileResponse(BaseModel):
     overall_risk_score: int
     risk_level: str
     self_reported_risk_level: Optional[str] = "unknown"  # 협력사 실사 자가진단 결과
-    feoc_status: Optional[str] = "unknown"
 
     model_config = {"from_attributes": True}
 
@@ -377,7 +370,6 @@ class SupplierDetailResponse(BaseModel):
     self_assessment_doc_url: Optional[str] = None  # 실사 자가진단 보고서 업로드 URL(확인용)
     status: str
     risk_level: str
-    feoc_status: str
     manufacturer_detail: Optional[ManufacturerDetailDTO] = None
     miner_detail: Optional[MinerDetailDTO] = None
     model_config = {"from_attributes": True}
@@ -487,7 +479,6 @@ class SupplierReliabilityResponse(BaseModel):
     # 리스크 프로필 (없으면 None)
     overall_risk_score: Optional[int] = None
     risk_level: Optional[str] = None
-    feoc_status: Optional[str] = None
     is_high_risk_flag: Optional[bool] = None
     last_risk_review_at: Optional[datetime] = None
     # 온보딩/SLA 성실도

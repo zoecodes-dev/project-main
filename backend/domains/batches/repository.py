@@ -17,21 +17,17 @@ _STATUS_MAP = {
 
 # DB에 정의된 모든 stage 순서 (current_stage 그룹핑 키 정렬용)
 _STAGE_ORDER = [
-    "stage_queued", "stage_extraction", "stage_verification",
+    "stage_queued", "stage_extraction",
     "stage_geo", "stage_compliance", "stage_risk",
-    "stage_readiness", "stage_issuance",
 ]
 
 # AgentStage: DB current_stage 값 → 한국어 표시 레이블 + 진행 인덱스(1-base)
 AGENT_STAGE_META: Dict[str, Dict[str, Any]] = {
     "stage_queued":       {"label": "대기",         "index": 1},
     "stage_extraction":   {"label": "데이터 추출",   "index": 2},
-    "stage_verification": {"label": "검증",          "index": 3},
-    "stage_geo":          {"label": "지역 감사",      "index": 4},
-    "stage_compliance":   {"label": "컴플라이언스",   "index": 5},
-    "stage_risk":         {"label": "리스크 분석",    "index": 6},
-    "stage_readiness":    {"label": "발행 준비도",    "index": 7},
-    "stage_issuance":     {"label": "발행",          "index": 8},
+    "stage_geo":          {"label": "지역 감사",      "index": 3},
+    "stage_compliance":   {"label": "컴플라이언스",   "index": 4},
+    "stage_risk":         {"label": "리스크 분석",    "index": 5},
 }
 _TOTAL_STAGES = len(AGENT_STAGE_META)
 
@@ -111,13 +107,12 @@ async def get_batch_detail(
     tenant_id: Optional[UUID] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    BE-3: 배치 상세 조회 — compliance·geo·verification·risk·readiness 5종 판정 결과 포함.
+    BE-3: 배치 상세 조회 — compliance·geo·risk 판정 결과 포함.
     tenant_id 지정 시 해당 테넌트 배치만(§0.2) — 남의 테넌트면 None(→404, 존재 은닉).
 
     R7 계약:
       - compliance_result : compliance_results 테이블 집계 (규제코드→verdict 맵 + 상세)
       - geo_result        : geo_audit_results 테이블 (D R5 저장)
-      - verification_result: verification_results 테이블 (E R4 저장; 미저장 시 null)
       - risk_result       : supplier_risk_profiles에서 배치 공급망 최고 위험도 조회
     """
     # 테넌트 게이트는 배치 행 조회에만 걸면 충분 — 없으면 None 반환되어 하위 집계로 진입하지 않는다.
@@ -131,7 +126,7 @@ async def get_batch_detail(
             SELECT
                 b.batch_id, b.product_id, b.bom_version_id, b.tenant_id,
                 b.destination, b.current_stage, b.status,
-                b.confidence_score, b.readiness_score,
+                b.confidence_score,
                 b.received_at, b.source_system, b.external_id
             FROM batches b
             WHERE b.batch_id = :batch_id
@@ -171,16 +166,6 @@ async def get_batch_detail(
         {"batch_id": batch_id},
     )).mappings().fetchone()
 
-    # ── verification 판정 결과 (E R4 적재 전까지 null) ───────────────────────
-    verif_row = (await db.execute(
-        text("""
-            SELECT feoc_passed, violations
-            FROM verification_results
-            WHERE batch_id = :batch_id
-        """),
-        {"batch_id": batch_id},
-    )).mappings().fetchone()
-
     # ── risk 점수 (공급망 공급사 중 최고 위험도) ─────────────────────────────
     risk_row = (await db.execute(
         text("""
@@ -207,10 +192,6 @@ async def get_batch_detail(
             float(batch_row["confidence_score"])
             if batch_row["confidence_score"] is not None else None
         ),
-        "readiness_score": (
-            float(batch_row["readiness_score"])
-            if batch_row["readiness_score"] is not None else None
-        ),
         "received_at": (
             batch_row["received_at"].isoformat() if batch_row["received_at"] else None
         ),
@@ -236,10 +217,6 @@ async def get_batch_detail(
             "risk_flags":    geo_row["risk_flags"] or [],
             "detected_risks": geo_row["detected_risks"] or [],
         } if geo_row else None,
-        "verification_result": {
-            "feoc_passed": bool(verif_row["feoc_passed"]),
-            "violations":  verif_row["violations"] or [],
-        } if verif_row else None,
         "risk_result": {
             "max_risk_score": (
                 int(risk_row["max_risk_score"])

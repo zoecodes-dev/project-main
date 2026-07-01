@@ -98,7 +98,6 @@ async def get_suppliers(
     db: AsyncSession,
     status: Optional[str] = None,
     risk_level: Optional[str] = None,
-    feoc_status: Optional[str] = None,
     page: int = 1,
     size: int = 20,
     tenant_id: Optional[UUID] = None,
@@ -115,8 +114,6 @@ async def get_suppliers(
         stmt = stmt.where(Supplier.status == status)
     if risk_level:
         stmt = stmt.where(Supplier.risk_level == risk_level)
-    if feoc_status:
-        stmt = stmt.where(Supplier.feoc_status == feoc_status)
 
     # 서버 강제 페이지네이션 (N+1 방지 + 응답 크기 제한)
     page = max(page, 1)
@@ -134,7 +131,6 @@ async def count_suppliers(
     db: AsyncSession,
     status: Optional[str] = None,
     risk_level: Optional[str] = None,
-    feoc_status: Optional[str] = None,
     tenant_id: Optional[UUID] = None,
 ) -> int:
     """목록 전체 건수(필터 적용, 페이지 무관). X-Total-Count 헤더용(§0.6). 원청(hop0) 제외."""
@@ -145,8 +141,6 @@ async def count_suppliers(
         stmt = stmt.where(Supplier.status == status)
     if risk_level:
         stmt = stmt.where(Supplier.risk_level == risk_level)
-    if feoc_status:
-        stmt = stmt.where(Supplier.feoc_status == feoc_status)
     result = await db.execute(stmt)
     return int(result.scalar_one())
 

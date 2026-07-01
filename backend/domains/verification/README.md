@@ -1,27 +1,16 @@
 # Verification Domain
 
-## 책임
-- 제출된 데이터의 법적/규제적 규칙 검증 (FEOC 지분율 심사, 문서 무결성 검증, 좌표 무결성 등)
-- 결정론적 룰 엔진 평가 및 비동기 검증 파이프라인 제어
+> **스코프 축소 안내**: FEOC(IRA 지분율 심사) 기능은 스코프에서 제외되어 제거되었다.
+> 이 도메인은 현재 **문서 무결성 검증**과 **컴플라이언스 이력 조회 DTO**만 담당한다.
+> (배치 파이프라인의 `stage_verification` 단계도 함께 폐지 — LangGraph 노드로 결선된 적 없음.)
 
-## 담당 이벤트 (events/types.py 참조)
-- VerificationStartedEvent
-- VerificationFailedEvent
-- VerificationCompletedEvent
+## 책임
+- 문서 무결성 검증(`verify_document_integrity_rule`): 협력사 확정값(confirmed_fields)과 업로드 증빙 추출값을 대조해 불일치 시 `compliance_reject` + `needs_human_review` 처리 (수치 허용오차 ±5%).
+- 컴플라이언스 이력 조회 DTO(`get_compliance_history_dto`): HITL 등 타 도메인이 배치별 판정 이력을 조회할 때 사용하는 읽기 전용 헬퍼.
 
 ## 관련 테이블 (schema.sql 참조)
-- compliance_results
-- data_request_log (submission_status 연계)
+- compliance_results (조회/기록)
 
-## 현재 구현 상태 (W3)
-- **FEOC 지분율 심사 룰 엔진 (`verify_feoc_rule`) 실동작 구현 완료 (Decision #4 반영)**:
-  - 직접 지분 25% 이상 시 즉시 위반(`compliance_violation`) 처리
-  - 간접/합산 지분 25% 이상 시 위반 판정 및 `needs_human_review` 플래그 활성화 (HITL 사람 검토 큐 연동용)
-  - 위반 시 `VERIFICATION_QUEUE` 비동기 위임 (`job_id` 기반 멱등성 보장 적용)
-  - `VerificationStarted`, `VerificationFailed`, `VerificationCompleted` 도메인 이벤트 규격에 맞춘 발행 연동
-  - `@trace_tool` 데코레이터를 적용하여 AI/시스템의 검증 판단 내역이 `audit_trail`에 자동 기록되도록 구성 완료
-
-## API 엔드포인트 스펙 (조회용)
-프론트엔드 검증 뷰(Screen)에 판정 레코드를 매핑하기 위한 조회 API입니다.
-* **`GET /verification/{batch_id}`**: 특정 배치의 FEOC(IRA) 판정 결과 단건 조회.
-  - 타 도메인 모델 침범 없이 `compliance_results` 테이블을 Raw SQL로 안전하게 조회하여 `verdict`, `reasoning_text` 등을 반환합니다. (`@trace_tool` 적용 완료)
+## 비고
+- 별도 발행 이벤트 없음(구 Verification* 이벤트는 제거됨).
+- `router.py`는 현재 엔드포인트 없이 prefix만 등록된 상태.
