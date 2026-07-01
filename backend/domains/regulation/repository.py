@@ -188,54 +188,68 @@ async def search_by_embedding(
 
 
 # ============================================================
-# 3. [TODO] regulation_required_fields 조회
-#    D(영수) C1 DDL 머지 후 구현
+# 3. regulation_required_fields 조회 (C-2 — 은지)
 # ============================================================
 
-# ┌──────────────────────────────────────────────────────────────┐
-# │ D 머지 후 체크리스트:                                        │
-# │   1. models.py의 RegulationRequiredField ORM 주석 해제        │
-# │   2. 아래 함수를 실제 DB 쿼리로 교체                          │
-# │   3. service.py의 get_required_fields()에서 이 함수 호출       │
-# └──────────────────────────────────────────────────────────────┘
-
-_TEMP_REQUIRED_FIELDS: dict[str, list[dict[str, Any]]] = {
-    "EU_BATTERY_ART7": [
-        {"field_name": "carbon_intensity", "field_type": "number",
-         "is_mandatory": True, "provider_type_applicable": ["manufacturer"]},
-        {"field_name": "factory_carbon_declarations", "field_type": "jsonb",
-         "is_mandatory": True, "provider_type_applicable": ["manufacturer"]},
-    ],
-    "EUDR": [
-        {"field_name": "mine_coordinates", "field_type": "string",
-         "is_mandatory": True, "provider_type_applicable": ["miner"]},
-    ],
-    "UFLPA": [
-        {"field_name": "geo_risk_flags", "field_type": "jsonb",
-         "is_mandatory": False, "provider_type_applicable": ["miner"]},
-    ],
-    # IRA(FEOC 지분)는 스코프 축소로 제거 — feoc_* 필드/테이블 삭제.
-}
-
+# [C-2 변경 — 은지, 2026-06-30]
+# 기존 더미(_TEMP_REQUIRED_FIELDS)를 regulation_required_fields DB 쿼리로 교체.
+# 0행이면 폴백(빈 리스트 반환) — get_gaps 무중단 보장(가이드 §3 C-2 무회귀 조건).
+#
+# [폴백 보존 이유]
+#   테이블 시드가 안 됐거나 해당 regulation_code 데이터가 없는 경우
+#   기존처럼 빈 리스트를 반환해 get_gaps 등 하위 호출자가 에러 없이 동작하게 한다.
 
 async def get_required_fields(
     db: AsyncSession,
     regulation_code: str,
 ) -> list[dict[str, Any]]:
     """
-    [TODO — D 머지 후 DB 쿼리로 교체]
-    현재는 더미 데이터 반환.
-    """
-    fields = _TEMP_REQUIRED_FIELDS.get(regulation_code, [])
+    regulation_required_fields 테이블에서 규제별 필수 필드를 조회한다.
 
-    if not fields:
-        logger.warning(
-            "[TODO] get_required_fields: regulation_code=%s 매핑 없음. "
-            "D의 C1 머지 후 DB 쿼리로 교체 필요.",
+    [C-2 변경 전 — 더미]
+      _TEMP_REQUIRED_FIELDS 딕셔너리에서 하드코딩된 값을 반환했다.
+
+    [C-2 변경 후 — DB 쿼리]
+      regulations.regulation_code로 regulation_id를 찾아
+      regulation_required_fields를 조인 조회한다.
+      0행이면 빈 리스트 반환(폴백) — 하위 호출자 무중단.
+
+    [무회귀]
+      반환 형태(list[dict])는 기존과 동일.
+      키: field_name, field_type, is_mandatory, provider_type_applicable.
+    """
+    rows = (await db.execute(
+        text("""
+            SELECT
+                rrf.field_name,
+                rrf.field_type,
+                rrf.is_mandatory,
+                rrf.provider_type_applicable
+            FROM regulation_required_fields rrf
+            JOIN regulations r ON r.regulation_id = rrf.regulation_id
+            WHERE r.regulation_code = :regulation_code
+            ORDER BY rrf.field_name
+        """),
+        {"regulation_code": regulation_code},
+    )).fetchall()
+
+    if not rows:
+        logger.debug(
+            "get_required_fields: regulation_code=%s 에 해당하는 행이 없어요. "
+            "빈 리스트 반환(폴백) — 시드 데이터를 확인해주세요.",
             regulation_code,
         )
+        return []
 
-    return fields
+    return [
+        {
+            "field_name":               row.field_name,
+            "field_type":               row.field_type,
+            "is_mandatory":             row.is_mandatory,
+            "provider_type_applicable": row.provider_type_applicable or [],
+        }
+        for row in rows
+    ]
 
 
 # ============================================================

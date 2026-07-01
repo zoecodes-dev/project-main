@@ -1248,5 +1248,60 @@ VALUES
 ('EU Battery Regulation Art.7',           'EU_BATTERY_ART7',  'EU', '2023/1542', '2025-02-18', 'EU 배터리법 Article 7 탄소발자국 선언 의무. LMT·EV·산업용 배터리는 전 생명주기(원료 채굴~제조~운송) 탄소발자국을 kgCO2eq/kWh 단위로 산출해 신고해야 한다. Annex II 기준: 100 kgCO2eq/kWh 초과 시 최고 등급(A) 취득 불가, 75 kgCO2eq/kWh 초과 시 경고 등급. 선언 누락 또는 허위 신고 시 EU 시장 출시 금지 및 과징금 부과.', 'pending'),
 ('EU Battery Regulation Art.47',          'EU_BATTERY_ART47', 'EU', '2023/1542', '2023-07-28', 'EU 배터리법 Article 47 공급망 실사 의무. 연간 배터리 생산량 일정 규모 이상 사업자는 코발트·천연흑연·리튬·니켈 등 핵심 원자재의 공급망 리스크를 식별·관리·공시해야 한다. OECD 다국적기업 가이드라인 및 UN 기업과 인권 이행원칙 준수 요구. 실사 정책 수립, 공급업체 감사, 연간 보고서 제출 의무.', 'pending'),
 ('Carbon Border Adjustment Mechanism',    'CBAM',             'EU', '2023/956',  '2026-01-01', 'EU 탄소국경조정제도(CBAM). 철강·알루미늄·시멘트·비료·전력·수소 6개 섹터 수입품에 대해 EU ETS 탄소가격과 원산지국 탄소가격의 차액을 CBAM 인증서로 납부해야 한다. 2024~2025년 전환기(보고 의무만), 2026년부터 인증서 구매 의무 본격 시행. 내재 탄소배출량 산정·보고·검증(MRV) 체계 구축 필요.', 'pending'),
-('EU Conflict Minerals Regulation',       'CONFLICT_MINERALS','EU', '2017/821',  '2021-01-01', 'EU 분쟁광물 규정(2017/821). 주석(Sn)·탄탈럼(Ta)·텅스텐(W)·금(Au) 4대 광물 및 관련 금속을 분쟁·고위험 지역에서 연간 일정량 이상 수입하는 EU 내 제련소·정제소는 OECD 실사 가이드라인에 따라 공급망 실사를 수행하고 제3자 감사를 받아야 한다. 감사 결과 및 공급망 정보 연간 공시 의무.', 'pending'),
+('EU Conflict Minerals Regulation',       'CONFLICT_MINERALS','BOTH', '2017/821',  '2021-01-01', 'EU 분쟁광물 규정(2017/821). 주석(Sn)·탄탈럼(Ta)·텅스텐(W)·금(Au) 4대 광물 및 관련 금속을 분쟁·고위험 지역에서 연간 일정량 이상 수입하는 EU 내 제련소·정제소는 OECD 실사 가이드라인에 따라 공급망 실사를 수행하고 제3자 감사를 받아야 한다. 감사 결과 및 공급망 정보 연간 공시 의무.', 'pending'),
 ('Critical Raw Materials Act',            'CRMA',             'EU', '2024/1252', '2024-05-23', 'EU 핵심원자재법(CRMA). 리튬·코발트·니켈·망간 등 34종 핵심원자재의 공급망 다변화·자급률 제고를 위해 2030년까지 EU 역내 채굴 10%, 가공 40%, 재활용 15% 목표를 설정한다. 대기업은 전략적 핵심원자재 공급망 취약성 감사 의무. 인·허가 절차 간소화 및 전략 프로젝트 지정 제도 포함.', 'pending');
+
+
+-- ============================================================
+-- 마스터 데이터 시드 (regulation_required_fields — C-2)
+-- ============================================================
+-- [C-2 — 은지, 2026-06-30]
+-- get_required_fields()가 더미(_TEMP_REQUIRED_FIELDS)를 버리고 이 테이블을 조회한다.
+-- regulations.regulation_code → regulation_id 서브쿼리로 FK를 해결해 멱등 시드.
+-- 기존 더미 데이터(EU_BATTERY_ART7·EUDR·UFLPA)를 실데이터로 교체하고
+-- 나머지 규제의 핵심 필수 필드도 함께 추가한다.
+--
+-- [REGULATION_BY_DESTINATION 정합성 기준]
+-- compliance.py의 REGULATION_BY_DESTINATION dict와 동일한 규제 코드만 시드.
+-- CBAM·CONFLICT_MINERALS·CRMA는 _stub_passed_judge(범위 외 자동통과)라
+-- 필수 필드 매트릭스 불필요 → 시드 제외.
+
+INSERT INTO regulation_required_fields
+    (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT r.regulation_id, v.field_name, v.field_type, v.provider_type_applicable::jsonb, v.is_mandatory
+FROM regulations r
+JOIN (VALUES
+    -- EU_BATTERY_ART7: 탄소발자국 선언 필수 필드
+    ('EU_BATTERY_ART7', 'carbon_intensity',             'numeric', '["manufacturer"]',          TRUE),
+    ('EU_BATTERY_ART7', 'factory_carbon_declarations',  'jsonb',   '["manufacturer"]',          TRUE),
+    ('EU_BATTERY_ART7', 'carbon_footprint_methodology', 'text',    '["manufacturer"]',          FALSE),
+
+    -- EU_BATTERY: 재활용 함량 필수 필드
+    ('EU_BATTERY',      'recycled_content_ratio',       'numeric', '["recycler","manufacturer"]', TRUE),
+    ('EU_BATTERY',      'recycling_certification',      'text',    '["recycler"]',              FALSE),
+
+    -- EU_BATTERY_ART47: 공급망 실사 정책
+    ('EU_BATTERY_ART47','due_diligence_policy_url',     'text',    '["manufacturer"]',          TRUE),
+    ('EU_BATTERY_ART47','audit_report_url',             'text',    '["manufacturer","miner"]',  FALSE),
+
+    -- EUDR: 산림파괴 비발생 증빙
+    ('EUDR',            'mine_coordinates',             'geojson', '["miner"]',                 TRUE),
+    ('EUDR',            'deforestation_free_cert_url',  'text',    '["miner","trader"]',        TRUE),
+    ('EUDR',            'gps_polygon',                  'geojson', '["miner"]',                 FALSE),
+
+    -- CSDDD: 인권실사 의무
+    ('CSDDD',           'human_rights_policy_url',      'text',    '["manufacturer","miner"]',  TRUE),
+    ('CSDDD',           'grievance_mechanism_url',      'text',    '["manufacturer"]',          FALSE),
+
+    -- UFLPA: 신장 원산지 추적
+    ('UFLPA',           'origin_country',               'text',    '["miner","trader"]',        TRUE),
+    ('UFLPA',           'geo_risk_flags',               'jsonb',   '["miner"]',                 FALSE),
+    ('UFLPA',           'supply_chain_traceability',    'text',    '["miner","trader"]',        TRUE),
+
+    -- IRA: FEOC 지분 검증
+    ('IRA',             'feoc_direct_ownership',        'numeric', '["manufacturer","trader"]', TRUE),
+    ('IRA',             'feoc_indirect_ownership',      'numeric', '["manufacturer","trader"]', TRUE),
+    ('IRA',             'ownership_disclosure_doc_url', 'text',    '["manufacturer"]',          FALSE)
+) AS v(regulation_code, field_name, field_type, provider_type_applicable, is_mandatory)
+    ON r.regulation_code = v.regulation_code
+ON CONFLICT DO NOTHING;
