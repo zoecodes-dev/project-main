@@ -49,14 +49,13 @@ async def get_batch(
     """
     BE-3: GET /batches/{batch_id}
 
-    배치 상세 조회 — 5종 판정 결과 포함.
+    배치 상세 조회 — compliance·geo·risk 판정 결과 포함.
 
     Response:
         batch_id, product_id, destination, current_stage, status,
-        confidence_score, readiness_score, received_at
+        confidence_score, received_at
         compliance_result  — {verdicts, needs_human_review, details[]}
         geo_result         — {risk_detected, risk_flags, detected_risks[]}
-        verification_result— {feoc_passed, violations[]}  (E R4 완료 전 null)
         risk_result        — {max_risk_score, has_high_risk}
     """
     result = await get_batch_detail(db, str(batch_id), current_user.tenant_id)

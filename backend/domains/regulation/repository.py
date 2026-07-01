@@ -408,7 +408,7 @@ async def get_regulation_results(
       result_id, material, supplier_id, supplier_name, regulation,
       verdict(passed/violation/warning/reject), confidence,
       needs_human_review(bool),
-      hitl_reason(feoc_violation/geographical_risk/low_confidence/None — 시급도 랭킹용),
+      hitl_reason(geographical_risk/low_confidence/None — 시급도 랭킹용),
       supplier_risk_level(low/medium/high/critical/None — 협력사 상시 등급),
       nearest_due_date(ISO/None — 가장 임박한 미이행 마감 SLA),
       evidence(배열)
@@ -437,7 +437,6 @@ async def get_regulation_results(
             cr.cited_clauses,                              -- 대조한 규제 조항(jsonb 배열)
             cr.reasoning_text,                             -- AI 판단 근거(어느 근거↔조항 대조 결과)
             ga.risk_detected                AS geo_risk_detected,  -- 지리 감사(신장/EUDR) 위험 검출 여부
-            vr.feoc_passed                  AS feoc_passed,        -- FEOC 검증 통과 여부(False=위반)
             (SELECT srp.risk_level
                FROM supplier_risk_profiles srp
               WHERE srp.supplier_id = cr.supplier_id
@@ -467,8 +466,6 @@ async def get_regulation_results(
             ON p.product_id = b.product_id                 -- 자재명(제품명) 조인
         LEFT JOIN geo_audit_results ga
             ON ga.batch_id = cr.batch_id                   -- batch 단위 지리 리스크 권위 결과
-        LEFT JOIN verification_results vr
-            ON vr.batch_id = cr.batch_id                   -- batch 단위 FEOC 검증 권위 결과
         ORDER BY cr.created_at DESC
         LIMIT :limit OFFSET :offset
     """)
@@ -480,16 +477,14 @@ async def get_regulation_results(
         HITL/에스컬레이션 사유 코드 — 대시보드 시급도 랭킹용(신뢰도-저하보다 지리/FEOC를 위로).
 
         compliance_results에는 사유 컬럼이 없고 compliance 노드는 항상 'low_confidence'만
-        세팅하므로, 지리/FEOC는 batch 단위 권위 결과(geo_audit_results·verification_results)에서
-        파생한다. 교차오염 방지를 위해 사유는 그 관심사를 '소유'한 규제 결과에만 귀속:
-          - IRA(FEOC)          + feoc_passed=False   → 'feoc_violation'
+        세팅하므로, 지리 리스크는 batch 단위 권위 결과(geo_audit_results)에서 파생한다.
+        교차오염 방지를 위해 사유는 그 관심사를 '소유'한 규제 결과에만 귀속:
           - UFLPA/EUDR(지리)   + geo_risk_detected   → 'geographical_risk'
           - 그 외 사람검토 필요                        → 'low_confidence'
           - 해당 없음                                  → None
+        (FEOC/IRA는 스코프 아웃 — verification 기반 사유 미포함)
         """
         reg = (row.regulation or "").upper()
-        if reg == "IRA" and row.feoc_passed is False:
-            return "feoc_violation"
         if reg in ("UFLPA", "EUDR") and row.geo_risk_detected is True:
             return "geographical_risk"
         if needs_review:

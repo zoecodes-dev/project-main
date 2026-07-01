@@ -100,19 +100,6 @@ services:
     container_name: kira-worker-parse
     command: ["arq", "backend.workers.document_parse_worker.WorkerSettings"]
 
-  # verification_queue 워커 (룰 검증 — E)
-  worker-verification:
-    build: *worker-build
-    networks:
-      - project_net
-    env_file:
-      - ./.env
-    environment: *worker-env
-    depends_on: *worker-deps
-    restart: always
-    container_name: kira-worker-verification
-    command: ["arq", "backend.workers.verification_worker.WorkerSettings"]
-
   # hitl_queue 워커
   worker-hitl:
     build: *worker-build

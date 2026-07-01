@@ -84,7 +84,6 @@ async def create_supplier_and_invite(
         supplier_id=supplier.supplier_id,
         overall_risk_score=0,
         risk_level="low",
-        feoc_status="unknown",
         is_high_risk_flag=False,
     ))
 
@@ -390,14 +389,13 @@ async def list_suppliers(
     db: AsyncSession,
     status: Optional[str] = None,
     risk_level: Optional[str] = None,
-    feoc_status: Optional[str] = None,
     page: int = 1,
     size: int = 20,
     tenant_id: Optional[UUID] = None,
 ) -> List[Supplier]:
     """목록 조회(필터 + 페이지네이션). tenant_id 지정 시 소유 테넌트만(§0.2)."""
     return await repository.get_suppliers(
-        db, status, risk_level, feoc_status, page, size, tenant_id
+        db, status, risk_level, page, size, tenant_id
     )
 
 
@@ -405,12 +403,11 @@ async def count_suppliers(
     db: AsyncSession,
     status: Optional[str] = None,
     risk_level: Optional[str] = None,
-    feoc_status: Optional[str] = None,
     tenant_id: Optional[UUID] = None,
 ) -> int:
     """목록 전체 건수(필터 동일, 페이지 무관). X-Total-Count 헤더용(§0.6)."""
     return await repository.count_suppliers(
-        db, status, risk_level, feoc_status, tenant_id
+        db, status, risk_level, tenant_id
     )
 
 
@@ -682,7 +679,6 @@ async def get_reliability(db: AsyncSession, supplier_id: UUID) -> Optional[dict]
         "completeness_score": supplier.completeness_score,
         "overall_risk_score": profile.overall_risk_score if profile else None,
         "risk_level": profile.risk_level if profile else None,
-        "feoc_status": profile.feoc_status if profile else None,
         "is_high_risk_flag": profile.is_high_risk_flag if profile else None,
         "last_risk_review_at": profile.last_risk_review_at if profile else None,
         "consent_status": onboarding.consent_status if onboarding else None,

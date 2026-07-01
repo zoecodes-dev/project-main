@@ -65,39 +65,39 @@ INSERT INTO customers (customer_id, customer_code, customer_name, country, sourc
 -- ============================================================
 -- 원청 (OEM, tier0) — 공급망 트리 루트. supply_chain_map 최상위 parent로 사용.
 -- 본질은 배터리 팩 '제조사'(provider_type=manufacturer). 원청/협력사 구분은 tier0(hop0)로.
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
-('a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'KIRA Energy Solutions', 'KIRA Energy Solutions', '키라에너지솔루션(주)', 'KIRA CEO', 'manufacturer', 100, 'supplier_verified', 'low', 'eligible');
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level) VALUES
+('a0000000-0000-4000-8000-000000000000', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'KIRA Energy Solutions', 'KIRA Energy Solutions', '키라에너지솔루션(주)', 'KIRA CEO', 'manufacturer', 100, 'supplier_verified', 'low');
 
 -- 제조사/셀
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
-('a1111111-1111-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '한양셀 제조(주)', 'Hanyang Cell Mfg',   '한양셀 제조(주)', 'Kim CEO',   'manufacturer', 92, 'supplier_verified',    'low',      'eligible'),
-('a7777777-7777-4000-8000-000000000007', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '우진배터리(주)',  'Woojin Battery',     '우진배터리(주)',  'Park CEO',  'manufacturer', 90, 'supplier_verified',    'low',      'eligible'),
-('a8888888-8888-4000-8000-000000000008', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '우진셀(주)',      'Woojin Cell',        '우진셀(주)',      'Park CTO',  'manufacturer', 88, 'supplier_verified',    'low',      'eligible');
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level) VALUES
+('a1111111-1111-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '한양셀 제조(주)', 'Hanyang Cell Mfg',   '한양셀 제조(주)', 'Kim CEO',   'manufacturer', 92, 'supplier_verified',    'low'),
+('a7777777-7777-4000-8000-000000000007', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '우진배터리(주)',  'Woojin Battery',     '우진배터리(주)',  'Park CEO',  'manufacturer', 90, 'supplier_verified',    'low'),
+('a8888888-8888-4000-8000-000000000008', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '우진셀(주)',      'Woojin Cell',        '우진셀(주)',      'Park CTO',  'manufacturer', 88, 'supplier_verified',    'low');
 
 -- CAM/전구체 (활물질·전구체 tier 4~5)
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
-('a2222222-2222-4000-8000-000000000002', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '동성머티리얼(주)', 'Dongsung Material', '동성머티리얼(주)', 'Choi CEO',  'manufacturer', 89, 'supplier_verified',    'low',      'eligible'),
-('a4444444-4444-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '대성정밀(주)',     'Daesung Precision', '대성정밀(주)',     'Lee CEO',   'manufacturer', 55, 'supplier_review',      'medium',   'under_review'),
-('a6666666-6666-4000-8000-000000000006', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '청정전구체(주)',   'Cheongjeong Precursor','청정전구체(주)', 'Jung CEO',  'manufacturer', 85, 'supplier_verified',    'low',      'eligible');
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level) VALUES
+('a2222222-2222-4000-8000-000000000002', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '동성머티리얼(주)', 'Dongsung Material', '동성머티리얼(주)', 'Choi CEO',  'manufacturer', 89, 'supplier_verified',    'low'),
+('a4444444-4444-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '대성정밀(주)',     'Daesung Precision', '대성정밀(주)',     'Lee CEO',   'manufacturer', 55, 'supplier_review',      'medium'),
+('a6666666-6666-4000-8000-000000000006', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '청정전구체(주)',   'Cheongjeong Precursor','청정전구체(주)', 'Jung CEO',  'manufacturer', 85, 'supplier_verified',    'low');
 
 -- 제련·정제 (tier 6)
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
-('aaaaaaaa-aaaa-4000-8000-00000000000a', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '한중제련(주)',    'Hanjung Refinery',  '한중제련(주)',    'Yoon CEO',  'smelter', 80, 'supplier_verified',    'low',      'eligible'),
-('acacacac-acac-4000-8000-0000000000ac', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Xinjiang Nickel Refinery', 'Xinjiang Nickel Refinery', NULL, 'Wang CEO', 'smelter', 60, 'supplier_review', 'high', 'under_review');
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level) VALUES
+('aaaaaaaa-aaaa-4000-8000-00000000000a', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '한중제련(주)',    'Hanjung Refinery',  '한중제련(주)',    'Yoon CEO',  'smelter', 80, 'supplier_verified',    'low'),
+('acacacac-acac-4000-8000-0000000000ac', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Xinjiang Nickel Refinery', 'Xinjiang Nickel Refinery', NULL, 'Wang CEO', 'smelter', 60, 'supplier_review', 'high');
 
 -- 제련소 세부(RMI 기준): 검증완료 = RMAP conformant → rmi / 고위험 신장 = private.
 UPDATE suppliers SET smelter_type = 'rmi'     WHERE supplier_id = 'aaaaaaaa-aaaa-4000-8000-00000000000a';
 UPDATE suppliers SET smelter_type = 'private' WHERE supplier_id = 'acacacac-acac-4000-8000-0000000000ac';
 
 -- 광산 (tier 7)
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
-('a3333333-3333-4000-8000-000000000003', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '호주리튬광업', 'Australia Lithium Mining', NULL, 'Smith CEO', 'miner', 86, 'supplier_verified',  'low',      'eligible'),
-('a9999999-9999-4000-8000-000000000009', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '칠레리튬광업', 'Chile Lithium Mining',     NULL, 'Garcia CEO','miner', 84, 'supplier_verified',  'low',      'eligible'),
-('a5555555-5555-4000-8000-000000000005', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Global Mining Corp', 'Global Mining Corp', NULL, 'Zhang CEO', 'miner', 35, 'supplier_violation', 'critical', 'ineligible');
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, company_name_ko, ceo_name, provider_type, completeness_score, status, risk_level) VALUES
+('a3333333-3333-4000-8000-000000000003', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '호주리튬광업', 'Australia Lithium Mining', NULL, 'Smith CEO', 'miner', 86, 'supplier_verified',  'low'),
+('a9999999-9999-4000-8000-000000000009', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '칠레리튬광업', 'Chile Lithium Mining',     NULL, 'Garcia CEO','miner', 84, 'supplier_verified',  'low'),
+('a5555555-5555-4000-8000-000000000005', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Global Mining Corp', 'Global Mining Corp', NULL, 'Zhang CEO', 'miner', 35, 'supplier_violation', 'critical');
 
 -- 트레이더 (i4 Gray — 미확인 전구체)
-INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, provider_type, completeness_score, status, risk_level, feoc_status) VALUES
-('abababab-abab-4000-8000-0000000000ab', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Unverified Precursor Trading', 'Unverified Precursor Trading', 'trader', 40, 'supplier_in_progress', 'medium', 'under_review');
+INSERT INTO suppliers (supplier_id, tenant_id, company_name, company_name_en, provider_type, completeness_score, status, risk_level) VALUES
+('abababab-abab-4000-8000-0000000000ab', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'Unverified Precursor Trading', 'Unverified Precursor Trading', 'trader', 40, 'supplier_in_progress', 'medium');
 
 -- 소재 국가(ISO 3166-1 alpha-2) 시드 — INSERT에 country 미포함이라 전부 null이던 것 보완(화면 '미입력' 해소).
 UPDATE suppliers SET country = CASE supplier_id
@@ -135,15 +135,15 @@ INSERT INTO supplier_factories (factory_id, supplier_id, factory_name, factory_n
 -- 청정전구체 [Sad-Lot1 정상]
 ('f6666666-0000-4000-8000-000000000006', 'a6666666-6666-4000-8000-000000000006', '광양 전구체공장', 'Gwangyang Precursor', 'KR', 'Gwangyang', ST_SetSRID(ST_MakePoint(127.700, 34.940), 4326), 'processing', 'BOTH', '["EU_BATTERY","CRMA"]'::jsonb, 100.00),
 -- 한중제련 tier6
-('faaaaaaa-0000-4000-8000-00000000000a', 'aaaaaaaa-aaaa-4000-8000-00000000000a', '온산 제련소', 'Onsan Refinery', 'KR', 'Onsan', ST_SetSRID(ST_MakePoint(129.347, 35.428), 4326), 'processing', 'BOTH', '["IRA","CRMA"]'::jsonb, 100.00),
+('faaaaaaa-0000-4000-8000-00000000000a', 'aaaaaaaa-aaaa-4000-8000-00000000000a', '온산 제련소', 'Onsan Refinery', 'KR', 'Onsan', ST_SetSRID(ST_MakePoint(129.347, 35.428), 4326), 'processing', 'BOTH', '["CRMA"]'::jsonb, 100.00),
 -- 신장니켈제련 [Sad tier6]
-('facacaca-0000-4000-8000-0000000000ac', 'acacacac-acac-4000-8000-0000000000ac', 'Xinjiang Refinery', 'Xinjiang Refinery', 'CN', 'Xinjiang', ST_SetSRID(ST_MakePoint(86.150, 41.120), 4326), 'processing', 'US', '["UFLPA","IRA"]'::jsonb, 100.00),
+('facacaca-0000-4000-8000-0000000000ac', 'acacacac-acac-4000-8000-0000000000ac', 'Xinjiang Refinery', 'Xinjiang Refinery', 'CN', 'Xinjiang', ST_SetSRID(ST_MakePoint(86.150, 41.120), 4326), 'processing', 'US', '["UFLPA"]'::jsonb, 100.00),
 -- 호주리튬광산 [Happy tier7]
 ('f3333333-0000-4000-8000-000000000003', 'a3333333-3333-4000-8000-000000000003', 'Greenbushes Mine', 'Greenbushes Mine', 'AU', 'Western Australia', ST_SetSRID(ST_MakePoint(116.060, -33.860), 4326), 'mining', 'BOTH', '["CRMA"]'::jsonb, 100.00),
 -- 칠레리튬광산 [Happy tier7]
 ('f9999999-0000-4000-8000-000000000009', 'a9999999-9999-4000-8000-000000000009', 'Atacama Mine', 'Atacama Mine', 'CL', 'Antofagasta', ST_SetSRID(ST_MakePoint(-68.200, -23.500), 4326), 'mining', 'BOTH', '["CRMA"]'::jsonb, 100.00),
 -- Global Mining 신장 광산 [Sad tier7 — 위반 핵심 노드]
-('f5555555-0000-4000-8000-000000000005', 'a5555555-5555-4000-8000-000000000005', 'Xinjiang NCM Mine A', 'Xinjiang NCM Mine A', 'CN', 'Xinjiang', ST_SetSRID(ST_MakePoint(86.000, 41.000), 4326), 'mining', 'US', '["UFLPA","IRA"]'::jsonb, 100.00);
+('f5555555-0000-4000-8000-000000000005', 'a5555555-5555-4000-8000-000000000005', 'Xinjiang NCM Mine A', 'Xinjiang NCM Mine A', 'CN', 'Xinjiang', ST_SetSRID(ST_MakePoint(86.000, 41.000), 4326), 'mining', 'US', '["UFLPA"]'::jsonb, 100.00);
 
 -- view_permissions: ESG 담당자가 한양셀 하위 3차수까지 열람
 INSERT INTO view_permissions (user_id, viewable_supplier_id, can_view_parent, can_view_children, can_view_siblings, depth_limit, granted_by) VALUES
@@ -210,18 +210,18 @@ INSERT INTO supplier_miner_details (supplier_id, mine_name, mining_method, extra
 -- ============================================================
 -- 7. 리스크 프로필 (영역 4)
 -- ============================================================
-INSERT INTO supplier_risk_profiles (supplier_id, overall_risk_score, risk_level, self_reported_risk_level, feoc_status, feoc_direct_ownership, is_high_risk_flag, high_risk_reasons, last_risk_review_at) VALUES
+INSERT INTO supplier_risk_profiles (supplier_id, overall_risk_score, risk_level, self_reported_risk_level, is_high_risk_flag, high_risk_reasons, last_risk_review_at) VALUES
 -- 원청 (tier0 루트) — 트리 루트 노드 색상/리스크 NULL 방지용 최소 프로필
-('a0000000-0000-4000-8000-000000000000', 0,  'low',      'low',     'eligible',     0.00,  FALSE, NULL, now() - interval '7 days'),
-('a1111111-1111-4000-8000-000000000001', 10, 'low',      'low',     'eligible',     0.00,  FALSE, NULL, now() - interval '7 days'),
-('a7777777-7777-4000-8000-000000000007', 10, 'low',      'low',     'eligible',     0.00,  FALSE, NULL, now() - interval '7 days'),
-('a2222222-2222-4000-8000-000000000002', 15, 'low',      'low',     'eligible',     0.00,  FALSE, NULL, now() - interval '7 days'),
--- Global Mining: critical (FEOC 외국지분 28.5% > 25% 차단선, 신장)
-('a5555555-5555-4000-8000-000000000005', 80, 'critical', 'medium',  'ineligible',  28.50, TRUE,  '["FEOC 우려국 지분 28.5% (25% 초과)","신장 인접 광산","UFLPA 강제노동 의혹"]'::jsonb, now() - interval '2 days'),
-('acacacac-acac-4000-8000-0000000000ac', 55, 'high',     'low',     'under_review', 0.00, TRUE,  '["신장 인접 제련소"]'::jsonb, now() - interval '4 days'),
+('a0000000-0000-4000-8000-000000000000', 0,  'low',      'low',     FALSE, NULL, now() - interval '7 days'),
+('a1111111-1111-4000-8000-000000000001', 10, 'low',      'low',     FALSE, NULL, now() - interval '7 days'),
+('a7777777-7777-4000-8000-000000000007', 10, 'low',      'low',     FALSE, NULL, now() - interval '7 days'),
+('a2222222-2222-4000-8000-000000000002', 15, 'low',      'low',     FALSE, NULL, now() - interval '7 days'),
+-- Global Mining: critical (신장 인접 광산 / UFLPA)
+('a5555555-5555-4000-8000-000000000005', 80, 'critical', 'medium',  TRUE,  '["신장 인접 광산","UFLPA 강제노동 의혹"]'::jsonb, now() - interval '2 days'),
+('acacacac-acac-4000-8000-0000000000ac', 55, 'high',     'low',     TRUE,  '["신장 인접 제련소"]'::jsonb, now() - interval '4 days'),
 -- 대성정밀: medium (자료 미비)
-('a4444444-4444-4000-8000-000000000004', 35, 'medium',   'low',     'under_review', 0.00, FALSE, '["자료 완성도 미흡"]'::jsonb, now() - interval '3 days'),
-('abababab-abab-4000-8000-0000000000ab', 30, 'medium',   'unknown', 'under_review', 0.00, FALSE, '["공개율 45%"]'::jsonb, now() - interval '10 days');
+('a4444444-4444-4000-8000-000000000004', 35, 'medium',   'low',     FALSE, '["자료 완성도 미흡"]'::jsonb, now() - interval '3 days'),
+('abababab-abab-4000-8000-0000000000ab', 30, 'medium',   'unknown', FALSE, '["공개율 45%"]'::jsonb, now() - interval '10 days');
 
 -- 실사 기록 (Global Mining 보완 필요)
 INSERT INTO supplier_audit_records (supplier_id, audit_date, audit_type, auditor, audit_status, inspector_id, result, next_audit_due) VALUES
@@ -407,13 +407,13 @@ INSERT INTO factory_carbon_declarations (factory_id, carbon_intensity, methodolo
 -- ============================================================
 -- ① iX3 [Happy] EU向 발행완료
 INSERT INTO batches (batch_id, product_id, bom_version_id, tenant_id, destination, current_stage, status, confidence_score, source_system, external_id) VALUES
-('ba111111-0000-4000-8000-000000000001', 'd1111111-0000-4000-8000-000000000001', 'e1111111-0000-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'EU', 'stage_issuance',   'batch_completed', 0.9600, 'MES', 'MES-LOT-IX3'),
+('ba111111-0000-4000-8000-000000000001', 'd1111111-0000-4000-8000-000000000001', 'e1111111-0000-4000-8000-000000000001', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'EU', 'stage_risk',   'batch_completed', 0.9600, 'MES', 'MES-LOT-IX3'),
 -- ② i4 [Gray] EU向 저신뢰 → HITL 대기
 ('ba222222-0000-4000-8000-000000000002', 'd2222222-0000-4000-8000-000000000002', 'e2222222-0000-4000-8000-000000000002', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'EU', 'stage_compliance', 'batch_hitl_wait',  0.7000, 'MES', 'MES-LOT-I4'),
 -- ③ GLC Lot2 [Sad] US向 risk 70+ → HITL 반려 예정
 ('ba333333-0000-4000-8000-000000000003', 'd3333333-0000-4000-8000-000000000003', 'e3333333-0000-4000-8000-000000000032', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'US', 'stage_risk',       'batch_hitl_wait',  0.9100, 'MES', 'MES-LOT-GLC2'),
 -- ④ EQS [Happy] EU向 발행완료
-('ba444444-0000-4000-8000-000000000004', 'd4444444-0000-4000-8000-000000000004', 'e4444444-0000-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'EU', 'stage_issuance',   'batch_completed', 0.9500, 'MES', 'MES-LOT-EQS');
+('ba444444-0000-4000-8000-000000000004', 'd4444444-0000-4000-8000-000000000004', 'e4444444-0000-4000-8000-000000000004', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'EU', 'stage_risk',   'batch_completed', 0.9500, 'MES', 'MES-LOT-EQS');
 
 
 -- ============================================================

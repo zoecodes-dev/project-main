@@ -252,7 +252,7 @@ class SupplyChainRepository:
         """HITL 컨텍스트용 협력사 마스터 및 공장 GPS 정보 조회"""
         master_query = text("""
             SELECT supplier_id, company_name, company_name_en, provider_type,
-                   status, risk_level, feoc_status, completeness_score,
+                   status, risk_level, completeness_score,
                    (SELECT sf.country FROM supplier_factories sf
                     WHERE sf.supplier_id = suppliers.supplier_id AND sf.is_active = TRUE
                     ORDER BY (sf.factory_role = 'headquarters') DESC, sf.factory_id
@@ -628,7 +628,7 @@ class SupplyChainRepository:
             sup_query = text("""
                 SELECT
                     s.supplier_id, s.company_name, s.provider_type, s.status, s.risk_level,
-                    s.feoc_status, s.completeness_score
+                    s.completeness_score
                 FROM suppliers s
                 WHERE s.supplier_id = ANY(:ids)
             """)

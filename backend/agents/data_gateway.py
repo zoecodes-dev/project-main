@@ -36,7 +36,6 @@ _DOC_CATEGORY_ENUM = frozenset({
     "business_registration",
     "origin_certificate",
     "dd_audit_report",
-    "feoc_ownership_declaration",
     "product_spec",
     "manufacturing_process_doc",
     "carbon_footprint_declaration",
@@ -57,18 +56,18 @@ _DOC_CATEGORY_PROMPT = " | ".join(sorted(_DOC_CATEGORY_ENUM - {"other"})) + " | 
 # provider_type별 기대 doc_category 집합 (검증용, manufacturer/miner/smelter만 정의)
 _PROVIDER_CATEGORY_MAP: dict[str, frozenset] = {
     "manufacturer": frozenset({
-        "business_registration", "dd_audit_report", "feoc_ownership_declaration",
+        "business_registration", "dd_audit_report",
         "product_spec", "manufacturing_process_doc", "carbon_footprint_declaration",
         "recycled_content_report",
     }),
     "miner": frozenset({
         "business_registration", "origin_certificate", "dd_audit_report",
-        "feoc_ownership_declaration", "mining_permit", "mineral_production_report",
+        "mining_permit", "mineral_production_report",
         "safety_health_report", "environmental_impact_assessment",
     }),
     "smelter": frozenset({
         "business_registration", "origin_certificate", "dd_audit_report",
-        "feoc_ownership_declaration", "smelter_identification", "rmap_certificate",
+        "smelter_identification", "rmap_certificate",
         "cmrt_declaration", "cbam_declaration", "uflpa_documentation",
     }),
 }
