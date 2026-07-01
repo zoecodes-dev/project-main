@@ -16,6 +16,24 @@ XINJIANG_REGION_WKT = (
     "POLYGON((73.4 34.8, 96.4 34.8, 96.4 49.2, 73.4 49.2, 73.4 34.8))"
 )
 
+# 신장(UFLPA) 이름매칭 토큰 — region/address 텍스트 판정용(좌표 없어도 잡는다).
+#   ★왜 좌표 폴리곤과 별개로 필요한가★
+#   지오코딩(geo-places)이 신장 광역·하위 지구(카슈가르·허톈 등)를 좌표로 못 잡아
+#   location이 NULL이 되면, 폴리곤 판정 쿼리(location IS NOT NULL)에서 빠져 UFLPA
+#   최고위험지가 false negative로 통과한다. 이름으로도 잡아 누락을 막는다.
+#   과탐(예: 지명이 든 주소)은 규제 스크린에서 안전한 방향 — HITL 리뷰로 걸러진다.
+#   ※ 모호한 짧은 로마자(ili/kashi/hami 등)는 오탐이 커서 제외. 구별 가능한 표기만.
+XINJIANG_NAME_TOKENS: List[str] = [
+    "신장", "新疆", "xinjiang", "위구르", "uyghur", "uygur",
+    "우루무치", "乌鲁木齐", "urumqi", "urumchi",
+    "카슈가르", "喀什", "kashgar",
+    "허톈", "和田", "hotan", "hetian",
+    "아커쑤", "阿克苏", "aksu",
+    "투루판", "吐鲁番", "turpan",
+    "카라마이", "克拉玛依", "karamay",
+    "쿠얼러", "库尔勒", "korla",
+]
+
 
 # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 맵 헤더(supply_chain_maps) 도입에 따른 개명.
 #   supply_chain_map.map_id(엣지 PK) → edge_id, supply_ratio.map_id → edge_id 로 전 쿼리 정합.
@@ -470,9 +488,31 @@ class SupplyChainRepository:
             WHERE sf.location IS NOT NULL;
         """)
         result = await self.session.execute(query, {
-            "xinjiang_wkt": XINJIANG_REGION_WKT, 
+            "xinjiang_wkt": XINJIANG_REGION_WKT,
             "radius": radius_meters,
         })
+        return [dict(row._mapping) for row in result]
+
+    @trace_tool("xinjiang_name_match")
+    async def check_xinjiang_by_name(self) -> List[Dict[str, Any]]:
+        """
+        신장(UFLPA) 이름매칭 판정 — region/address에 신장·하위 지구명이 있으면
+        좌표 유무와 무관하게 대상으로 반환한다(좌표 폴리곤 판정의 false negative 보완).
+        location은 NULL일 수 있으므로 ST_AsGeoJSON은 NULL을 그대로 반환(호출부에서 []처리).
+        """
+        patterns = [f"%{t}%" for t in XINJIANG_NAME_TOKENS]
+        query = text("""
+            SELECT
+                sf.factory_id,
+                s.supplier_id,
+                s.company_name,
+                ST_AsGeoJSON(sf.location) AS coordinates
+            FROM supplier_factories sf
+            JOIN suppliers s ON sf.supplier_id = s.supplier_id
+            WHERE sf.is_active = TRUE
+              AND (sf.region ILIKE ANY(:patterns) OR sf.address ILIKE ANY(:patterns))
+        """)
+        result = await self.session.execute(query, {"patterns": patterns})
         return [dict(row._mapping) for row in result]
 
     # [BYPASS:A2] 시연용 4개국 바운딩박스 — 미정의 국가는 ELSE TRUE 통과. 운영 전환 시 국가 폴리곤 테이블 필요

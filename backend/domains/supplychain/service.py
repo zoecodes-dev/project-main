@@ -407,6 +407,7 @@ class SupplyChainService:
         eudr_results = await self.repository.check_eudr_deforestation(db)
 
         detected_risks: List[Dict[str, Any]] = []
+        flagged_xinjiang: set = set()   # factory_id dedup — 좌표/이름 중복 발행 방지
         for result in audit_results:
             if result.get("is_in_risk_zone"):
                 formatted_coords = self.parse_geojson_to_latlng(result["coordinates"])
@@ -420,6 +421,27 @@ class SupplyChainService:
                 )
                 await self._publish_geo_risk(event)
                 detected_risks.append(asdict(event))
+                flagged_xinjiang.add(result["factory_id"])
+
+        # 신장 이름매칭 — 지오코딩이 좌표를 못 잡아 location=NULL이면 위 폴리곤
+        #   판정에서 누락되는 하위 지구(카슈가르 등)를 이름으로 보완해 UFLPA 누락을 막는다.
+        #   좌표로 이미 잡힌 공장은 중복 발행하지 않는다(factory_id dedup).
+        name_results = await self.repository.check_xinjiang_by_name()
+        for result in name_results:
+            if result["factory_id"] in flagged_xinjiang:
+                continue
+            formatted_coords = self.parse_geojson_to_latlng(result.get("coordinates"))
+            event = GeoRiskDetectedEvent(
+                batch_id=batch_id,
+                factory_id=result["factory_id"],
+                risk_type="xinjiang",
+                supplier_id=result["supplier_id"],
+                company_name=result["company_name"],
+                coordinates=formatted_coords,
+            )
+            await self._publish_geo_risk(event)
+            detected_risks.append(asdict(event))
+            flagged_xinjiang.add(result["factory_id"])
 
         for result in mismatch_results:
             if not result.get("country_match"):
