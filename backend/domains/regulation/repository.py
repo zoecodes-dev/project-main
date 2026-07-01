@@ -188,54 +188,68 @@ async def search_by_embedding(
 
 
 # ============================================================
-# 3. [TODO] regulation_required_fields 조회
-#    D(영수) C1 DDL 머지 후 구현
+# 3. regulation_required_fields 조회 (C-2 — 은지)
 # ============================================================
 
-# ┌──────────────────────────────────────────────────────────────┐
-# │ D 머지 후 체크리스트:                                        │
-# │   1. models.py의 RegulationRequiredField ORM 주석 해제        │
-# │   2. 아래 함수를 실제 DB 쿼리로 교체                          │
-# │   3. service.py의 get_required_fields()에서 이 함수 호출       │
-# └──────────────────────────────────────────────────────────────┘
-
-_TEMP_REQUIRED_FIELDS: dict[str, list[dict[str, Any]]] = {
-    "EU_BATTERY_ART7": [
-        {"field_name": "carbon_intensity", "field_type": "number",
-         "is_mandatory": True, "provider_type_applicable": ["manufacturer"]},
-        {"field_name": "factory_carbon_declarations", "field_type": "jsonb",
-         "is_mandatory": True, "provider_type_applicable": ["manufacturer"]},
-    ],
-    "EUDR": [
-        {"field_name": "mine_coordinates", "field_type": "string",
-         "is_mandatory": True, "provider_type_applicable": ["miner"]},
-    ],
-    "UFLPA": [
-        {"field_name": "geo_risk_flags", "field_type": "jsonb",
-         "is_mandatory": False, "provider_type_applicable": ["miner"]},
-    ],
-    # IRA(FEOC 지분)는 스코프 축소로 제거 — feoc_* 필드/테이블 삭제.
-}
-
+# [C-2 변경 — 은지, 2026-06-30]
+# 기존 더미(_TEMP_REQUIRED_FIELDS)를 regulation_required_fields DB 쿼리로 교체.
+# 0행이면 폴백(빈 리스트 반환) — get_gaps 무중단 보장(가이드 §3 C-2 무회귀 조건).
+#
+# [폴백 보존 이유]
+#   테이블 시드가 안 됐거나 해당 regulation_code 데이터가 없는 경우
+#   기존처럼 빈 리스트를 반환해 get_gaps 등 하위 호출자가 에러 없이 동작하게 한다.
 
 async def get_required_fields(
     db: AsyncSession,
     regulation_code: str,
 ) -> list[dict[str, Any]]:
     """
-    [TODO — D 머지 후 DB 쿼리로 교체]
-    현재는 더미 데이터 반환.
-    """
-    fields = _TEMP_REQUIRED_FIELDS.get(regulation_code, [])
+    regulation_required_fields 테이블에서 규제별 필수 필드를 조회한다.
 
-    if not fields:
-        logger.warning(
-            "[TODO] get_required_fields: regulation_code=%s 매핑 없음. "
-            "D의 C1 머지 후 DB 쿼리로 교체 필요.",
+    [C-2 변경 전 — 더미]
+      _TEMP_REQUIRED_FIELDS 딕셔너리에서 하드코딩된 값을 반환했다.
+
+    [C-2 변경 후 — DB 쿼리]
+      regulations.regulation_code로 regulation_id를 찾아
+      regulation_required_fields를 조인 조회한다.
+      0행이면 빈 리스트 반환(폴백) — 하위 호출자 무중단.
+
+    [무회귀]
+      반환 형태(list[dict])는 기존과 동일.
+      키: field_name, field_type, is_mandatory, provider_type_applicable.
+    """
+    rows = (await db.execute(
+        text("""
+            SELECT
+                rrf.field_name,
+                rrf.field_type,
+                rrf.is_mandatory,
+                rrf.provider_type_applicable
+            FROM regulation_required_fields rrf
+            JOIN regulations r ON r.regulation_id = rrf.regulation_id
+            WHERE r.regulation_code = :regulation_code
+            ORDER BY rrf.field_name
+        """),
+        {"regulation_code": regulation_code},
+    )).fetchall()
+
+    if not rows:
+        logger.debug(
+            "get_required_fields: regulation_code=%s 에 해당하는 행이 없어요. "
+            "빈 리스트 반환(폴백) — 시드 데이터를 확인해주세요.",
             regulation_code,
         )
+        return []
 
-    return fields
+    return [
+        {
+            "field_name":               row.field_name,
+            "field_type":               row.field_type,
+            "is_mandatory":             row.is_mandatory,
+            "provider_type_applicable": row.provider_type_applicable or [],
+        }
+        for row in rows
+    ]
 
 
 # ============================================================
@@ -407,7 +421,11 @@ async def get_regulation_results(
     [반환 필드]
       result_id, material, supplier_id, supplier_name, regulation,
       verdict(passed/violation/warning/reject), confidence,
-      needs_human_review(bool), evidence(배열)
+      needs_human_review(bool),
+      hitl_reason(geographical_risk/low_confidence/None — 시급도 랭킹용),
+      supplier_risk_level(low/medium/high/critical/None — 협력사 상시 등급),
+      nearest_due_date(ISO/None — 가장 임박한 미이행 마감 SLA),
+      evidence(배열)
 
     [evidence 구조]
       compliance_results에 별도 evidence 테이블이 없으므로
@@ -431,7 +449,25 @@ async def get_regulation_results(
             cr.confidence_score             AS confidence,   -- 추출항목/판정 신뢰도(AI 파싱뷰와 동일 기준)
             cr.needs_human_review,
             cr.cited_clauses,                              -- 대조한 규제 조항(jsonb 배열)
-            cr.reasoning_text                              -- AI 판단 근거(어느 근거↔조항 대조 결과)
+            cr.reasoning_text,                             -- AI 판단 근거(어느 근거↔조항 대조 결과)
+            ga.risk_detected                AS geo_risk_detected,  -- 지리 감사(신장/EUDR) 위험 검출 여부
+            (SELECT srp.risk_level
+               FROM supplier_risk_profiles srp
+              WHERE srp.supplier_id = cr.supplier_id
+              ORDER BY srp.updated_at DESC NULLS LAST
+              LIMIT 1)                       AS supplier_risk_level,  -- 협력사 상시 리스크 등급(low/medium/high/critical)
+            LEAST(
+                (SELECT MIN(drl.due_date)
+                   FROM data_request_log drl
+                  WHERE drl.target_supplier_id = cr.supplier_id
+                    AND drl.response_status <> 'response_responded'  -- 미이행 자료요청
+                    AND drl.due_date IS NOT NULL),
+                (SELECT MIN(dc.due_date)
+                   FROM detention_cases dc
+                  WHERE dc.batch_id = cr.batch_id
+                    AND dc.status NOT IN ('released', 'seized')      -- 미종결 통관 억류
+                    AND dc.due_date IS NOT NULL)
+            )                                AS nearest_due_date    -- 가장 임박한 미이행 마감(SLA). LEAST는 NULL 무시
         FROM compliance_results cr
         INNER JOIN batches b
             ON cr.batch_id = b.batch_id
@@ -442,14 +478,41 @@ async def get_regulation_results(
             ON cr.supplier_id = s.supplier_id
         LEFT JOIN products p
             ON p.product_id = b.product_id                 -- 자재명(제품명) 조인
+        LEFT JOIN geo_audit_results ga
+            ON ga.batch_id = cr.batch_id                   -- batch 단위 지리 리스크 권위 결과
         ORDER BY cr.created_at DESC
         LIMIT :limit OFFSET :offset
     """)
 
     rows = (await db.execute(sql, params)).fetchall()
 
-    return [
-        {
+    def _hitl_reason(row, needs_review: bool) -> str | None:
+        """
+        HITL/에스컬레이션 사유 코드 — 대시보드 시급도 랭킹용(신뢰도-저하보다 지리/FEOC를 위로).
+
+        compliance_results에는 사유 컬럼이 없고 compliance 노드는 항상 'low_confidence'만
+        세팅하므로, 지리 리스크는 batch 단위 권위 결과(geo_audit_results)에서 파생한다.
+        교차오염 방지를 위해 사유는 그 관심사를 '소유'한 규제 결과에만 귀속:
+          - UFLPA/EUDR(지리)   + geo_risk_detected   → 'geographical_risk'
+          - 그 외 사람검토 필요                        → 'low_confidence'
+          - 해당 없음                                  → None
+        (FEOC/IRA는 스코프 아웃 — verification 기반 사유 미포함)
+        """
+        reg = (row.regulation or "").upper()
+        if reg in ("UFLPA", "EUDR") and row.geo_risk_detected is True:
+            return "geographical_risk"
+        if needs_review:
+            return "low_confidence"
+        return None
+
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        # confidence가 없거나 임계값 미만이면 HITL 후보
+        needs_review = bool(
+            row.needs_human_review
+            or (row.confidence is not None and float(row.confidence) < _HITL_THRESHOLD)
+        )
+        results.append({
             "result_id":          str(row.result_id),
             "material":           str(row.material) if row.material else None,
             "supplier_id":        str(row.supplier_id),
@@ -457,17 +520,15 @@ async def get_regulation_results(
             "regulation":         row.regulation,
             "verdict":            _VERDICT_MAP.get(row.verdict, row.verdict),
             "confidence":         float(row.confidence) if row.confidence is not None else None,
-            # confidence가 없거나 임계값 미만이면 HITL 후보
-            "needs_human_review": (
-                row.needs_human_review
-                or (row.confidence is not None and float(row.confidence) < _HITL_THRESHOLD)
-            ),
+            "needs_human_review": needs_review,
+            "hitl_reason":        _hitl_reason(row, needs_review),   # HITL 사유(시급도 랭킹용)
+            "supplier_risk_level": row.supplier_risk_level,          # 협력사 상시 리스크 등급(시급도 신호)
+            "nearest_due_date":   row.nearest_due_date.isoformat() if row.nearest_due_date else None,  # 가장 임박한 미이행 마감(SLA)
             "evidence":           [],  # TODO: submission_documents 연계 후 채움
             "cited_clauses":      row.cited_clauses or [],   # 대조한 규제 조항
             "reasoning_text":     row.reasoning_text,        # AI 판단 근거
-        }
-        for row in rows
-    ]
+        })
+    return results
 
 
 async def count_regulation_results(

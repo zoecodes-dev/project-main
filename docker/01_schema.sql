@@ -117,11 +117,7 @@ CREATE TABLE suppliers (
     -- [B 속성 상태] 리스크 점수 가산식 스케일 업 대역 매칭
     risk_level          VARCHAR(20) DEFAULT 'low'
         CONSTRAINT chk_supplier_risk CHECK (risk_level IN ('low', 'medium', 'high', 'critical')),
-        
-    -- [B 속성 상태] FEOC 적격 여부
-    feoc_status         VARCHAR(20) DEFAULT 'unknown'
-        CONSTRAINT chk_supplier_feoc CHECK (feoc_status IN ('eligible', 'ineligible', 'under_review', 'unknown')),
-        
+
     created_at          TIMESTAMPTZ DEFAULT now(),
     updated_at          TIMESTAMPTZ DEFAULT now()
 );
@@ -278,11 +274,6 @@ CREATE TABLE supplier_risk_profiles (
     -- [B 속성 상태] 협력사 자가평가 리스크 레벨 (Reliability Score 계산 시 시스템 risk_level과 비교)
     self_reported_risk_level VARCHAR(20) DEFAULT 'unknown' CONSTRAINT chk_self_risk CHECK (self_reported_risk_level IN ('low', 'medium', 'high', 'critical', 'unknown')),
 
-    feoc_status             VARCHAR(20) DEFAULT 'unknown' CONSTRAINT chk_profile_feoc CHECK (feoc_status IN ('eligible', 'ineligible', 'under_review', 'unknown')),
-    feoc_direct_ownership   NUMERIC(5,2),
-    feoc_indirect_ownership NUMERIC(5,2),
-    feoc_last_assessed_at   TIMESTAMPTZ,
-    feoc_cert_expiry        DATE,
     is_high_risk_flag       BOOLEAN DEFAULT FALSE,
     high_risk_reasons       JSONB, -- 고위험 유발 원인들의 텍스트 설명 배열
     last_risk_review_at     TIMESTAMPTZ,
@@ -547,20 +538,19 @@ CREATE TABLE batches (
     received_at      TIMESTAMPTZ DEFAULT now(),
     destination      VARCHAR(2) CONSTRAINT chk_batch_destination CHECK (destination IN ('US', 'EU', 'KR')),
     
-    -- [A-7 상태] batch_stage 접두어 일괄 적용
+    -- [A-7 상태] batch_stage 접두어 일괄 적용 (verification/readiness/issuance는 스코프 축소로 제거)
     current_stage    VARCHAR(50) DEFAULT 'stage_queued'
         CONSTRAINT chk_batch_stage CHECK (
-            current_stage IN ('stage_queued', 'stage_extraction', 'stage_verification', 'stage_geo', 'stage_compliance', 'stage_risk', 'stage_readiness', 'stage_issuance')
+            current_stage IN ('stage_queued', 'stage_extraction', 'stage_geo', 'stage_compliance', 'stage_risk')
         ),
-        
+
     -- [A-6 상태] batch_status 접두어 일괄 적용
     status           VARCHAR(30) DEFAULT 'batch_processing'
         CONSTRAINT chk_batch_status CHECK (
             status IN ('batch_processing', 'batch_hitl_wait', 'batch_completed', 'batch_rejected')
         ),
-        
+
     confidence_score NUMERIC(5,4),
-    readiness_score  NUMERIC(5,4),
 
     -- [결정 #1 정교화] 외부 원천시스템 연동 마크 주입 (생산 배치는 MES 동기화)
     source_system   VARCHAR(100) DEFAULT 'MES',
@@ -711,7 +701,7 @@ CREATE TABLE submission_documents (
     doc_category  VARCHAR(50)
         CONSTRAINT chk_doc_category CHECK (doc_category IN (
             'business_registration', 'origin_certificate', 'dd_audit_report',
-            'feoc_ownership_declaration', 'product_spec', 'manufacturing_process_doc',
+            'product_spec', 'manufacturing_process_doc',
             'carbon_footprint_declaration', 'recycled_content_report', 'mining_permit',
             'mineral_production_report', 'safety_health_report', 'environmental_impact_assessment',
             'smelter_identification', 'rmap_certificate', 'cmrt_declaration',
@@ -879,7 +869,6 @@ SELECT
     p.tier_level        AS bom_depth,   -- 부품 tier(0-base, Pack=0 … 광산=6)
     s.status            AS supplier_status,
     s.risk_level,
-    s.feoc_status,
     s.completeness_score,
     sf.country,
     sf.location,
@@ -983,7 +972,6 @@ CREATE INDEX idx_scm_hop_level           ON supply_chain_map(hop_level);
 CREATE INDEX idx_suppliers_parent        ON suppliers(parent_supplier_id);
 CREATE INDEX idx_suppliers_status        ON suppliers(status);
 CREATE INDEX idx_suppliers_risk_level    ON suppliers(risk_level);
-CREATE INDEX idx_suppliers_feoc_status   ON suppliers(feoc_status);
 CREATE INDEX idx_audit_records_factory   ON supplier_audit_records(factory_id) WHERE factory_id IS NOT NULL;
 CREATE INDEX idx_files_tenant            ON files(tenant_id);
 CREATE INDEX idx_factories_location      ON supplier_factories USING GIST(location);
@@ -1222,20 +1210,9 @@ CREATE TABLE geo_audit_results (
 );
 CREATE INDEX idx_geo_audit_results_batch ON geo_audit_results(batch_id);
 
--- [테이블 역할] 배치별 FEOC 검증 결과 저장. (E R4 — 차윤이 데이터 적재)
---   batch_id UNIQUE로 최신 검증 결과 유지.
-CREATE TABLE verification_results (
-    verification_result_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    batch_id               UUID UNIQUE REFERENCES batches(batch_id) ON DELETE CASCADE,
-    feoc_passed            BOOLEAN,
-    violations             JSONB DEFAULT '[]', -- [{supplier_id, supplier_name, direct, indirect, total}]
-    created_at             TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX idx_verification_results_batch ON verification_results(batch_id);
-
 
 -- ============================================================
--- 마스터 데이터 시드 (Regulations - 최종 10개)
+-- 마스터 데이터 시드 (Regulations - 최종 9개, IRA/FEOC 스코프 축소로 제외)
 -- ============================================================
 
 INSERT INTO regulations (name, regulation_code, region, version, effective_from, description, embedding_status)
@@ -1243,10 +1220,64 @@ VALUES
 ('EU Deforestation Regulation',           'EUDR',             'EU', '2023/1115', '2024-12-30', 'EU 산림파괴방지법(EUDR). 소고기·코코아·커피·팜유·대두·목재·고무 등 7대 원자재 및 관련 제품의 EU 수출입 시, 2020년 12월 31일 이후 산림파괴 지역에서 생산되지 않았음을 증명하는 GPS 좌표 기반 실사 자료를 제출해야 한다. FSC 인증 등 제3자 인증도 보조 증빙으로 활용 가능. 위반 시 매출액의 4% 또는 최소 €150만 과징금.', 'pending'),
 ('Corporate Sustainability Due Diligence', 'CSDDD',           'EU', '2024/1760', '2027-01-01', 'EU 기업 지속가능성 실사 지침(CSDDD). 종업원 1,000명 이상·매출 €4.5억 초과 기업은 자사 및 공급망 전반에 걸쳐 아동노동·강제노동·환경훼손 등 인권·환경 리스크를 식별·예방·완화해야 한다. 실사 계획 수립, 고충처리 절차 운영, 연간 공시 의무 포함. 위반 시 매출액의 5% 과징금.', 'pending'),
 ('Uyghur Forced Labor Prevention Act',    'UFLPA',            'US', '2021',      '2022-06-21', '미국 위구르강제노동방지법(UFLPA). Section 3(a)(1)에 따라 신장위구르자치구(Xinjiang)에서 생산·제조·채굴된 모든 물품은 강제노동으로 생산된 것으로 간주(rebuttable presumption)하며 수입이 금지된다. 수입자가 강제노동 미사용을 명확하고 설득력 있는 증거로 반증하지 못하면 CBP가 통관을 거부한다. 공급망 내 신장 원산지 원자재 포함 여부 추적 의무.', 'pending'),
-('Inflation Reduction Act (FEOC)',         'IRA',              'US', '2022',      '2023-01-01', '미국 인플레이션감축법(IRA) FEOC 조항. Section 30D에 따라 전기차 세액공제(최대 $7,500) 적용 시, 배터리 핵심광물 및 부품이 우려외국기업(FEOC: 중국·러시아·북한·이란 정부가 직간접 지분 25% 이상 보유한 기업)으로부터 조달되어서는 안 된다. 2024년부터 핵심광물, 2025년부터 배터리 부품에 순차 적용. FEOC 간접 지분 구조는 별도 법률 검토 필요.', 'pending'),
 ('EU Battery Regulation',                 'EU_BATTERY',       'EU', '2023/1542', '2025-02-18', 'EU 배터리법(2023/1542) Annex XII 재활용 함량 기준. 2031년부터 산업용·EV 배터리에 코발트(Co) 16%, 납(Pb) 85%, 리튬(Li) 6%, 니켈(Ni) 6% 이상의 재활용 원료 함량 의무화. 제조사는 배터리 여권(Battery Passport)에 재활용 함량 비율 및 원산지를 기재해야 하며, 제3자 검증을 거쳐야 한다. 미달 시 EU 시장 출시 금지.', 'pending'),
 ('EU Battery Regulation Art.7',           'EU_BATTERY_ART7',  'EU', '2023/1542', '2025-02-18', 'EU 배터리법 Article 7 탄소발자국 선언 의무. LMT·EV·산업용 배터리는 전 생명주기(원료 채굴~제조~운송) 탄소발자국을 kgCO2eq/kWh 단위로 산출해 신고해야 한다. Annex II 기준: 100 kgCO2eq/kWh 초과 시 최고 등급(A) 취득 불가, 75 kgCO2eq/kWh 초과 시 경고 등급. 선언 누락 또는 허위 신고 시 EU 시장 출시 금지 및 과징금 부과.', 'pending'),
 ('EU Battery Regulation Art.47',          'EU_BATTERY_ART47', 'EU', '2023/1542', '2023-07-28', 'EU 배터리법 Article 47 공급망 실사 의무. 연간 배터리 생산량 일정 규모 이상 사업자는 코발트·천연흑연·리튬·니켈 등 핵심 원자재의 공급망 리스크를 식별·관리·공시해야 한다. OECD 다국적기업 가이드라인 및 UN 기업과 인권 이행원칙 준수 요구. 실사 정책 수립, 공급업체 감사, 연간 보고서 제출 의무.', 'pending'),
 ('Carbon Border Adjustment Mechanism',    'CBAM',             'EU', '2023/956',  '2026-01-01', 'EU 탄소국경조정제도(CBAM). 철강·알루미늄·시멘트·비료·전력·수소 6개 섹터 수입품에 대해 EU ETS 탄소가격과 원산지국 탄소가격의 차액을 CBAM 인증서로 납부해야 한다. 2024~2025년 전환기(보고 의무만), 2026년부터 인증서 구매 의무 본격 시행. 내재 탄소배출량 산정·보고·검증(MRV) 체계 구축 필요.', 'pending'),
-('EU Conflict Minerals Regulation',       'CONFLICT_MINERALS','EU', '2017/821',  '2021-01-01', 'EU 분쟁광물 규정(2017/821). 주석(Sn)·탄탈럼(Ta)·텅스텐(W)·금(Au) 4대 광물 및 관련 금속을 분쟁·고위험 지역에서 연간 일정량 이상 수입하는 EU 내 제련소·정제소는 OECD 실사 가이드라인에 따라 공급망 실사를 수행하고 제3자 감사를 받아야 한다. 감사 결과 및 공급망 정보 연간 공시 의무.', 'pending'),
+('EU Conflict Minerals Regulation',       'CONFLICT_MINERALS','BOTH', '2017/821',  '2021-01-01', 'EU 분쟁광물 규정(2017/821). 주석(Sn)·탄탈럼(Ta)·텅스텐(W)·금(Au) 4대 광물 및 관련 금속을 분쟁·고위험 지역에서 연간 일정량 이상 수입하는 EU 내 제련소·정제소는 OECD 실사 가이드라인에 따라 공급망 실사를 수행하고 제3자 감사를 받아야 한다. 감사 결과 및 공급망 정보 연간 공시 의무.', 'pending'),
 ('Critical Raw Materials Act',            'CRMA',             'EU', '2024/1252', '2024-05-23', 'EU 핵심원자재법(CRMA). 리튬·코발트·니켈·망간 등 34종 핵심원자재의 공급망 다변화·자급률 제고를 위해 2030년까지 EU 역내 채굴 10%, 가공 40%, 재활용 15% 목표를 설정한다. 대기업은 전략적 핵심원자재 공급망 취약성 감사 의무. 인·허가 절차 간소화 및 전략 프로젝트 지정 제도 포함.', 'pending');
+
+
+-- ============================================================
+-- 마스터 데이터 시드 (regulation_required_fields — C-2)
+-- ============================================================
+-- [C-2 — 은지, 2026-06-30]
+-- get_required_fields()가 더미(_TEMP_REQUIRED_FIELDS)를 버리고 이 테이블을 조회한다.
+-- regulations.regulation_code → regulation_id 서브쿼리로 FK를 해결해 멱등 시드.
+-- 기존 더미 데이터(EU_BATTERY_ART7·EUDR·UFLPA)를 실데이터로 교체하고
+-- 나머지 규제의 핵심 필수 필드도 함께 추가한다.
+--
+-- [REGULATION_BY_DESTINATION 정합성 기준]
+-- compliance.py의 REGULATION_BY_DESTINATION dict와 동일한 규제 코드만 시드.
+-- CBAM·CONFLICT_MINERALS·CRMA는 _stub_passed_judge(범위 외 자동통과)라
+-- 필수 필드 매트릭스 불필요 → 시드 제외.
+
+INSERT INTO regulation_required_fields
+    (regulation_id, field_name, field_type, provider_type_applicable, is_mandatory)
+SELECT r.regulation_id, v.field_name, v.field_type, v.provider_type_applicable::jsonb, v.is_mandatory
+FROM regulations r
+JOIN (VALUES
+    -- EU_BATTERY_ART7: 탄소발자국 선언 필수 필드
+    ('EU_BATTERY_ART7', 'carbon_intensity',             'numeric', '["manufacturer"]',          TRUE),
+    ('EU_BATTERY_ART7', 'factory_carbon_declarations',  'jsonb',   '["manufacturer"]',          TRUE),
+    ('EU_BATTERY_ART7', 'carbon_footprint_methodology', 'text',    '["manufacturer"]',          FALSE),
+
+    -- EU_BATTERY: 재활용 함량 필수 필드
+    ('EU_BATTERY',      'recycled_content_ratio',       'numeric', '["recycler","manufacturer"]', TRUE),
+    ('EU_BATTERY',      'recycling_certification',      'text',    '["recycler"]',              FALSE),
+
+    -- EU_BATTERY_ART47: 공급망 실사 정책
+    ('EU_BATTERY_ART47','due_diligence_policy_url',     'text',    '["manufacturer"]',          TRUE),
+    ('EU_BATTERY_ART47','audit_report_url',             'text',    '["manufacturer","miner"]',  FALSE),
+
+    -- EUDR: 산림파괴 비발생 증빙
+    ('EUDR',            'mine_coordinates',             'geojson', '["miner"]',                 TRUE),
+    ('EUDR',            'deforestation_free_cert_url',  'text',    '["miner","trader"]',        TRUE),
+    ('EUDR',            'gps_polygon',                  'geojson', '["miner"]',                 FALSE),
+
+    -- CSDDD: 인권실사 의무
+    ('CSDDD',           'human_rights_policy_url',      'text',    '["manufacturer","miner"]',  TRUE),
+    ('CSDDD',           'grievance_mechanism_url',      'text',    '["manufacturer"]',          FALSE),
+
+    -- UFLPA: 신장 원산지 추적
+    ('UFLPA',           'origin_country',               'text',    '["miner","trader"]',        TRUE),
+    ('UFLPA',           'geo_risk_flags',               'jsonb',   '["miner"]',                 FALSE),
+    ('UFLPA',           'supply_chain_traceability',    'text',    '["miner","trader"]',        TRUE),
+
+    -- IRA: FEOC 지분 검증
+    ('IRA',             'feoc_direct_ownership',        'numeric', '["manufacturer","trader"]', TRUE),
+    ('IRA',             'feoc_indirect_ownership',      'numeric', '["manufacturer","trader"]', TRUE),
+    ('IRA',             'ownership_disclosure_doc_url', 'text',    '["manufacturer"]',          FALSE)
+) AS v(regulation_code, field_name, field_type, provider_type_applicable, is_mandatory)
+    ON r.regulation_code = v.regulation_code
+ON CONFLICT DO NOTHING;

@@ -1,15 +1,7 @@
 import uuid
-import dataclasses
 
-from backend.infrastructure.queue import enqueue, VERIFICATION_QUEUE
-from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_tool
 from sqlalchemy.ext.asyncio import AsyncSession
-from backend.events.types import (
-    VerificationStartedEvent,
-    VerificationFailedEvent,
-    VerificationCompletedEvent
-)
 from sqlalchemy import text
 
 # 수치 허용오차: ±5% (확정값 기준 5% 이내 오차는 통과)

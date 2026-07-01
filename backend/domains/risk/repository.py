@@ -11,15 +11,13 @@ class RiskRepository:
     비즈니스 로직(점수 계산, 상태 전이 등)은 service.py로 위임하고 순수 DB 작업만 담당합니다.
     """
     @staticmethod
-    async def list_profiles(db: AsyncSession, status: str | None = None, level: str | None = None) -> list[RiskProfile]:
+    async def list_profiles(db: AsyncSession, level: str | None = None) -> list[RiskProfile]:
         """
         리스크 프로필 목록을 다건 조회합니다. (프론트엔드 목록 렌더링용)
         """
         stmt = select(RiskProfile)
         if level:
             stmt = stmt.where(RiskProfile.risk_level == level)
-        if status:
-            stmt = stmt.where(RiskProfile.feoc_status == status)
         result = await db.execute(stmt)
         return list(result.scalars().all())
 

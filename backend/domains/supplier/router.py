@@ -205,21 +205,20 @@ async def list_suppliers_endpoint(
     response: Response,
     status: Optional[str] = None,
     risk_level: Optional[str] = None,
-    feoc_status: Optional[str] = None,
     page: int = 1,
     size: int = 20,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    협력사 목록 필터링 조회 (status / risk_level / feoc_status + 페이지). 내 테넌트만(§0.2).
+    협력사 목록 필터링 조회 (status / risk_level + 페이지). 내 테넌트만(§0.2).
     전체 건수는 X-Total-Count 헤더로 전달(§0.6) — 본문은 bare array 유지.
     """
     items = await service.list_suppliers(
-        db, status, risk_level, feoc_status, page, size, current_user.tenant_id
+        db, status, risk_level, page, size, current_user.tenant_id
     )
     total = await service.count_suppliers(
-        db, status, risk_level, feoc_status, current_user.tenant_id
+        db, status, risk_level, current_user.tenant_id
     )
     set_total_count(response, total)
     return items

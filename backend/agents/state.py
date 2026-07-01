@@ -5,9 +5,9 @@ LangGraph 5인 에이전트 파이프라인의 공통 State 구조체.
 모든 에이전트가 공유하는 단일 진실 공급원이며, schema.sql batches 테이블과 1:1 정렬.
 
 [정합성 핵심 — 두 축은 schema.sql 표기 그대로, 접두어 포함]
-  current_stage : 노드 위치 축. schema.sql chk_batch_stage 8종과 1:1
-      stage_queued → stage_extraction → stage_verification → stage_geo →
-      stage_compliance → stage_risk → stage_readiness → stage_issuance
+  current_stage : 노드 위치 축. schema.sql chk_batch_stage 5종과 1:1
+      stage_queued → stage_extraction → stage_geo → stage_compliance → stage_risk
+      (verification/readiness/issuance 단계는 스코프 축소로 제거 — FEOC·DPP 발행 폐지)
   batch_status  : 거친 국면 축. schema.sql chk_batch_status 4종과 1:1
       batch_processing / batch_hitl_wait / batch_completed / batch_rejected
       ※ HITL 대기는 current_stage가 아니라 이 축에서 'batch_hitl_wait'로 표현된다.
@@ -36,11 +36,10 @@ class BatchState(TypedDict, total=False):
     # batches.destination — 허용값: US / EU / KR
     destination: str
 
-    # batches.current_stage — 노드 위치 축 (8종, schema.sql chk_batch_stage와 1:1)
+    # batches.current_stage — 노드 위치 축 (5종, schema.sql chk_batch_stage와 1:1)
     current_stage: Literal[
-        "stage_queued", "stage_extraction", "stage_verification",
+        "stage_queued", "stage_extraction",
         "stage_geo", "stage_compliance", "stage_risk",
-        "stage_readiness", "stage_issuance",
     ]
     # batches.status — 거친 국면 축 (4종, schema.sql chk_batch_status와 1:1)
     batch_status: Literal[
@@ -50,7 +49,7 @@ class BatchState(TypedDict, total=False):
     # batches.confidence_score — 0.85 미만이면 supplier_reverify / hitl_interrupt
     confidence_score: float
     # 적용 규제 코드 목록 — route()가 최초 1회 주입. regulations.regulation_code 참조
-    #   (예: ["UFLPA","IRA","EU_BATTERY_ART47"])
+    #   (예: ["UFLPA","EU_BATTERY_ART47"])
     applicable_regulations: List[str]
 
     # HITL interrupt 발동 여부
@@ -67,7 +66,5 @@ class BatchState(TypedDict, total=False):
 
     # ----- 각 노드 결과 누적 (각 노드가 자기 키에만 기록) -----
     extraction_result: Optional[dict]    # data_gateway (B, stage_extraction)
-    verification_result: Optional[dict]  # verification (E, stage_verification)
     geo_result: Optional[dict]           # geo_audit (D, stage_geo)
     compliance_result: Optional[dict]    # compliance (C, stage_compliance)
-    readiness_score: Optional[float]     # readiness (E, stage_readiness)

@@ -43,22 +43,16 @@ async def run_risk_scoring(
     if geo_res.get("risk_detected"):
         violations.append({"type": "GeoRiskDetected", "reason": "지리적 위험(GeoRisk) 검출"})
 
-    # FEOC 위반이 가장 심각한 공급사를 우선 점수 산정 대상으로 선정
+    # 공급망 중 상시 위험 점수(overall_risk_score)가 가장 높은 공급사를 우선 대상으로 선정
     stmt = text("""
-        SELECT supplier_id, COALESCE(feoc_direct_ownership, 0), COALESCE(feoc_indirect_ownership, 0)
+        SELECT supplier_id
         FROM supplier_risk_profiles
         WHERE supplier_id = ANY(:sids)
+        ORDER BY overall_risk_score DESC NULLS LAST
+        LIMIT 1
     """)
-    rows = (await db.execute(stmt, {"sids": supplier_ids})).fetchall()
-
-    target_supplier_id = supplier_ids[0]
-    worst_total = -1.0
-    for supplier_id, direct, indirect in rows:
-        direct, indirect = float(direct), float(indirect)
-        total = direct + indirect
-        if (direct >= 25.0 or indirect >= 25.0 or total >= 25.0) and total > worst_total:
-            worst_total = total
-            target_supplier_id = supplier_id
+    row = (await db.execute(stmt, {"sids": supplier_ids})).first()
+    target_supplier_id = row[0] if row else supplier_ids[0]
 
     risk_result = await calculate_risk_score(
         db=db,

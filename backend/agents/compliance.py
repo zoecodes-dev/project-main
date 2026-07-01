@@ -42,7 +42,7 @@ W6 수요일 리팩토링 (은지 — R8 + H2)
 
     【supervisor.py(A 지혜 담당)와의 연결】
       supervisor route()의 분기 조건:
-        if er in ("feoc_violation", "geographical_risk", "risk_escalated",
+        if er in ("geographical_risk", "risk_escalated",
                   "gray_zone", "low_confidence"):
             return "hitl_interrupt"
       compliance가 "low_confidence"를 세팅하면 supervisor가 hitl_interrupt로 라우팅.
@@ -155,7 +155,6 @@ REGULATION_BY_DESTINATION: dict[str, list[str]] = {
     # 미국 시장 진입 제품 — US 규제 3종
     "US": [
         "UFLPA",
-        "IRA",
         "CONFLICT_MINERALS",
     ],
     # 국내(KR) 출하 — 현재 글로벌 규제 검사 대상 없음, 자동 패스
@@ -171,7 +170,6 @@ REGULATION_BY_DESTINATION: dict[str, list[str]] = {
         "CONFLICT_MINERALS",
         "CRMA",
         "UFLPA",
-        "IRA",
     ],
 }
 
@@ -623,32 +621,6 @@ async def judge_uflpa(batch_id: str, context: dict, db: AsyncSession) -> dict:
     return _validate_cited_clauses(result, "UFLPA")
 
 
-@trace_tool("compliance_judge_IRA")
-async def judge_ira(batch_id: str, context: dict, db: AsyncSession) -> dict:
-    """
-    IRA FEOC (인플레이션감축법 — 우려국 외국 기업) 판정.
-    FEOC 직접 지분 ≥25% → compliance_violation, needs_human_review=False.
-    FEOC 간접 지분 ≥25% → compliance_violation, needs_human_review=True (우회 구조 해석 필요).
-    """
-    clauses = await search_regulations(
-        "FEOC foreign entity of concern ownership threshold 25 percent battery critical mineral",
-        "IRA",
-        db,
-        top_k=5,
-    )
-    try:
-        result = await _call_llm_for_verdict("IRA", clauses, context)
-    except (json.JSONDecodeError, KeyError, Exception) as exc:
-        return {
-            "verdict": "compliance_reject",
-            "needs_human_review": True,
-            "cited_clauses": [],
-            "confidence_score": 0.0,
-            "reasoning_text": f"LLM 호출 실패: {exc}",
-        }
-    return _validate_cited_clauses(result, "IRA")
-
-
 @trace_tool("compliance_judge_CARBON")
 async def judge_carbon_footprint(
     batch_id: str, context: dict, db: AsyncSession
@@ -873,7 +845,6 @@ async def judge_generic(
 REGULATION_JUDGES: dict[str, Callable] = {
     # 시연 핵심 — 전용 judge
     "UFLPA":            judge_uflpa,
-    "IRA":              judge_ira,
     # Day2 신규 — 탄소발자국·재활용 전용 judge
     "EU_BATTERY":       judge_recycled_content,
     "EU_BATTERY_ART7":  judge_carbon_footprint,
@@ -984,9 +955,8 @@ def _build_judge_context(state) -> dict:
     """
     extraction:   dict = state.get("extraction_result")   or {}
 
-    # [D4] geo/verification 결과는 그래프 축소 후 state에 없을 수 있다.
+    # [D4] geo 결과는 그래프 축소 후 state에 없을 수 있다.
     #       or {}로 빈 dict 폴백 → .get()에서 None/[] 반환.
-    verification: dict = state.get("verification_result") or {}
     geo:          dict = state.get("geo_result")          or {}
 
     return {
@@ -996,17 +966,13 @@ def _build_judge_context(state) -> dict:
         "destination":             state.get("destination", ""),
         "supplier_id":             extraction.get("supplier_id"),
         "origin_country":          extraction.get("origin_country", ""),
-        "feoc_direct_ownership":   extraction.get("feoc_direct_ownership"),
-        "feoc_indirect_ownership": extraction.get("feoc_indirect_ownership"),
         "carbon_intensity":        extraction.get("carbon_intensity"),
 
         # ── [D4] 그래프 축소 방어 — 명시적 기본값 ──
         # geo_audit 노드 제거 후: state에 geo_result 자체가 없음.
-        # verification 노드 제거 후: state에 verification_result 자체가 없음.
         # None / [] 기본값으로 judge 함수들이 안전하게 동작하도록 보장.
         "mine_coordinates":        geo.get("mine_coordinates", None),
         "geo_risk_flags":          geo.get("risk_flags", []),
-        "verification_flags":      verification.get("flags", []),
 
         # ── Day2 신규 키 ──
         "recycled_content_ratio":  extraction.get("recycled_content_ratio"),
@@ -1071,10 +1037,10 @@ async def compliance_node(state: BatchState) -> BatchState:
                 logger.warning("regulation_code=%s 에 매핑된 judge가 없어요.", reg_code)
                 continue
 
-            # stub(2-인자) / Day2 전용(3-인자) / UFLPA·IRA 전용(3-인자) / generic(4-인자) 분기
+            # stub(2-인자) / Day2 전용(3-인자) / UFLPA 전용(3-인자) / generic(4-인자) 분기
             if reg_code in _STUB_REGULATIONS:
                 result = await judge_fn(reg_code)
-            elif reg_code in ("UFLPA", "IRA", "EU_BATTERY_ART7", "EU_BATTERY"):
+            elif reg_code in ("UFLPA", "EU_BATTERY_ART7", "EU_BATTERY"):
                 result = await judge_fn(batch_id, context, db)
             else:
                 result = await judge_fn(batch_id, reg_code, context, db)

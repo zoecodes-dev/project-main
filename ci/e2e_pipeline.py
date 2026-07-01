@@ -82,7 +82,6 @@ async def main():
             ("verification_results", "SELECT count(*) FROM verification_results WHERE batch_id=:b"),
             ("geo_audit_results",    "SELECT count(*) FROM geo_audit_results WHERE batch_id=:b"),
             ("compliance_results",   "SELECT count(*) FROM compliance_results WHERE batch_id=:b"),
-            ("dpp_records",          "SELECT count(*) FROM dpp_records WHERE batch_id=:b"),
         ]:
             try:
                 n = (await db.execute(text(q), {"b": batch_id})).scalar()
