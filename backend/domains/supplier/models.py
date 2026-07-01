@@ -554,6 +554,9 @@ class MasterFormCompany(BaseModel):
 
 class MasterFormFactory(BaseModel):
     """섹션 0 공장 — supplier_factories (다건). location은 B가 POINT 변환."""
+    # 기존 공장 식별자 — 있으면(이 협력사 소유) UPDATE, 없으면 INSERT(upsert).
+    # supply_ratio.factory_id FK 보존을 위해 재제출 시 프론트가 기존 공장 id를 round-trip.
+    factory_id: Optional[uuid.UUID] = None
     factory_name: Optional[str] = None
     factory_name_en: Optional[str] = None
     address: Optional[str] = None
