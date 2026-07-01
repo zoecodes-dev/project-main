@@ -157,12 +157,18 @@ class SupplyChainRepository:
         parent_supplier_id: str | None,
         child_supplier_id: str,
         part_id: str,
+        discovered_via: str | None = None,
     ) -> Dict[str, Any]:
-        """supply_chain_map에 parent-child 관계 INSERT 후 생성 row 반환."""
+        """supply_chain_map에 parent-child 관계 INSERT 후 생성 row 반환.
+
+        discovered_via: 이 엣지가 '누구의 초대/대리신고로 발견됐는지'(상위 협력사 FK).
+        ERP 원천 신고면 None. 상위 협력사가 하위를 풀에 편입시킨 경우 그 상위 supplier_id.
+        """
         map_header_id = await self._ensure_map_header(bom_version_id)  # [REVERT-NON-SUPPLIER]
         query = text("""
             INSERT INTO supply_chain_map
-                (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level)
+                (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id, hop_level,
+                 discovered_via)
             VALUES
                 (:map_header_id, :bom_version_id, :parent_supplier_id, :child_supplier_id, :part_id,
                  -- 차수: 루트(부모 없음)=0, 자식=부모 엣지 hop_level+1.
@@ -175,7 +181,8 @@ class SupplyChainRepository:
                                       AND scm2.bom_version_id = :bom_version_id
                                     ORDER BY scm2.hop_level
                                     LIMIT 1), 1)
-                 END)
+                 END,
+                 :discovered_via)
             RETURNING edge_id AS map_id, parent_supplier_id, child_supplier_id, part_id;
         """)
         result = await self.session.execute(query, {
@@ -184,6 +191,7 @@ class SupplyChainRepository:
             "parent_supplier_id": parent_supplier_id,
             "child_supplier_id": child_supplier_id,
             "part_id": part_id,
+            "discovered_via": discovered_via,
         })
         await self.session.flush()
         return dict(result.first()._mapping)
@@ -201,14 +209,16 @@ class SupplyChainRepository:
         query = text("""
             INSERT INTO supply_chain_map
                 (map_id, bom_version_id, parent_supplier_id, child_supplier_id, part_id,
-                 hop_level, link_status, source_system, verification_status)
+                 hop_level, link_status, source_system, verification_status, discovered_via)
             VALUES
                 (:map_header_id, :bom_version_id, :parent_supplier_id, :child_supplier_id, :part_id,
                  COALESCE((SELECT hop_level + 1 FROM supply_chain_map
                            WHERE child_supplier_id = :parent_supplier_id
                              AND bom_version_id = :bom_version_id
                            LIMIT 1), 1),
-                 'supplychain_declared', 'SUPPLIER_DECLARED', 'unverified')
+                 'supplychain_declared', 'SUPPLIER_DECLARED', 'unverified',
+                 -- 자진신고 = 상위 협력사(parent)가 하위를 풀에 편입 → 발견 경로는 parent 본인.
+                 :parent_supplier_id)
             RETURNING edge_id AS map_id, parent_supplier_id, child_supplier_id, link_status, verification_status;
         """)
         result = await self.session.execute(query, {
@@ -220,6 +230,28 @@ class SupplyChainRepository:
         })
         await self.session.flush()
         return dict(result.first()._mapping)
+
+    async def record_discovered_via(
+        self,
+        invitee_supplier_id: str,
+        inviter_supplier_id: str,
+    ) -> int:
+        """초대(SupplierInvited) 수신 시 발견 경로 백필.
+
+        아직 discovered_via 가 비어있는(=원천 신고가 채우지 않은) 해당 협력사 엣지에만
+        초대한 상위 협력사를 기록한다. 이미 값이 있으면 건드리지 않아 멱등하다.
+        엣지가 아직 없으면 0행(초대만 되고 아직 관계 미등록) — 관계 등록 경로가 직접 채운다.
+        반환: 갱신된 엣지 수.
+        """
+        q = text("""
+            UPDATE supply_chain_map
+               SET discovered_via = :inviter
+             WHERE child_supplier_id = :invitee
+               AND discovered_via IS NULL
+            RETURNING edge_id
+        """)
+        r = await self.session.execute(q, {"inviter": inviter_supplier_id, "invitee": invitee_supplier_id})
+        return len(r.fetchall())
 
     # [REVERT-NON-SUPPLIER:BEGIN] 협력사 확인(verify) — supply_chain_map.verification_status 갱신.
     #   supplier 외(supplychain) 도메인. 최종 작업 시 이 메서드 전체 주석/삭제.
@@ -687,6 +719,49 @@ class SupplyChainRepository:
         if row is None:
             return None
         return {"map_id": str(row[0]), "status": row[1]}
+
+    @trace_tool("supply_chain_pool_confirm")
+    async def confirm_pool(
+        self,
+        map_id: str,
+        tenant_id: str,
+        supplier_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Tier-1 풀 확정: 이 맵(map_id)의 hop_level=1 엣지 link_status → confirmed.
+
+        풀 = 맵 그 자체(별도 저장소 없음). '확정'은 그 맵에 속한 Tier-1 엣지의 상태전이다.
+        supplier_ids 가 오면 그 협력사들만, 없으면 맵의 모든 Tier-1 엣지를 확정한다.
+        엣지↔맵은 실제 1:1 키인 bom_version_id 로 묶고, products.tenant_id 로 격리한다.
+        반환: {map_id, confirmed_count, confirmed_suppliers[]}.
+        """
+        params: Dict[str, Any] = {"map_id": map_id, "tenant_id": tenant_id}
+        filter_sql = ""
+        if supplier_ids:
+            placeholders = ", ".join(f":sid{i}" for i in range(len(supplier_ids)))
+            filter_sql = f" AND scm.child_supplier_id IN ({placeholders})"
+            for i, sid in enumerate(supplier_ids):
+                params[f"sid{i}"] = sid
+
+        query = text(f"""
+            UPDATE supply_chain_map scm
+               SET link_status = 'supplychain_confirmed'
+            FROM supply_chain_maps m
+            JOIN products pr ON pr.product_id = m.product_id
+            WHERE scm.bom_version_id = m.bom_version_id
+              AND m.map_id = :map_id
+              AND pr.tenant_id = :tenant_id
+              AND scm.hop_level = 1
+              {filter_sql}
+            RETURNING scm.edge_id AS edge_id, scm.child_supplier_id AS supplier_id
+        """)
+        result = await self.session.execute(query, params)
+        rows = result.mappings().all()
+        await self.session.flush()
+        return {
+            "map_id": map_id,
+            "confirmed_count": len(rows),
+            "confirmed_suppliers": [str(r["supplier_id"]) for r in rows if r["supplier_id"]],
+        }
 
     # -------------------------------------------------------------------------
     # 10.2a 누적 기여도(곱셈 전파) + 계층별 합 100% 검증

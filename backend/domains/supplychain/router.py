@@ -352,6 +352,33 @@ async def confirm_supply_chain_map_endpoint(
     return result
 
 
+# ============================================================
+# Pool 확정 — POST /supply-chain/maps/{map_id}/pool/confirm
+#   풀 = 맵 그 자체. "확정"은 그 맵의 Tier-1(hop_level=1) 엣지 link_status 전이.
+#   supplier_ids 미지정 시 맵의 모든 Tier-1 엣지 확정.
+# ============================================================
+
+class ConfirmPoolRequest(BaseModel):
+    supplier_ids: Optional[List[str]] = None
+
+
+@router.post("/maps/{map_id}/pool/confirm")
+async def confirm_pool_endpoint(
+    map_id: UUID,
+    body: ConfirmPoolRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """1차 협력사 풀 확정. 선택된 Tier-1 협력사(없으면 전체) 엣지를 confirmed 로 전이."""
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+    return await service.confirm_pool(
+        map_id=str(map_id),
+        tenant_id=str(current_user.tenant_id),
+        supplier_ids=body.supplier_ids,
+    )
+
+
 # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(맵 그 자체) 관리 API.
 class MapStatusUpdate(BaseModel):
     status: str  # building / completed

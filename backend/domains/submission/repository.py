@@ -191,19 +191,24 @@ async def create_extraction_result(
 async def list_extraction_results_by_suppliers(
     db: AsyncSession,
     supplier_ids: list[uuid.UUID],
-) -> list[tuple[DocumentExtractionResult, str]]:   # ← 반환 타입 변경
+) -> list[tuple[DocumentExtractionResult, str, uuid.UUID]]:   # ← (추출결과, provider_type, supplier_id)
     """
-    [SELECT] 주어진 협력사들의 문서 추출결과를 provider_type과 함께 모은다.
+    [SELECT] 주어진 협력사들의 문서 추출결과를 provider_type·supplier_id와 함께 모은다.
     document_extraction_results → data_request_log(target_supplier_id)
       → suppliers(provider_type) 3-단 조인.
-    node(data_gateway)는 (추출결과, provider_type) 튜플로 신뢰도·확인여부와
-    validate_schema 누락 검사(spec 노드 정의 #2단계)를 집계한다.
+    node(data_gateway)는 (추출결과, provider_type, supplier_id) 튜플로 신뢰도·확인여부와
+    validate_schema 누락 검사(spec 노드 정의 #2단계)를 집계하고, 게이트 통과 시
+    supplier_id로 상세테이블 승격(§8-A)을 수행한다.
     """
     if not supplier_ids:
         return []
 
     stmt = (
-        select(DocumentExtractionResult, _suppliers_tbl.c.provider_type)   # ← 튜플 select
+        select(
+            DocumentExtractionResult,
+            _suppliers_tbl.c.provider_type,
+            DataRequestLog.target_supplier_id,
+        )
         .join(
             DataRequestLog,
             DataRequestLog.request_id == DocumentExtractionResult.request_id,

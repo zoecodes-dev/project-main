@@ -283,6 +283,17 @@ class SupplyChainService:
         # DB에는 link_status='supplychain_confirmed'로 저장되지만 프론트 계약은 {mapId, status:"confirmed"}.
         return {"map_id": result["map_id"], "status": "confirmed"}
 
+    async def confirm_pool(
+        self,
+        map_id: str,
+        tenant_id: str,
+        supplier_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Tier-1 풀 확정("pool 확정" 버튼). 선택 협력사(없으면 전체 Tier-1) 엣지 상태전이 후 커밋."""
+        result = await self.repository.confirm_pool(map_id, tenant_id, supplier_ids)
+        await self.repository.session.commit()
+        return result
+
     # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(맵 그 자체) 관리.
     async def list_maps(self, tenant_id: str) -> List[Dict[str, Any]]:
         """내 테넌트의 공급망 맵 목록(map_id 단위)."""

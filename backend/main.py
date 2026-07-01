@@ -53,8 +53,14 @@ async def _register_subscriptions() -> None:
     from backend.handlers.supplier_document_ingest import on_supplier_document_uploaded
     await subscribe("SupplierDocumentUploaded", on_supplier_document_uploaded)
 
-    # ── 그 외 도메인 핸들러 슬롯 (D: discovered_via 기록 / E: 알림 등) ──
-    # 예) await subscribe("SupplierInvited", supplychain_record_discovered_via)
+    # ── D: 협력사 초대 → supply_chain_map.discovered_via 기록 (pool 발견 경로) ──
+    #    + 초대(가입 요청) 메일 SES 발송(동일 이벤트 다중 핸들러).
+    from backend.handlers.supplier_invited import (
+        supplychain_record_discovered_via,
+        send_supplier_invitation_email,
+    )
+    await subscribe("SupplierInvited", supplychain_record_discovered_via)
+    await subscribe("SupplierInvited", send_supplier_invitation_email)
 
 
 @asynccontextmanager

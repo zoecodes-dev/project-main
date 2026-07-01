@@ -27,7 +27,10 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.infrastructure.database import get_db
 from backend.infrastructure.security import verify_access_token
 
 # auto_error=False: 토큰이 없을 때 FastAPI 가 곧장 403 을 던지지 않게 하고,
@@ -125,3 +128,42 @@ def require_role(*roles: str):
         return current_user
 
     return checker
+
+
+async def require_supplier_consent(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CurrentUser:
+    """
+    제3자 정보제공 동의 게이트(흐름: "동의하지 않으면 시스템 진입 금지").
+
+    - OEM/감사자 등 협력사 아닌 계정(supplier_id None)은 그대로 통과한다.
+    - 협력사 계정은 supplier_onboarding.consent_status='consent_agreed' 여야 통과.
+      미동의(pending/rejected)면 403 CONSENT_REQUIRED → 프론트가 동의 화면으로 유도.
+
+    부착 원칙: 데이터 입력 계열 엔드포인트에만 붙인다. 동의/온보딩 화면 자체
+      (data-consents, onboarding/*)에는 붙이지 않는다(그러면 동의 자체가 막힘).
+    infra 계층이라 도메인 모델을 import하지 않고 text()로만 조회한다(도메인 격리).
+    """
+    if current_user.supplier_id is None:
+        return current_user
+
+    consent_status = (
+        await db.execute(
+            text("""
+                SELECT consent_status
+                FROM supplier_onboarding
+                WHERE supplier_id = :sid
+                ORDER BY onboarding_id
+                LIMIT 1
+            """),
+            {"sid": str(current_user.supplier_id)},
+        )
+    ).scalar_one_or_none()
+
+    if consent_status != "consent_agreed":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CONSENT_REQUIRED",
+        )
+    return current_user
