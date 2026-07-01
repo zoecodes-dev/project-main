@@ -4,6 +4,8 @@ domains/supplychain/repository.py  (담당: 팀원 D · 영수)
 공급망 그래프 데이터 접근 계층. 재귀 CTE 기반 N차 탐색 + PostGIS Geo Audit.
 모든 주요 쿼리에 @trace_tool 적용 (절대 규칙 #3).
 """
+import re
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
@@ -15,6 +17,83 @@ from backend.infrastructure.trace import trace_tool
 XINJIANG_REGION_WKT = (
     "POLYGON((73.4 34.8, 96.4 34.8, 96.4 49.2, 73.4 49.2, 73.4 34.8))"
 )
+
+# ─────────────────────────────────────────────────────────────────────────
+# 신장(UFLPA) 지구 정규 사전 — single source of truth.
+#   ★왜 좌표 폴리곤과 별개로 이름 판정이 필요한가★
+#   지오코딩(geo-places)이 신장 광역·하위 지구(카슈가르·허톈 등)를 좌표로 못 잡아
+#   location이 NULL이 되면, 폴리곤 판정 쿼리(location IS NOT NULL)에서 빠져 UFLPA
+#   최고위험지가 false negative로 통과한다. 이름으로도 잡아 누락을 막는다.
+#
+#   구조: 신장 14개 지구(+광역 별칭)를 '지구 1개 = 엔트리 1개'로 묶는다.
+#     각 엔트리에 中(zh)·英(en_aliases)·韓(ko) 공통명칭을 함께 담아,
+#     → 중국어로 쓰든, 목록에서 고르든, 영/한 어느 표기로 들어오든 같은 지구로 연결.
+#     → 매칭 토큰(아래 CJK/LATIN)과 언어 간 정규화(resolve_xinjiang_region)를 여기서 파생.
+#     'en'은 표준 표기(UI 라벨/정규화 결과값), 'code'는 안정 식별자(드롭다운 value).
+#
+#   ★매칭이 두 갈래인 이유★
+#   - 한자·한글 → substring(ILIKE). CJK는 다른 단어에 우연히 박히지 않고 "新疆哈密市"
+#     처럼 공백 없이 붙어 나와 단어경계가 없으므로 substring이 맞다.
+#   - 로마자 → 단어경계 정규식(~* '\y…\y'). hami/ili/kashi/changji 같은 짧은 이름을
+#     substring으로 넣으면 hamilton·facility·changjiang(长江)에 박혀 오탐이 폭발한다.
+#     단어경계로 걸면 "Hami"는 잡고 "Hamilton"은 안 잡는다.
+#   ※ resolve는 구체 지구가 광역 별칭보다 우선하도록 14개를 먼저, 광역을 맨 끝에 둔다.
+# ─────────────────────────────────────────────────────────────────────────
+XINJIANG_PREFECTURES: List[Dict[str, Any]] = [
+    # 4 지급시(地級市)
+    {"code": "urumqi",     "en": "Ürümqi",     "zh": ["乌鲁木齐"],        "en_aliases": ["Urumqi", "Urumchi"],          "ko": ["우루무치"]},
+    {"code": "karamay",    "en": "Karamay",    "zh": ["克拉玛依"],        "en_aliases": ["Karamay"],                    "ko": ["카라마이"]},
+    {"code": "turpan",     "en": "Turpan",     "zh": ["吐鲁番"],          "en_aliases": ["Turpan"],                     "ko": ["투루판"]},
+    {"code": "hami",       "en": "Hami",       "zh": ["哈密"],            "en_aliases": ["Hami"],                       "ko": ["하미"]},
+    # 5 지구(地區)
+    {"code": "aksu",       "en": "Aksu",       "zh": ["阿克苏"],          "en_aliases": ["Aksu"],                       "ko": ["아커쑤", "아크수"]},
+    {"code": "kashgar",    "en": "Kashgar",    "zh": ["喀什"],            "en_aliases": ["Kashgar", "Kashi"],           "ko": ["카슈가르"]},
+    {"code": "hotan",      "en": "Hotan",      "zh": ["和田"],            "en_aliases": ["Hotan", "Khotan", "Hetian"],  "ko": ["허톈", "호탄"]},
+    {"code": "tacheng",    "en": "Tacheng",    "zh": ["塔城"],            "en_aliases": ["Tacheng"],                    "ko": ["타청"]},
+    {"code": "altay",      "en": "Altay",      "zh": ["阿勒泰"],          "en_aliases": ["Altay", "Altai"],             "ko": ["알타이"]},
+    # 5 자치주(自治州)
+    {"code": "kizilsu",    "en": "Kizilsu",    "zh": ["克孜勒苏"],        "en_aliases": ["Kizilsu"],                    "ko": ["키질수", "커쯔러쑤"]},
+    {"code": "bortala",    "en": "Bortala",    "zh": ["博尔塔拉"],        "en_aliases": ["Bortala"],                    "ko": ["보르탈라", "보얼타라"]},
+    {"code": "changji",    "en": "Changji",    "zh": ["昌吉"],            "en_aliases": ["Changji"],                    "ko": ["창지"]},
+    {"code": "bayingolin", "en": "Bayingolin", "zh": ["巴音郭楞", "库尔勒"], "en_aliases": ["Bayingolin", "Bayingol", "Korla"], "ko": ["바인궈렁", "바잉골린", "쿠얼러"]},
+    {"code": "ili",        "en": "Ili",        "zh": ["伊犁"],            "en_aliases": ["Ili", "Yili"],                "ko": ["이리"]},
+    # 광역 별칭 — 구체 지구보다 뒤(우선순위 낮게).
+    {"code": "xinjiang",   "en": "Xinjiang (autonomous region)", "zh": ["新疆", "维吾尔"], "en_aliases": ["Xinjiang", "Uyghur", "Uygur", "Uighur"], "ko": ["신장", "위구르"]},
+]
+
+def _fold_latin(s: str) -> str:
+    """
+    로마자 비교용 정규화: 발음기호 제거(ü→u) + 소문자.
+    'Ürümqi'·'ÜRÜMQI' → 'urumqi' 로 흡수해 변형 표기를 잡는다.
+    ※ 한글/한자에는 쓰지 않는다 — NFKD가 한글 음절을 자모로 분해해 매칭을 깨뜨림.
+      (그래서 CJK/KO는 원문 substring, 로마자만 이 폴딩+단어경계로 비교한다.)
+    """
+    nfkd = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).casefold()
+
+
+def resolve_xinjiang_region(value: Optional[str]) -> Optional[Dict[str, Any]]:
+    """
+    입력(중/영/한 표기) → 해당 신장 지구 엔트리. 없으면 None.
+    매칭 단일 출처 — check_xinjiang_by_name(배치 판정)도 이 함수를 그대로 쓴다.
+
+    언어 간 표기 연결·정규화에 쓴다. 예: '喀什'·'Kashi'·'카슈가르'·'KASHGAR'
+    → 모두 kashgar 엔트리({en:'Kashgar', ...})로 해석돼 표준 표기를 얻는다.
+    - 한자·한글 = 원문 substring(CJK는 공백 없이 붙고 다른 단어에 안 박힘).
+    - 로마자 = 발음기호 폴딩 + 단어경계(\b). 'Hami'는 잡고 'Hamilton'은 안 잡는다.
+    구체 지구가 광역 별칭보다 우선(리스트 순서: 14개 먼저, 광역 끝).
+    ※ 정규화가 흡수하는 건 발음기호/대소문자까지. 완전 다른 표기(Wulumuqi 완전핀인,
+      Kashkar 오타)는 못 잡음 — 별칭 추가 또는 LLM fallback 영역(상황정리 참조).
+    """
+    if not value:
+        return None
+    folded = _fold_latin(value)   # 로마자 비교용(발음기호·대소문자 제거)
+    for p in XINJIANG_PREFECTURES:
+        if any(t in value for t in (p["zh"] + p["ko"])):          # CJK/KO: 원문 substring
+            return p
+        if any(re.search(rf"\b{re.escape(_fold_latin(t))}\b", folded) for t in p["en_aliases"]):
+            return p
+    return None
 
 
 # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 맵 헤더(supply_chain_maps) 도입에 따른 개명.
@@ -470,10 +549,47 @@ class SupplyChainRepository:
             WHERE sf.location IS NOT NULL;
         """)
         result = await self.session.execute(query, {
-            "xinjiang_wkt": XINJIANG_REGION_WKT, 
+            "xinjiang_wkt": XINJIANG_REGION_WKT,
             "radius": radius_meters,
         })
         return [dict(row._mapping) for row in result]
+
+    @trace_tool("xinjiang_name_match")
+    async def check_xinjiang_by_name(self) -> List[Dict[str, Any]]:
+        """
+        신장(UFLPA) 이름매칭 판정 — region/address에 신장·하위 지구명이 있으면
+        좌표 유무와 무관하게 대상으로 반환한다(좌표 폴리곤 판정의 false negative 보완).
+        location은 NULL일 수 있으므로 ST_AsGeoJSON은 NULL을 그대로 반환(호출부에서 []처리).
+
+        매칭은 resolve_xinjiang_region() 한 곳으로 통합(발음기호 정규화 포함).
+        DB에서 SQL로 거르지 않고 활성 공장을 읽어 파이썬에서 판정한다 —
+          이유: 발음기호 폴딩(Ürümqi→urumqi)을 SQL로 하면 unaccent 확장 의존이 생겨
+          (스키마/인프라 변경). 매칭 로직을 이름 사전 한 곳에 두는 이점도 있다.
+          ※ 활성 공장 전건 스캔이지만 배치당 1회 + 데모/CSDDD 규모라 부담 없음.
+        """
+        rows = (await self.session.execute(text("""
+            SELECT
+                sf.factory_id,
+                s.supplier_id,
+                s.company_name,
+                sf.region,
+                sf.address,
+                ST_AsGeoJSON(sf.location) AS coordinates
+            FROM supplier_factories sf
+            JOIN suppliers s ON sf.supplier_id = s.supplier_id
+            WHERE sf.is_active = TRUE
+        """))).mappings().all()
+
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            if resolve_xinjiang_region(r["region"]) or resolve_xinjiang_region(r["address"]):
+                out.append({
+                    "factory_id": r["factory_id"],
+                    "supplier_id": r["supplier_id"],
+                    "company_name": r["company_name"],
+                    "coordinates": r["coordinates"],
+                })
+        return out
 
     # [BYPASS:A2] 시연용 4개국 바운딩박스 — 미정의 국가는 ELSE TRUE 통과. 운영 전환 시 국가 폴리곤 테이블 필요
     @trace_tool("coordinate_authenticity")

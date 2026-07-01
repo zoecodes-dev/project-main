@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.supplier import repository
 from backend.domains.supplier.models import (
+    GeoPoint,
     MasterFormContact,
     MasterFormFactory,
     MasterFormRequest,
@@ -35,6 +36,7 @@ from backend.events.types import (
     SupplierInvitedEvent,
     SupplierDocumentUploadedEvent,
 )
+from backend.infrastructure import geocode
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
 # AP: 추출결과 read는 E 제공(submission repository), 마스터폼 prefill 변환은 B(supplier)
@@ -153,6 +155,17 @@ async def submit_master_form(
         # ── 섹션 0: 회사·공장·PIC (B) — 공장 먼저 생성해 factory_ids 확보 ──────
         await repository.write_master_form_company(db, supplier_id, form.company)
         sections_saved.append("company")
+
+        # ── 지오코딩: 좌표가 없는 공장은 주소(region)로 좌표를 채운다 ──────────
+        #   - 프론트가 좌표를 직접 보냈으면(coordinates != None) 그대로 존중.
+        #   - 좌표가 없고 address/region이 있으면 geocode로 보충.
+        #   - geocode 실패(None)면 coordinates는 그대로 None → location NULL 저장.
+        #   ※ 외부 API 호출이므로 DB write 전에 끝낸다(트랜잭션 짧게 유지).
+        for f in form.factories:
+            if f.coordinates is None and (f.address or f.region):
+                latlng = await geocode.geocode_address(f.address, f.country, f.region)
+                if latlng is not None:
+                    f.coordinates = GeoPoint(latitude=latlng[0], longitude=latlng[1])
 
         factory_ids = await repository.write_master_form_factories(db, supplier_id, form.factories)
         if form.factories:
