@@ -537,7 +537,7 @@ async def data_gateway_node(state: BatchState) -> BatchState:
     lowest = 1.0
     unconfirmed = 0
     has_missing = False
-    for r, provider_type in results:
+    for r, provider_type, _sid in results:
         cmap = r.confidence_map or {}
         if cmap:
             lowest = min(lowest, min(cmap.values()))
@@ -552,6 +552,27 @@ async def data_gateway_node(state: BatchState) -> BatchState:
  
     low_conf = lowest < CONFIDENCE_THRESHOLD or unconfirmed > 0 or has_missing
     error_reason = "low_confidence" if low_conf else None
+
+    # [§8-A 승격] 게이트 통과(전원 확정·고신뢰·스키마OK) 시에만 확정 AI 추출값을
+    #   provider_type별 상세테이블로 승격한다. 이 시점 parsed_fields는 협력사 확정값이라
+    #   덮어쓰기(clobber) 위험이 없다. 승격 실패는 로깅만 — 파이프라인 진행을 막지 않는다.
+    promoted_suppliers = 0
+    if not low_conf:
+        from backend.domains.supplier.service import promote_extraction_to_details
+        try:
+            async with AsyncSessionLocal() as pdb:
+                for r, provider_type, supplier_id in results:
+                    if not r.supplier_confirmed:
+                        continue
+                    done = await promote_extraction_to_details(
+                        pdb, supplier_id, provider_type,
+                        r.parsed_fields or {}, r.confidence_map or {},
+                    )
+                    if done:
+                        promoted_suppliers += 1
+                await pdb.commit()
+        except Exception as exc:
+            print(f"[data_gateway] §8-A 추출값 승격 실패(파이프라인 계속): {exc}")
  
     return {
         **state,
@@ -566,6 +587,7 @@ async def data_gateway_node(state: BatchState) -> BatchState:
             "lowest_confidence": lowest,
             "unconfirmed": unconfirmed,
             "has_missing": has_missing,
+            "promoted_suppliers": promoted_suppliers,
         },
     }
 
@@ -618,7 +640,7 @@ async def get_integrity_pairs(
     # 키별 '최고 신뢰' 증빙값 집계 (확정 문서만 대상)
     best_doc_value: dict = {}
     best_conf: dict = {}
-    for record, _provider_type in results:
+    for record, _provider_type, _sid in results:
         if not record.supplier_confirmed:
             continue
         parsed = record.parsed_fields or {}

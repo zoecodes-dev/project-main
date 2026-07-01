@@ -5,8 +5,8 @@ LangGraph 5인 에이전트 파이프라인의 공통 State 구조체.
 모든 에이전트가 공유하는 단일 진실 공급원이며, schema.sql batches 테이블과 1:1 정렬.
 
 [정합성 핵심 — 두 축은 schema.sql 표기 그대로, 접두어 포함]
-  current_stage : 노드 위치 축. schema.sql chk_batch_stage 5종과 1:1
-      stage_queued → stage_extraction → stage_geo → stage_compliance → stage_risk
+  current_stage : 노드 위치 축. schema.sql chk_batch_stage 6종과 1:1
+      stage_queued → stage_extraction → stage_geo → stage_compliance → stage_risk → stage_judgment
       (verification/readiness/issuance 단계는 스코프 축소로 제거 — FEOC·DPP 발행 폐지)
   batch_status  : 거친 국면 축. schema.sql chk_batch_status 4종과 1:1
       batch_processing / batch_hitl_wait / batch_completed / batch_rejected
@@ -36,10 +36,10 @@ class BatchState(TypedDict, total=False):
     # batches.destination — 허용값: US / EU / KR
     destination: str
 
-    # batches.current_stage — 노드 위치 축 (5종, schema.sql chk_batch_stage와 1:1)
+    # batches.current_stage — 노드 위치 축 (6종, schema.sql chk_batch_stage와 1:1)
     current_stage: Literal[
         "stage_queued", "stage_extraction",
-        "stage_geo", "stage_compliance", "stage_risk",
+        "stage_geo", "stage_compliance", "stage_risk", "stage_judgment",
     ]
     # batches.status — 거친 국면 축 (4종, schema.sql chk_batch_status와 1:1)
     batch_status: Literal[
@@ -68,3 +68,4 @@ class BatchState(TypedDict, total=False):
     extraction_result: Optional[dict]    # data_gateway (B, stage_extraction)
     geo_result: Optional[dict]           # geo_audit (D, stage_geo)
     compliance_result: Optional[dict]    # compliance (C, stage_compliance)
+    final_judgment: Optional[dict]       # final_judgment (stage_judgment)

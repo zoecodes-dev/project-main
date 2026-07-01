@@ -283,6 +283,17 @@ class SupplyChainService:
         # DB에는 link_status='supplychain_confirmed'로 저장되지만 프론트 계약은 {mapId, status:"confirmed"}.
         return {"map_id": result["map_id"], "status": "confirmed"}
 
+    async def confirm_pool(
+        self,
+        map_id: str,
+        tenant_id: str,
+        supplier_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Tier-1 풀 확정("pool 확정" 버튼). 선택 협력사(없으면 전체 Tier-1) 엣지 상태전이 후 커밋."""
+        result = await self.repository.confirm_pool(map_id, tenant_id, supplier_ids)
+        await self.repository.session.commit()
+        return result
+
     # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(맵 그 자체) 관리.
     async def list_maps(self, tenant_id: str) -> List[Dict[str, Any]]:
         """내 테넌트의 공급망 맵 목록(map_id 단위)."""
@@ -407,6 +418,7 @@ class SupplyChainService:
         eudr_results = await self.repository.check_eudr_deforestation(db)
 
         detected_risks: List[Dict[str, Any]] = []
+        flagged_xinjiang: set = set()   # factory_id dedup — 좌표/이름 중복 발행 방지
         for result in audit_results:
             if result.get("is_in_risk_zone"):
                 formatted_coords = self.parse_geojson_to_latlng(result["coordinates"])
@@ -420,6 +432,27 @@ class SupplyChainService:
                 )
                 await self._publish_geo_risk(event)
                 detected_risks.append(asdict(event))
+                flagged_xinjiang.add(result["factory_id"])
+
+        # 신장 이름매칭 — 지오코딩이 좌표를 못 잡아 location=NULL이면 위 폴리곤
+        #   판정에서 누락되는 하위 지구(카슈가르 등)를 이름으로 보완해 UFLPA 누락을 막는다.
+        #   좌표로 이미 잡힌 공장은 중복 발행하지 않는다(factory_id dedup).
+        name_results = await self.repository.check_xinjiang_by_name()
+        for result in name_results:
+            if result["factory_id"] in flagged_xinjiang:
+                continue
+            formatted_coords = self.parse_geojson_to_latlng(result.get("coordinates"))
+            event = GeoRiskDetectedEvent(
+                batch_id=batch_id,
+                factory_id=result["factory_id"],
+                risk_type="xinjiang",
+                supplier_id=result["supplier_id"],
+                company_name=result["company_name"],
+                coordinates=formatted_coords,
+            )
+            await self._publish_geo_risk(event)
+            detected_risks.append(asdict(event))
+            flagged_xinjiang.add(result["factory_id"])
 
         for result in mismatch_results:
             if not result.get("country_match"):

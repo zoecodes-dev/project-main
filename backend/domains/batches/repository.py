@@ -1,3 +1,4 @@
+import json
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -18,7 +19,7 @@ _STATUS_MAP = {
 # DB에 정의된 모든 stage 순서 (current_stage 그룹핑 키 정렬용)
 _STAGE_ORDER = [
     "stage_queued", "stage_extraction",
-    "stage_geo", "stage_compliance", "stage_risk",
+    "stage_geo", "stage_compliance", "stage_risk", "stage_judgment",
 ]
 
 # AgentStage: DB current_stage 값 → 한국어 표시 레이블 + 진행 인덱스(1-base)
@@ -29,7 +30,24 @@ AGENT_STAGE_META: Dict[str, Dict[str, Any]] = {
     "stage_compliance":   {"label": "컴플라이언스",   "index": 4},
     "stage_risk":         {"label": "리스크 분석",    "index": 5},
 }
+AGENT_STAGE_META["stage_judgment"] = {"label": "종합 판정", "index": 6}
 _TOTAL_STAGES = len(AGENT_STAGE_META)
+
+
+def _json_list(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
 
 
 async def list_batches_by_status(
@@ -181,6 +199,21 @@ async def get_batch_detail(
         {"batch_id": batch_id},
     )).mappings().fetchone()
 
+    final_judgment_row = (await db.execute(
+        text("""
+            SELECT
+                overall_verdict,
+                executive_summary,
+                key_risks,
+                recommended_action,
+                confidence,
+                created_at
+            FROM batch_final_judgment
+            WHERE batch_id = :batch_id
+        """),
+        {"batch_id": batch_id},
+    )).mappings().fetchone()
+
     # ── 조립 ────────────────────────────────────────────────────────────────
     return {
         "batch_id":        str(batch_row["batch_id"]),
@@ -224,6 +257,20 @@ async def get_batch_detail(
             ),
             "has_high_risk": bool(risk_row["has_high_risk"]) if risk_row else False,
         },
+        "final_judgment": {
+            "overall_verdict": final_judgment_row["overall_verdict"],
+            "executive_summary": final_judgment_row["executive_summary"],
+            "key_risks": _json_list(final_judgment_row["key_risks"]),
+            "recommended_action": final_judgment_row["recommended_action"],
+            "confidence": (
+                float(final_judgment_row["confidence"])
+                if final_judgment_row["confidence"] is not None else None
+            ),
+            "created_at": (
+                final_judgment_row["created_at"].isoformat()
+                if final_judgment_row["created_at"] else None
+            ),
+        } if final_judgment_row else None,
     }
 
 

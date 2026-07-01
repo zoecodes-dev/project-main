@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.domains.supplier import repository
 from backend.domains.supplier.models import (
+    GeoPoint,
     MasterFormContact,
     MasterFormFactory,
     MasterFormRequest,
@@ -35,6 +36,7 @@ from backend.events.types import (
     SupplierInvitedEvent,
     SupplierDocumentUploadedEvent,
 )
+from backend.infrastructure import geocode
 from backend.infrastructure.event_bus import publish
 from backend.infrastructure.trace import trace_node
 # AP: 추출결과 read는 E 제공(submission repository), 마스터폼 prefill 변환은 B(supplier)
@@ -57,6 +59,7 @@ async def create_supplier_and_invite(
     supplier_data: dict,
     email: str,
     inviter_supplier_id: Optional[UUID] = None,
+    contacts: Optional[list] = None,
 ) -> Supplier:
     """
     협력사를 생성하고 초대 이벤트를 발행한다. (B-9 완료기준: CTI/onboarding/SLA/발행을
@@ -97,6 +100,11 @@ async def create_supplier_and_invite(
         sla_due_date=sla_due_date,
         reminder_count=0,
     ))
+
+    # 1-d) 하위 PIC(담당자 3명) 저장 — stub 과 같은 트랜잭션. 다음 화면 재표기용
+    #      (supplier_contacts). 초대만 되고 아직 가입 전이어도 정보는 남는다.
+    if contacts:
+        await repository.write_master_form_contacts(db, supplier.supplier_id, contacts)
 
     # 2) 커밋 — 영속화 확정 (repository는 flush만, 커밋은 service 책임)
     await db.commit()
@@ -153,6 +161,17 @@ async def submit_master_form(
         # ── 섹션 0: 회사·공장·PIC (B) — 공장 먼저 생성해 factory_ids 확보 ──────
         await repository.write_master_form_company(db, supplier_id, form.company)
         sections_saved.append("company")
+
+        # ── 지오코딩: 좌표가 없는 공장은 주소(region)로 좌표를 채운다 ──────────
+        #   - 프론트가 좌표를 직접 보냈으면(coordinates != None) 그대로 존중.
+        #   - 좌표가 없고 address/region이 있으면 geocode로 보충.
+        #   - geocode 실패(None)면 coordinates는 그대로 None → location NULL 저장.
+        #   ※ 외부 API 호출이므로 DB write 전에 끝낸다(트랜잭션 짧게 유지).
+        for f in form.factories:
+            if f.coordinates is None and (f.address or f.region):
+                latlng = await geocode.geocode_address(f.address, f.country, f.region)
+                if latlng is not None:
+                    f.coordinates = GeoPoint(latitude=latlng[0], longitude=latlng[1])
 
         factory_ids = await repository.write_master_form_factories(db, supplier_id, form.factories)
         if form.factories:
@@ -212,7 +231,7 @@ async def get_master_form_prefill(db: AsyncSession, supplier_id: UUID) -> Option
     merged_fields: dict = {}
     merged_conf: dict = {}
     unconfirmed = 0
-    for record, _provider_type in results:
+    for record, _provider_type, _sid in results:
         parsed = record.parsed_fields or {}
         cmap = record.confidence_map or {}
         for key, value in parsed.items():
@@ -339,7 +358,11 @@ async def update_supplier_detail(
     self_risk = fields.pop("self_reported_risk_level", None)
     if fields:                         # 나머지는 suppliers 컬럼(core_minerals 포함)
         await repository.update_supplier_fields(db, supplier_id, fields)
-    if manuf:                          # 탄소발자국 → manufacturer_details
+    # [§8-J 가드] carbon_intensity/energy_source 는 supplier_manufacturer_details 소유다.
+    #   provider_type 검사 없이 upsert하면 비제조사(miner 등)가 carbon을 보낼 때 엉뚱한
+    #   manufacturer_details 행이 생긴다(도메인 의미 위반). manufacturer 일 때만 쓴다.
+    #   비제조사가 보낸 carbon은 저장 위치가 없어 무시(추측 저장 금지).
+    if manuf and supplier.provider_type == "manufacturer":
         await repository.upsert_manufacturer_fields(db, supplier_id, manuf)
     if self_risk is not None:          # 실사 자가진단 → risk_profiles
         await repository.set_self_reported_risk_level(db, supplier_id, self_risk)
@@ -361,6 +384,44 @@ async def update_supplier_detail(
             )
 
     return await get_supplier_detail(db, supplier_id, tenant_id)
+
+
+async def promote_extraction_to_details(
+    db: AsyncSession,
+    supplier_id: UUID,
+    provider_type: Optional[str],
+    parsed_fields: dict,
+    confidence_map: dict,
+) -> List[str]:
+    """[§8-A 승격] 배치 게이트(data_gateway) 통과 시, 협력사 확정 AI 추출값을
+    provider_type별 상세테이블로 승격한다.
+
+    masterform_prefill(SSOT 매핑)로 flat 추출값을 섹션 구조로 되돌린 뒤, '저장 위치가
+    있고 갭분석이 읽는' 필드만 기존 writer로 쓴다. 현재 대상: manufacturing carbon
+    (carbon_intensity/energy_source → supplier_manufacturer_details).
+    company 식별필드는 AI 추측으로 덮어쓰면 위험해 승격에서 제외(협력사 직접입력 유지).
+
+    게이트 통과 = supplier_confirmed=True + 고신뢰라, 이 값은 협력사 확정값과 일치(무회귀).
+    flush만 — 커밋은 호출부(data_gateway가 배치 전체를 일괄 커밋). 반환: 승격된 섹션 키.
+    """
+    prefill = masterform_prefill.to_master_form_prefill(
+        parsed_fields or {}, confidence_map or {}
+    )["prefill"]
+    promoted: List[str] = []
+
+    # manufacturing carbon → supplier_manufacturer_details (§8-J 가드: manufacturer만)
+    manufacturing = prefill.get("manufacturing") or {}
+    if manufacturing and provider_type == "manufacturer":
+        manuf = {
+            k: manufacturing[k]
+            for k in ("carbon_intensity", "energy_source")
+            if k in manufacturing
+        }
+        if manuf:
+            await repository.upsert_manufacturer_fields(db, supplier_id, manuf)
+            promoted.append("manufacturing")
+
+    return promoted
 
 
 async def get_supplier_detail(
