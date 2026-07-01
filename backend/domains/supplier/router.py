@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.database import get_db
-from backend.infrastructure.auth import CurrentUser, get_current_user
+from backend.infrastructure.auth import CurrentUser, get_current_user, require_supplier_consent
 from backend.infrastructure.pagination import set_total_count
 from backend.domains.supplier import service
 # 스키마 클래스들을 models 내부 하단에서 안전하게 import
@@ -72,13 +72,17 @@ async def create_supplier_endpoint(
         "provider_type": request.provider_type,
     }
     supplier = await service.create_supplier_and_invite(
-        db, supplier_data, request.email, request.inviter_supplier_id
+        db, supplier_data, request.email, request.inviter_supplier_id, request.contacts
     )
     # ★ 여기서 db.commit() 하지 않는다 — service가 이미 커밋
     return {"supplier_id": supplier.supplier_id, "status": supplier.status}
 
 
-@router.post("/{supplier_id}/master-form", response_model=MasterFormResponse)
+@router.post(
+    "/{supplier_id}/master-form",
+    response_model=MasterFormResponse,
+    dependencies=[Depends(require_supplier_consent)],  # 제3자 동의 게이트(협력사 미동의 시 403)
+)
 async def submit_master_form_endpoint(
     supplier_id: UUID,
     form: MasterFormRequest,
@@ -178,7 +182,11 @@ async def get_supplier_detail_endpoint(
     return supplier
 
 
-@router.patch("/{supplier_id}/detail", response_model=SupplierDetailResponse)
+@router.patch(
+    "/{supplier_id}/detail",
+    response_model=SupplierDetailResponse,
+    dependencies=[Depends(require_supplier_consent)],  # 제3자 동의 게이트(협력사 미동의 시 403)
+)
 async def update_supplier_detail_endpoint(
     supplier_id: UUID,
     request: SupplierDetailUpdateRequest,
@@ -188,6 +196,7 @@ async def update_supplier_detail_endpoint(
     """
     협력사 '자료 제출' — 기업 기본정보 수정. 내 테넌트 소유만(아니면 404).
     협력사 계정은 본인(supplier_id) 것만 수정 가능(다른 협력사면 403).
+    제3자 정보제공 동의(consent_agreed) 전이면 require_supplier_consent 가 403(CONSENT_REQUIRED).
     """
     if current_user.supplier_id is not None and current_user.supplier_id != supplier_id:
         raise HTTPException(status_code=403, detail="본인 회사 정보만 수정할 수 있습니다.")

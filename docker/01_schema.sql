@@ -1106,7 +1106,7 @@ CREATE TABLE authority_submissions (
     batch_id           UUID REFERENCES batches(batch_id) ON DELETE CASCADE,
     product_id         UUID REFERENCES products(product_id) ON DELETE CASCADE,
     authority_type     VARCHAR(30) NOT NULL
-        CONSTRAINT chk_auth_type CHECK (authority_type IN ('TRACES_NT', 'IRA_30D', 'CBP_DETENTION')),
+        CONSTRAINT chk_auth_type CHECK (authority_type IN ('TRACES_NT', 'CBP_DETENTION')),
     reference_number   VARCHAR(100), -- TRACES-NT 고유 참조번호 / IRS Safe Harbor 등록번호 등
     status             VARCHAR(20) DEFAULT 'pending'
         CONSTRAINT chk_auth_submission_status CHECK (status IN ('pending', 'submitted', 'approved', 'failed')),
