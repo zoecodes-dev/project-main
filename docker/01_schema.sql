@@ -722,6 +722,8 @@ CREATE TABLE document_extraction_results (
     unparsed_fields     JSONB, -- 파싱 실패 필드 리스트
     detected_document_type VARCHAR(255),       -- AI가 분류한 문서 유형 (원어 표기)
     evidence_summary       TEXT,               -- 문서 내용 1-2문장 요약
+    blank_fields        JSONB DEFAULT '[]'::jsonb, -- 문서에 라벨은 보이나 값 영역이 확실히 비어 있는 필드
+    unreadable_fields   JSONB DEFAULT '[]'::jsonb, -- 필드를 찾지 못했거나 라벨/값이 불명확한 필드
     supplier_confirmed  BOOLEAN DEFAULT FALSE, -- 협력사가 눈으로 검토하고 확인 버튼 눌렀는지 여부
     confirmed_at        TIMESTAMPTZ,
     created_at          TIMESTAMPTZ DEFAULT now()

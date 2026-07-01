@@ -50,6 +50,8 @@ async def list_ai_extractions(db: AsyncSession, tenant_id) -> list[dict]:
             "parsed_fields": r.get("parsed_fields") or {},
             "confidence_map": r.get("confidence_map") or {},
             "unparsed_fields": r.get("unparsed_fields") or [],
+            "blank_fields": r.get("blank_fields") or [],
+            "unreadable_fields": r.get("unreadable_fields") or [],
             "detected_document_type": r.get("detected_document_type"),
             "evidence_summary": r.get("evidence_summary"),
             "doc_category": r.get("doc_category"),

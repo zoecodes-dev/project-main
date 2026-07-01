@@ -82,6 +82,8 @@ async def process_document_parse(ctx, document_id: str, request_id: str | None =
                 parsed_fields=result.get("parsed_fields", {}),
                 confidence_map=result.get("confidence_map", {}),
                 unparsed_fields=result.get("unparsed_fields", []),
+                blank_fields=result.get("blank_fields", []),
+                unreadable_fields=result.get("unreadable_fields", []),
                 detected_document_type=result.get("detected_document_type") or None,
                 evidence_summary=result.get("evidence_summary") or None,
             )
