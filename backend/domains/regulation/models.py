@@ -53,8 +53,8 @@ from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel
-from sqlalchemy import Date, DateTime, ForeignKey, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.infrastructure.database import Base
@@ -113,6 +113,15 @@ class Regulation(Base):
     # judge 호출 경로(compliance.py)는 사용하지 않는다.
     clauses: Mapped[list["RegulationClause"]] = relationship(
         "RegulationClause",
+        back_populates="regulation",
+        cascade="all, delete-orphan",
+    )
+
+    # ── [C-2 신규] regulation_required_fields relationship ──
+    # get_required_fields()는 raw SQL JOIN으로 조회하므로
+    # 이 relationship은 ORM 측 편의용이며 주요 조회 경로는 사용하지 않는다.
+    required_fields: Mapped[list["RegulationRequiredField"]] = relationship(
+        "RegulationRequiredField",
         back_populates="regulation",
         cascade="all, delete-orphan",
     )
@@ -197,46 +206,48 @@ class RegulationClause(Base):
 
 
 # ============================================================
-# 3. [TODO] regulation_required_fields 테이블 ORM
-#    D(영수)의 C1 작업(DDL 배포) 완료 후 주석 해제
+# 3. regulation_required_fields 테이블 ORM (C-2 활성화 — 은지)
+#
+#    [C-2 변경 — 은지, 2026-06-30]
+#    가이드 AI_보강_가이드.md C-2: "테이블 기존재(schema:680) — DDL 불필요,
+#    코드 주석('D 머지 전')은 stale." 확인 후 주석 해제.
+#    regulation_required_fields 테이블은 schema.sql:623에 이미 존재함.
 # ============================================================
 
-# ┌──────────────────────────────────────────────────────────────┐
-# │ D(영수)가 C1에서 아래 DDL을 머지한 후 이 블록 전체를 해제.   │
-# │                                                              │
-# │ 주석 해제 체크리스트:                                          │
-# │   1. schema.sql에 regulation_required_fields 테이블 존재 확인  │
-# │   2. docker compose down -v && up --build 로 DDL 반영          │
-# │   3. 아래 class 주석 해제                                      │
-# │   4. 위 Regulation ORM의 required_fields relationship 해제      │
-# │   5. repository.py의 get_required_fields() TODO 구현 교체       │
-# └──────────────────────────────────────────────────────────────┘
+class RegulationRequiredField(Base):
+    """
+    규제별 필수 제출 필드 매트릭스 (schema.sql 영역 10).
 
-# class RegulationRequiredField(Base):
-#     """
-#     규제별 필수 제출 필드 매트릭스 (D가 DDL 생성 담당).
-#
-#     [테이블 구조 — D와 합의된 DDL]
-#       regulation_id             UUID FK → regulations
-#       field_name                VARCHAR    — 필드 식별자 (snake_case)
-#       field_type                VARCHAR    — 데이터 타입 (number/string/jsonb 등)
-#       provider_type_applicable  JSONB      — 적용 공급사 유형 배열
-#     """
-#     __tablename__ = "regulation_required_fields"
-#
-#     field_id: Mapped[uuid.UUID] = mapped_column(
-#         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
-#     )
-#     regulation_id: Mapped[uuid.UUID] = mapped_column(
-#         UUID(as_uuid=True),
-#         ForeignKey("regulations.regulation_id"),
-#         nullable=False,
-#     )
-#     field_name: Mapped[str] = mapped_column(String(100), nullable=False)
-#     field_type: Mapped[Optional[str]] = mapped_column(String(50))
-#     provider_type_applicable: Mapped[Optional[dict]] = mapped_column(JSONB)
-#
-#     regulation = relationship("Regulation", back_populates="required_fields")
+    [테이블 구조 — schema.sql:623 직접 확인]
+      regulation_id             UUID FK → regulations (ON DELETE CASCADE)
+      field_name                VARCHAR(100) NOT NULL — 필드 식별자 (snake_case)
+      field_type                VARCHAR(50)  NOT NULL — 데이터 타입 (numeric/geojson/jsonb/text 등)
+      provider_type_applicable  JSONB        — 적용 공급사 유형 배열. NULL이면 전업종
+      is_mandatory              BOOLEAN DEFAULT TRUE
+
+    [용도]
+      get_required_fields()가 이 테이블을 regulation_code → regulation_id 조인으로
+      조회한다(C-2). gap 분석(get_gaps) 및 onboarding 필수 필드 검증에 쓰인다.
+    """
+    __tablename__ = "regulation_required_fields"
+
+    field_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    regulation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("regulations.regulation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    field_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    field_type: Mapped[Optional[str]] = mapped_column(String(50))
+    provider_type_applicable: Mapped[Optional[dict]] = mapped_column(JSONB)
+    is_mandatory: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    regulation: Mapped["Regulation"] = relationship(
+        "Regulation",
+        back_populates="required_fields",
+    )
 
 
 # ============================================================

@@ -59,38 +59,43 @@ async def get_applicable_regulations(
     """
     주어진 제품에 적용되는 규제 목록을 반환한다.
 
-    [Wave 0 스텁과의 차이]
-      스텁: product_id 무시, 더미 데이터 고정 반환
-      현재: product_id로 destination 조회 후 DB에서 실제 규제 조회
+    [C-2 변경 — 은지, 2026-06-30] destination="EU" 하드코딩 → 실조회로 교체
+      변경 전: destination = "EU" 고정 (데모 시나리오 기준)
+      변경 후: product_id → batches.destination 실조회
+               batches.destination ∈ US/EU/KR (BOTH 없음 — schema:chk_batch_destination)
+               조회 결과 없으면 "EU" 폴백 유지 (기존 동작 보존)
 
-    [동작 흐름]
-      1. product_id → batches 테이블에서 destination 조회
-         (현재는 TODO — A1 머지 후 배치 진입점으로 연동)
-      2. destination → get_regulations_by_destination() 호출
-      3. Regulation ORM 리스트 → dict 리스트로 변환
+    [무회귀]
+      하위 get_regulations_by_destination() 시그니처·반환 형태 불변.
+      REGULATION_BY_DESTINATION dict 불변.
     """
-    # ── TODO: product_id → destination 조회 ──
-    # A1(배치 생성 진입점) 머지 후 아래 로직 활성화:
-    #   from sqlalchemy import text
-    #   dest_row = await db.execute(
-    #       text("""
-    #           SELECT DISTINCT b.destination
-    #           FROM batches b
-    #           WHERE b.product_id = :product_id::uuid
-    #           ORDER BY b.destination
-    #           LIMIT 1
-    #       """),
-    #       {"product_id": product_id},
-    #   )
-    #   destination = dest_row.scalar() or "EU"
-    #
-    # 현재는 기본값 "EU" 사용 (데모 시나리오 기준)
-    destination = "EU"
+    from sqlalchemy import text as _text
 
-    logger.debug(
-        "get_applicable_regulations: product_id=%s → destination=%s",
-        product_id, destination,
-    )
+    dest_row = (await db.execute(
+        _text("""
+            SELECT DISTINCT b.destination
+            FROM batches b
+            WHERE b.product_id = :product_id::uuid
+              AND b.destination IS NOT NULL
+            ORDER BY b.destination
+            LIMIT 1
+        """),
+        {"product_id": product_id},
+    )).fetchone()
+
+    destination = dest_row[0] if dest_row else "EU"
+
+    if not dest_row:
+        logger.debug(
+            "get_applicable_regulations: product_id=%s 에 해당하는 batch가 없어요. "
+            "기본값 'EU' 사용.",
+            product_id,
+        )
+    else:
+        logger.debug(
+            "get_applicable_regulations: product_id=%s → destination=%s (batches 실조회)",
+            product_id, destination,
+        )
 
     return await get_regulations_by_destination(db, destination)
 
