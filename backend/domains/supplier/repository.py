@@ -10,6 +10,7 @@ from uuid import UUID
  
 from sqlalchemy import select, update, delete, text, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -455,24 +456,42 @@ async def write_master_form_company(
     await db.flush()
 
 
-# ── 섹션 0: 공장 (supplier_factories replace-all) ─────────────────────────
+# ── 섹션 0: 공장 (supplier_factories upsert) ──────────────────────────────
 async def write_master_form_factories(
     db: AsyncSession, supplier_id: UUID, factories: List[MasterFormFactory]
 ) -> List[UUID]:
     """
-    섹션 0 공장 — supplier_factories replace-all. 입력 순서를 보존한 factory_id
+    섹션 0 공장 — supplier_factories upsert. 입력 순서를 보존한 factory_id
     리스트를 반환한다(섹션 1 탄소선언·섹션 5 교육의 factory_index 연결에 사용).
+
+    replace-all(DELETE+INSERT)이 아니라 upsert인 이유: supply_ratio·supplier_audit_records가
+    supplier_factories(factory_id)를 ON DELETE 없이 참조한다. 기존 공장을 통째로
+    삭제하면 공급망 편입(supply_ratio)·실사 이력 이후 재제출 시 FK 위반으로 실패한다.
+      ① 입력에 factory_id가 있고 이 협력사 소유 → UPDATE(id 보존 → FK 유지)
+      ② factory_id가 없거나 남의 것 → INSERT(신규 id 발급)
+      ③ 이번 입력에 없는 기존 공장 → 하드 DELETE 시도, FK가 참조 중이면(공급망·실사에
+         편입됨) is_active=FALSE 소프트 삭제로 폴백. 소프트 삭제는 활성 목록·신규 공급망
+         후보에서 빠지되 기존 supply_ratio 기여도(ART7 탄소 가중평균·누적 기여도 트리에서
+         소비)·실사 이력 등 원산지 이력은 보존한다.
     좌표는 GeoPoint(lat/lng) → EWKT 'SRID=4326;POINT(lng lat)'로 변환(PostGIS=lng/lat).
     """
-    await db.execute(delete(SupplierFactory).where(SupplierFactory.supplier_id == supplier_id))
+    # 이 협력사의 기존 공장 id — UPDATE 대상 판별 + 미포함 공장 삭제에 사용.
+    existing_ids = set(
+        (
+            await db.execute(
+                select(SupplierFactory.factory_id).where(SupplierFactory.supplier_id == supplier_id)
+            )
+        ).scalars().all()
+    )
+
     factory_ids: List[UUID] = []
+    seen_ids: set[UUID] = set()
     for f in factories:
         location = None
         if f.coordinates is not None:
             # PostGIS POINT 순서는 lng/lat. 입력이 lat/lng 명시 필드라 혼선 차단됨.
             location = f"SRID=4326;POINT({f.coordinates.longitude} {f.coordinates.latitude})"
-        obj = SupplierFactory(
-            supplier_id=supplier_id,
+        values = dict(
             factory_name=f.factory_name,
             factory_name_en=f.factory_name_en,
             address=f.address,
@@ -489,9 +508,41 @@ async def write_master_form_factories(
             supply_ratio_percent=f.supply_ratio_percent,
             supply_quantity=f.supply_quantity,
         )
-        db.add(obj)
-        await db.flush()   # factory_id 확보(이후 섹션에서 FK로 참조)
-        factory_ids.append(obj.factory_id)
+        if f.factory_id is not None and f.factory_id in existing_ids:
+            # ① 기존 공장 — id 보존 UPDATE(supply_ratio FK 유지).
+            await db.execute(
+                update(SupplierFactory)
+                .where(SupplierFactory.factory_id == f.factory_id)
+                .values(**values)
+            )
+            fid = f.factory_id
+        else:
+            # ② 신규 공장 — INSERT(factory_id가 없거나 이 협력사 소유가 아니면 신규 발급).
+            obj = SupplierFactory(supplier_id=supplier_id, **values)
+            db.add(obj)
+            await db.flush()   # factory_id 확보(이후 섹션에서 FK로 참조)
+            fid = obj.factory_id
+        factory_ids.append(fid)
+        seen_ids.add(fid)
+
+    # ③ 이번 입력에 없는 기존 공장 처리(현재 집합 동기화).
+    #    하드 DELETE를 시도하되, 다른 도메인(supply_ratio·audit 등)이 참조 중이면 FK 위반이 난다.
+    #    특정 참조 테이블을 이 계층이 알면 도메인 격리가 깨지므로, SAVEPOINT로 삭제를 시도하고
+    #    IntegrityError면 그 공장만 롤백 후 is_active=FALSE로 소프트 삭제(원산지 이력 보존).
+    stale_ids = existing_ids - seen_ids
+    for fid in stale_ids:
+        try:
+            async with db.begin_nested():   # SAVEPOINT — 실패해도 바깥 트랜잭션은 유지
+                await db.execute(delete(SupplierFactory).where(SupplierFactory.factory_id == fid))
+        except IntegrityError:
+            # 참조 중(공급망 편입·실사 이력 등) → 하드 삭제 불가. 이력 보존용 소프트 삭제.
+            await db.execute(
+                update(SupplierFactory)
+                .where(SupplierFactory.factory_id == fid)
+                .values(is_active=False)
+            )
+
+    await db.flush()
     return factory_ids
 
 
