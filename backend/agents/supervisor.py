@@ -34,6 +34,8 @@ def route(state: "BatchState") -> str:
     if current_stage == "stage_compliance":
         return "risk_scoring"
     if current_stage == "stage_risk":
+        return "final_judgment"
+    if current_stage == "stage_judgment":
         return "completed"
 
     return "completed"

@@ -541,7 +541,7 @@ CREATE TABLE batches (
     -- [A-7 상태] batch_stage 접두어 일괄 적용 (verification/readiness/issuance는 스코프 축소로 제거)
     current_stage    VARCHAR(50) DEFAULT 'stage_queued'
         CONSTRAINT chk_batch_stage CHECK (
-            current_stage IN ('stage_queued', 'stage_extraction', 'stage_geo', 'stage_compliance', 'stage_risk')
+            current_stage IN ('stage_queued', 'stage_extraction', 'stage_geo', 'stage_compliance', 'stage_risk', 'stage_judgment')
         ),
 
     -- [A-6 상태] batch_status 접두어 일괄 적용
@@ -1211,6 +1211,19 @@ CREATE TABLE geo_audit_results (
     created_at      TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX idx_geo_audit_results_batch ON geo_audit_results(batch_id);
+
+CREATE TABLE batch_final_judgment (
+    judgment_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_id           UUID UNIQUE REFERENCES batches(batch_id) ON DELETE CASCADE,
+    overall_verdict    VARCHAR(20) NOT NULL
+        CONSTRAINT chk_final_verdict CHECK (overall_verdict IN ('pass', 'conditional', 'fail')),
+    executive_summary  TEXT NOT NULL,
+    key_risks          JSONB DEFAULT '[]'::jsonb,
+    recommended_action TEXT NOT NULL,
+    confidence         NUMERIC(5,4),
+    created_at         TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX idx_batch_final_judgment_batch ON batch_final_judgment(batch_id);
 
 
 -- ============================================================
