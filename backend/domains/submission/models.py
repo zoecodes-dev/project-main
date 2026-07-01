@@ -148,6 +148,8 @@ class DocumentExtractionResult(Base):
     parsed_fields: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     confidence_map: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     unparsed_fields: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    blank_fields: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True, server_default="'[]'::jsonb")
+    unreadable_fields: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True, server_default="'[]'::jsonb")
     detected_document_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     evidence_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     supplier_confirmed: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, server_default="false", nullable=True)
@@ -302,6 +304,8 @@ class ExtractionResultOut(BaseModel):
     parsed_fields: Optional[dict] = None
     confidence_map: Optional[dict] = None
     unparsed_fields: Optional[Any] = None  # JSONB — list in practice
+    blank_fields: Optional[Any] = None     # 라벨은 보이나 값이 확실히 비어 있는 필드
+    unreadable_fields: Optional[Any] = None  # 찾지 못했거나 불명확한 필드
     created_at: Optional[datetime] = None
     supplier_confirmed: Optional[bool] = None
     confirmed_at: Optional[datetime] = None
