@@ -13,11 +13,13 @@ import 경로를 package 기준으로 수정 (flat → backend.* 패키지).
   - GET /supply-chain/by-bom-depth/{n} : 부품 tier(bom_depth, 0-base) 기준 필터
   - GET /supply-chain/by-hop/{n}       : 공급망 차수(hop_level, 경로 순번) 기준 필터
 """
+import io
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -340,6 +342,34 @@ async def get_validation_summary_endpoint(
         product_id=str(product_id),
         tenant_id=str(current_user.tenant_id),
         bom_version_id=bom_version_id,
+    )
+
+
+# ============================================================
+# P4  GET /products/{product_id}/supply-chain-map/export
+#   고객사 제출용 공급망 엑셀(xlsx) 서버 생성 다운로드.
+# ============================================================
+
+@product_supply_chain_router.get("/{product_id}/supply-chain-map/export")
+async def export_supply_chain_map_endpoint(
+    product_id: UUID,
+    bom_version_id: Optional[str] = None,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """공급망 맵 엑셀 다운로드(서버 생성). products.tenant_id 경로로 tenant 격리."""
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+    content = await service.export_supply_chain_xlsx(
+        product_id=str(product_id),
+        tenant_id=str(current_user.tenant_id),
+        bom_version_id=bom_version_id,
+    )
+    filename = f"supply_chain_{product_id}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

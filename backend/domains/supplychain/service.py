@@ -341,6 +341,70 @@ class SupplyChainService:
             ],
         }
 
+    async def export_supply_chain_xlsx(
+        self,
+        product_id: str,
+        tenant_id: str,
+        bom_version_id: str | None = None,
+    ) -> bytes:
+        """[P4] 고객사 제출용 공급망 엑셀(서버 생성).
+
+        get_supply_chain_map 데이터를 엣지 단위로 평탄화해 openpyxl로 xlsx bytes 반환.
+        프론트 클라 생성과 별개의 서버 권위 export(감사/일관성). 조회 전용.
+        """
+        import io
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+
+        data = await self.get_supply_chain_map(product_id, tenant_id, bom_version_id)
+        edges = data.get("supply_chain_map", [])
+        sup_by_id = {str(s["supplier_id"]): s for s in data.get("suppliers", [])}
+        fac_by_id = {str(f["factory_id"]): f for f in data.get("supplier_factories", [])}
+        ratio_by_map: Dict[str, Any] = {}
+        for r in data.get("supply_chain_ratios", []):
+            ratio_by_map.setdefault(str(r["map_id"]), r)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "공급망"
+        headers = ["Tier", "부품코드", "부품명", "공급사", "공급자유형", "공장", "국가",
+                   "공급기간", "공급비율(%)", "누적기여도(%)", "검증상태", "리스크"]
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="14532D")
+
+        for e in edges:
+            sup = sup_by_id.get(str(e.get("supplier_id")), {}) if e.get("supplier_id") else {}
+            fac = fac_by_id.get(str(e.get("factory_id")), {}) if e.get("factory_id") else {}
+            ratio = ratio_by_map.get(str(e.get("map_id")), {})
+            pf, pt = e.get("supply_period_from"), e.get("supply_period_to")
+            period = f"{pf} ~ {pt}" if (pf or pt) else ""
+            rp = ratio.get("ratio_percent")
+            cc = ratio.get("cumulative_contribution")
+            ws.append([
+                e.get("hop_level"),
+                e.get("part_code") or "",
+                e.get("part_name") or "",
+                sup.get("company_name") or "",
+                sup.get("provider_type") or "",
+                fac.get("factory_name") or "",
+                fac.get("country") or "",
+                period,
+                float(rp) if rp is not None else None,
+                float(cc) if cc is not None else None,
+                e.get("verification_status") or "",
+                sup.get("risk_level") or "",
+            ])
+
+        widths = [6, 14, 22, 24, 14, 22, 10, 24, 12, 14, 12, 10]
+        for i, w in enumerate(widths, start=1):
+            ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = w
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
     # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(맵 그 자체) 관리.
     async def list_maps(self, tenant_id: str) -> List[Dict[str, Any]]:
         """내 테넌트의 공급망 맵 목록(map_id 단위)."""
