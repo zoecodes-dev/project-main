@@ -62,6 +62,10 @@ async def _register_subscriptions() -> None:
     await subscribe("SupplierInvited", supplychain_record_discovered_via)
     await subscribe("SupplierInvited", send_supplier_invitation_email)
 
+    # ── P4: 공급망 완결 시 원청에 '최종 검증' 알림 (SubmissionApproved 재평가) ──
+    from backend.handlers.final_validation_notify import notify_final_validation_ready
+    await subscribe("SubmissionApproved", notify_final_validation_ready)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
