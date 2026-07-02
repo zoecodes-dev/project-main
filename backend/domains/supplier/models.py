@@ -113,6 +113,11 @@ class SupplierFactory(Base):
     hidden_regulations: Mapped[Optional[dict]] = mapped_column(JSONB)
     supply_ratio_percent: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
     supply_quantity: Mapped[Optional[str]] = mapped_column(String(100))
+    # 공장 담당자(공장 단위) — supplier_contacts(협력사 PIC)와 구분: factory_manager_*
+    factory_manager_name: Mapped[Optional[str]] = mapped_column(String(100))
+    factory_manager_role: Mapped[Optional[str]] = mapped_column(String(100))
+    factory_manager_phone: Mapped[Optional[str]] = mapped_column(String(50))
+    factory_manager_email: Mapped[Optional[str]] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     supplier = relationship("Supplier", back_populates="factories")
@@ -398,6 +403,10 @@ class FactoryDTO(BaseModel):
     destination_detail: Optional[str] = None
     supply_ratio_percent: Optional[float] = None
     supply_quantity: Optional[str] = None
+    factory_manager_name: Optional[str] = None
+    factory_manager_role: Optional[str] = None
+    factory_manager_phone: Optional[str] = None
+    factory_manager_email: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     model_config = {"from_attributes": True}
@@ -568,6 +577,11 @@ class MasterFormFactory(BaseModel):
     applicable_regulations: Optional[list] = None
     supply_ratio_percent: Optional[float] = None
     supply_quantity: Optional[str] = None
+    # 공장 담당자(공장 단위) — 이름/직책/연락처/메일
+    factory_manager_name: Optional[str] = None
+    factory_manager_role: Optional[str] = None
+    factory_manager_phone: Optional[str] = None
+    factory_manager_email: Optional[str] = None
 
 
 class MasterFormContact(BaseModel):

@@ -144,6 +144,11 @@ CREATE TABLE supplier_factories (
     hidden_regulations    JSONB,
     supply_ratio_percent  NUMERIC(5,2),
     supply_quantity       VARCHAR(100),
+    -- 공장 담당자(공장 단위) — supplier_contacts(협력사 PIC)와 구분해 factory_manager_* 로 명명
+    factory_manager_name  VARCHAR(100),   -- 공장 담당자 이름
+    factory_manager_role  VARCHAR(100),   -- 직책
+    factory_manager_phone VARCHAR(50),    -- 연락처
+    factory_manager_email VARCHAR(255),   -- 메일 주소
     created_at    TIMESTAMPTZ DEFAULT now()
 );
 
