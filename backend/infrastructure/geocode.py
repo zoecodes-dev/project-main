@@ -18,6 +18,14 @@ infrastructure/geocode.py  (담당: 영수 D)
   - 우리 용도(신장 경계 판정)는 행정구역(구/시/도) 정밀도면 충분하므로,
     region(행정구역)만 영문화해서 'region_en, country' 형태로 던진다.
 
+■ ★중국·신장은 OSM(Nominatim) fallback★ (2026-07-02 배선)
+  - geo-places는 중국(특히 신장)을 좌표로 못 잡고 None을 반환한다(실측). 그때
+    osm_geocode로 fallback해 실좌표를 얻는다. OSM은 신장을 정확히 잡음(Kashgar 등 실측).
+  - OSM 반환은 {"lat","lon"} 라벨 dict → (lat, lng)로 그대로 매핑한다. AWS처럼
+    pos[0]/pos[1]을 뒤집으면 안 됨(이미 라벨돼 있음 — 이중 뒤집기 = 좌표 오염).
+  - 성(省) 이름만 받으면 OSM은 성 중심점(region 수준 근사)을 준다. 신장 경계 판정엔
+    충분하나 '공장 실측 위치'는 아니므로 정밀 좌표로 취급하지 말 것.
+
 ■ IntendedUse="Storage" 필수
   - 좌표를 DB에 저장하므로 약관상 Storage 모드 명시 필요. SingleUse면 위반.
 
@@ -30,6 +38,8 @@ from __future__ import annotations
 import asyncio
 
 import boto3
+
+from backend.infrastructure.osm_geocode import geocode_osm
 
 # ─────────────────────────────────────────────────────────
 # ★리전 도쿄 고정★ — geo-places는 서울 미지원. 위 주석 참조.
@@ -133,38 +143,54 @@ async def geocode_address(
 
     query_text = ", ".join(query_parts)
 
-    # country 필터 — ISO alpha-2(KR/CN 등)를 받지만 geo-places는 alpha-3을 쓴다.
-    # 매핑 후 IncludeCountries 필터로 결과를 해당 국가로 한정.
-    geo_filter = None
-    if country:
-        cc = _ALPHA2_TO_ALPHA3.get(country.strip().upper())
-        if cc:
-            geo_filter = {"IncludeCountries": [cc]}
-
-    def _call() -> tuple[float, float] | None:
-        kwargs = {
-            "QueryText": query_text,
-            "IntendedUse": "Storage",   # ★DB 저장 용도 — 필수★
-            "MaxResults": 1,
-        }
-        if geo_filter:
-            kwargs["Filter"] = geo_filter
-        resp = _geo_client.geocode(**kwargs)
-        items = resp.get("ResultItems") or []
-        if not items:
-            return None
-        # Position은 [경도(lng), 위도(lat)] 순서 (GeoJSON 관례). ★뒤집힘 주의★
-        pos = items[0].get("Position")
-        if not pos or len(pos) != 2:
-            return None
-        lng, lat = pos[0], pos[1]
-        return (lat, lng)
-
-    try:
-        return await asyncio.to_thread(_call)
-    except Exception:
-        # 매칭 실패·throttle·네트워크 등 모든 예외 → None. 흐름 차단 금지.
+    # ★국가 앵커 필수★ — region 수준 지오코딩은 country 없이는 신뢰 불가.
+    #   필터 없는 AWS는 "Kashgar"→런던, OSM은 "Hanoi"→헬싱키 식 오답을 준다(2026-07-02 실측).
+    #   앵커가 없으면 엉뚱한 좌표를 저장하느니 NULL(None)로 두는 게 안전.
+    country_norm = country.strip().upper() if country else None
+    if not country_norm:
         return None
+
+    # AWS는 alpha-3 IncludeCountries 필터가 있을 때만 시도한다(필터 없이는 오답 위험).
+    #   alpha-2가 매핑에 없으면 AWS는 건너뛰고 바로 OSM으로 간다(OSM은 alpha-2로 앵커).
+    alpha3 = _ALPHA2_TO_ALPHA3.get(country_norm)
+    aws_result = None
+    if alpha3:
+        def _call() -> tuple[float, float] | None:
+            resp = _geo_client.geocode(
+                QueryText=query_text,
+                IntendedUse="Storage",       # ★DB 저장 용도 — 필수★
+                MaxResults=1,
+                Filter={"IncludeCountries": [alpha3]},
+            )
+            items = resp.get("ResultItems") or []
+            if not items:
+                return None
+            # Position은 [경도(lng), 위도(lat)] 순서 (GeoJSON 관례). ★뒤집힘 주의★
+            pos = items[0].get("Position")
+            if not pos or len(pos) != 2:
+                return None
+            lng, lat = pos[0], pos[1]
+            return (lat, lng)
+
+        try:
+            aws_result = await asyncio.to_thread(_call)
+        except Exception:
+            # 매칭 실패·throttle·네트워크 등 모든 예외 → None으로 간주(흐름 차단 금지).
+            aws_result = None
+    if aws_result is not None:
+        return aws_result
+
+    # ── AWS 미스(geo-places가 못 잡는 중국·신장 등) → OSM(Nominatim) fallback ──
+    #   query_text는 이미 영문화된 region(신장→Xinjiang 등)이라 OSM 매칭에 유리.
+    #   country_norm(alpha-2)로 결과를 해당 국가로 한정(geocode_osm이 소문자 countrycodes 처리).
+    #   OSM 반환 {"lat","lon"}을 (lat, lng)로 그대로 매핑 — 추가 뒤집기 금지.
+    try:
+        osm = await geocode_osm(query_text, country_norm)
+    except Exception:
+        osm = None
+    if osm is not None:
+        return (osm["lat"], osm["lon"])
+    return None
 
 
 # ISO 3166-1 alpha-2 → alpha-3 (geo-places의 IncludeCountries는 alpha-3).

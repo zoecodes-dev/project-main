@@ -663,6 +663,8 @@ async def submit_onboarding(
             company_fields["country"] = iso
         if body.business_reg_doc is not None:
             company_fields["business_reg_doc_url"] = body.business_reg_doc.s3_key
+        if body.environmental_report is not None:
+            company_fields["environmental_report_url"] = body.environmental_report.s3_key
         # None 은 제거(빈값으로 덮어쓰지 않음). is_unverified=False 는 bool 이라 보존.
         company_fields = {k: v for k, v in company_fields.items() if v is not None}
         await repository.update_supplier_fields(db, supplier_id, company_fields)
