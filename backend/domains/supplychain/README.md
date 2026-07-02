@@ -108,3 +108,19 @@ HITL(Human-In-The-Loop) 검토 화면에서 지도에 핀을 꽂고 회색지대
 - **X-Total-Count 미적용 (의도적 제외, N/A)**: 델타 D공통체크의 "supply-chain-map의 배열들도 X-Total-Count" 문구는 비페이징 aggregate 응답에 일괄 규칙이 기계적으로 딸려 들어간 케이스로 판단해 **미적용**. 근거: (1) 맵 화면은 페이지를 나누지 않고 통째로 렌더 → 페이징 자체가 없음, (2) 헤더는 한 칸인데 응답엔 배열 4종(suppliers/factories/map/ratios)이라 "무엇의 개수"인지 모호. 추후 화면에 총개수 노출이 필요하면 헤더가 아니라 응답 본문에 `counts:{...}` 묶음으로 추가하는 방향(헤더 재사용 금지).
 - **geo-risk(신장/국가불일치/EUDR) ↔ 맵 분리 유지**: 3종 적발은 별도 `GET /supply-chain/geo-risks`로 유지하고 10.2a 응답에는 미포함. 지도 위 위험표시는 프론트가 `factory_id` 기준 overlay로 결합(기능 결합도 ↓, 관심사 분리).
 - **suppliers[] 내부 필드 `tenant_id` 제거**: 프론트 불필요 필드라 10.2a `suppliers[]` SELECT에서 drop. suppliers는 이미 tenant 격리된 `supply_chain_map` 노드로 한정되므로 노출 제거가 격리에 영향 없음.
+
+## 15. Pool·최종검증·초대 배선 (흐름 연결)
+
+원청 흐름(맵생성→Pool확정→초대→수집→승인→최종검증→엑셀)을 실데이터로 잇기 위한 추가 엔드포인트/핸들러.
+**새 스키마 없이 기존 컬럼/테이블 재사용**(pool은 별도 테이블이 아니라 맵 엣지 그 자체).
+
+| Method | Path | 설명 |
+| :--- | :--- | :--- |
+| `POST` | `/supply-chain/maps/{map_id}/pool/confirm` | Tier-1 풀 확정. body `{ supplier_ids?: [] }`(생략 시 맵의 전체 Tier-1). 선택 협력사의 `hop_level=1` 엣지 `link_status`→`supplychain_confirmed`. 풀=맵 엣지이므로 상태전이로 확정 |
+| `GET` | `/products/{product_id}/supply-chain-map/validation-summary` | 최종 검증 판정 + 요약 롤업. `get_gaps`(노드별 미보유 필드) + 비율검증 종합 → `{ supplier_count, max_tier, ratio_valid, total_gap_count, ready_for_final, gaps_by_supplier[] }` |
+| `GET` | `/products/{product_id}/supply-chain-map/export` | 고객사 제출용 공급망 엑셀(xlsx) 서버 생성 다운로드(openpyxl). 프론트 클라 생성과 별개의 서버 권위 export |
+
+- **discovered_via(초대 경로 기록)**: `create_supply_relation`/`declare_new_source` INSERT가 `discovered_via`를 기록하고, `SupplierInvited` 이벤트 핸들러(`handlers/supplier_invited.py`)가 기존 엣지에 백필. 자진신고 경로는 `discovered_via=parent`(상위 협력사 편입).
+- **최종검증 알림**: `SubmissionApproved` 수신 시 제품 공급망을 재평가해 `ready_for_final`이면 원청에 in-app 알림(`handlers/final_validation_notify.py`).
+- **gap 재귀 CTE 사이클 가드**: `get_supplier_field_data`에 path 사이클 가드 추가(사이클/다이아몬드 공급망에서 폭주 방지).
+- **갭분석 필드 세트**(`get_gaps`의 `FIELD_HAS_MAP`)와 승격 대상은 **적용 규제 스코프에 따라 변동**한다. 현재 세트는 코드/DB 기준이 SSOT(문서에 개수 고정 금지).

@@ -1,3 +1,7 @@
+# 프로젝트명 고정 — 폴더명(ProjectFile→backend 등)이 바뀌어도 compose 프로젝트/볼륨/
+# 컨테이너 네임스페이스가 유지되도록 한다. (기존 볼륨 kira_pgdata/kira_redisdata = 프로젝트 'projectfile')
+name: projectfile
+
 services:
   # Layer 1: 공급망 데이터 백본 (PostgreSQL + PostGIS + pgvector)
   db:

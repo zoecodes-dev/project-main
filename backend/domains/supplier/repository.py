@@ -311,6 +311,10 @@ async def get_factories(db: AsyncSession, supplier_id: UUID) -> List[dict]:
             SupplierFactory.destination_detail,
             SupplierFactory.supply_ratio_percent,
             SupplierFactory.supply_quantity,
+            SupplierFactory.factory_manager_name,
+            SupplierFactory.factory_manager_role,
+            SupplierFactory.factory_manager_phone,
+            SupplierFactory.factory_manager_email,
             func.ST_Y(SupplierFactory.location).label("latitude"),
             func.ST_X(SupplierFactory.location).label("longitude"),
         )
@@ -501,6 +505,10 @@ async def write_master_form_factories(
             applicable_regulations=f.applicable_regulations,
             supply_ratio_percent=f.supply_ratio_percent,
             supply_quantity=f.supply_quantity,
+            factory_manager_name=f.factory_manager_name,
+            factory_manager_role=f.factory_manager_role,
+            factory_manager_phone=f.factory_manager_phone,
+            factory_manager_email=f.factory_manager_email,
         )
         if f.factory_id is not None and f.factory_id in existing_ids:
             # ① 기존 공장 — id 보존 UPDATE(supply_ratio FK 유지).
