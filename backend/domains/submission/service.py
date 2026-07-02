@@ -176,6 +176,18 @@ async def create_and_request_submission(
                 body=f"데이터 제출을 요청받았습니다. (요청 ID: {req_log.request_id})",
                 dedup_key=f"data_request_sent:{req_log.request_id}:{uid}",
             )
+            # 이메일 채널도 함께 발송(원청→협력사 '정보 입력 요청 메일'). 워커가 users.email로
+            # SES 발송하고, MAIL_ENABLED=false면 no-op(적재만). in-app과 dedup 키 분리.
+            await enqueue(
+                NOTIFICATION_QUEUE,
+                "process_notification",
+                user_id=uid,
+                channel="email",
+                notification_type="reminder",
+                subject="[KIRA] 공급망 정보 입력 요청",
+                body="원청으로부터 공급망 데이터 입력을 요청받았습니다. 포털에 로그인해 자료를 제출해 주세요.",
+                dedup_key=f"data_request_email:{req_log.request_id}:{uid}",
+            )
 
     return req_log
 
