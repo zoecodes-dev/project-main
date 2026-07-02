@@ -419,7 +419,9 @@ class SupplyChainRepository:
             WITH RECURSIVE sc_tree AS (
                 SELECT
                     scm.child_supplier_id, s.provider_type,
-                    0 AS depth
+                    0 AS depth,
+                    -- 사이클 가드용 방문 경로. child_supplier_id는 suppliers INNER JOIN이라 NULL 없음.
+                    ARRAY[scm.child_supplier_id] AS path
                 FROM supply_chain_map scm
                 JOIN bom_versions bv ON bv.bom_version_id = scm.bom_version_id
                 JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
@@ -430,10 +432,13 @@ class SupplyChainRepository:
 
                 SELECT
                     scm.child_supplier_id, s.provider_type,
-                    sct.depth + 1
+                    sct.depth + 1,
+                    sct.path || scm.child_supplier_id
                 FROM supply_chain_map scm
                 JOIN sc_tree sct ON scm.parent_supplier_id = sct.child_supplier_id
                 JOIN suppliers s ON s.supplier_id = scm.child_supplier_id
+                -- 사이클/재방문 차단: 이미 경로에 있는 협력사는 재귀하지 않는다(무한/지수 폭주 방지).
+                WHERE scm.child_supplier_id <> ALL(sct.path)
             ),
             unique_suppliers AS (
                 SELECT DISTINCT ON (child_supplier_id)

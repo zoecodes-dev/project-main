@@ -321,6 +321,29 @@ async def get_supply_chain_map_endpoint(
 
 
 # ============================================================
+# P4  GET /products/{product_id}/supply-chain-map/validation-summary
+#   최종 검증 판정(ready_for_final) + 공급망 요약 롤업(협력사 수/최대 차수/미보유 필드).
+#   원청이 '최종 검증' 전에 확인 + 고객사 제출용 엑셀 다운로드 게이트.
+# ============================================================
+
+@product_supply_chain_router.get("/{product_id}/supply-chain-map/validation-summary")
+async def get_validation_summary_endpoint(
+    product_id: UUID,
+    bom_version_id: Optional[str] = None,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """공급망 최종 검증 요약. products.tenant_id 경로로 tenant 격리."""
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+    return await service.get_validation_summary(
+        product_id=str(product_id),
+        tenant_id=str(current_user.tenant_id),
+        bom_version_id=bom_version_id,
+    )
+
+
+# ============================================================
 # 10.2b  POST /supply-chain/maps/{map_id}/confirm
 # ============================================================
 

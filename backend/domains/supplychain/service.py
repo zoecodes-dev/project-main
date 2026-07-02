@@ -294,6 +294,53 @@ class SupplyChainService:
         await self.repository.session.commit()
         return result
 
+    async def get_validation_summary(
+        self,
+        product_id: str,
+        tenant_id: str,
+        bom_version_id: str | None = None,
+    ) -> Dict[str, Any]:
+        """[P4] 최종 검증 판정 + 공급망 요약 롤업 (조회 전용).
+
+        갭분석(노드별 미보유 필드) + 비율검증(엣지/티어 합 100%)을 합쳐, 원청이
+        '최종 검증' 전에 확인할 요약과 ready_for_final 판정을 만든다.
+          ready_for_final = 미보유 필드 0 + 비율검증 통과 + 협력사 1개 이상
+        엑셀(고객사 제출용) 다운로드 전, 이 판정이 True여야 완결된 맵으로 본다.
+        """
+        gaps = await self.get_gaps(product_id)
+        validation = await self.repository.get_supply_chain_validation(
+            product_id, tenant_id, bom_version_id
+        )
+
+        # 루트 앵커(원청/Tier0)는 협력사 집계에서 제외 — 실제 공급사만 본다.
+        supplier_nodes = [n for n in gaps.get("nodes", []) if not n.get("is_root_anchor")]
+        nodes_with_gaps = [n for n in supplier_nodes if n.get("gap_count", 0) > 0]
+        total_gap = sum(n.get("gap_count", 0) for n in supplier_nodes)
+        max_tier = max((n.get("depth", 0) for n in supplier_nodes), default=0)
+        ratio_valid = bool(validation.get("all_valid"))
+        ready = total_gap == 0 and ratio_valid and len(supplier_nodes) > 0
+
+        return {
+            "product_id": product_id,
+            "bom_version_id": bom_version_id,
+            "supplier_count": len(supplier_nodes),
+            "max_tier": max_tier,
+            "ratio_valid": ratio_valid,
+            "total_gap_count": total_gap,
+            "nodes_with_gaps": len(nodes_with_gaps),
+            "ready_for_final": ready,
+            "gaps_by_supplier": [
+                {
+                    "supplier_id": n["supplier_id"],
+                    "company_name": n.get("company_name", ""),
+                    "provider_type": n.get("provider_type"),
+                    "gap_count": n.get("gap_count", 0),
+                    "missing_fields": n.get("missing_fields", []),
+                }
+                for n in nodes_with_gaps
+            ],
+        }
+
     # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(맵 그 자체) 관리.
     async def list_maps(self, tenant_id: str) -> List[Dict[str, Any]]:
         """내 테넌트의 공급망 맵 목록(map_id 단위)."""
