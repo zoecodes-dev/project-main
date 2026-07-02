@@ -90,7 +90,9 @@ _EXTRACTION_SYSTEM = (
     '  "detected_document_type": "<human-readable document type in original language>",\n'
     '  "parsed_fields": {<field>: <value>, ...},\n'
     '  "confidence_map": {<field>: <0.0-1.0 float>, ...},\n'
-    '  "unparsed_fields": ["<field you could not extract>", ...],\n'
+    '  "blank_fields": ["<field whose label is visible but value area is clearly empty>", ...],\n'
+    '  "unreadable_fields": ["<field not found, label/value unreadable, or ambiguous>", ...],\n'
+    '  "unparsed_fields": ["<combined list of blank_fields + unreadable_fields>", ...],\n'
     '  "evidence_summary": "<1-2 sentence summary of document content>"\n'
     '}\n\n'
     "doc_category rules:\n"
@@ -104,6 +106,21 @@ _EXTRACTION_SYSTEM = (
     "not present in the document (do NOT guess). Group labels are hints only — "
     "the JSON keys must be the quoted field names:\n"
     + catalog_prompt_lines()
+    + "\n\n"
+    "blank_fields / unreadable_fields rules:\n"
+    "  - blank_fields: Use ONLY when the field label or section is clearly visible "
+    "in the document AND the value area is definitively empty or intentionally left blank. "
+    "Do NOT include a field here if you are uncertain.\n"
+    "  - unreadable_fields: Use when the field is not found, the label or value is "
+    "illegible, the document quality is too poor, the layout is ambiguous, or you are "
+    "not confident that the value is truly blank. When in doubt, use unreadable_fields.\n"
+    "  - Do NOT guess missing values.\n"
+    "  - If a field appears in both blank_fields and unreadable_fields, keep it only "
+    "in unreadable_fields.\n"
+    "  - If a field is successfully extracted into parsed_fields, do NOT include it "
+    "in blank_fields, unreadable_fields, or unparsed_fields.\n"
+    "  - unparsed_fields must be the combined list of blank_fields + unreadable_fields "
+    "(no additional entries, no duplicates).\n"
 )
 
 # 확장자 → Bedrock Converse image block mime_type (gif는 미검증이므로 제외)
@@ -155,6 +172,24 @@ def _extract_pdf_text(raw_bytes: bytes) -> tuple[str, int]:
         return "\n".join(parts), total_pages
     finally:
         doc.close()
+
+
+def _clean_string_list(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        item = item.strip()
+        if item:
+            cleaned.append(item)
+    return cleaned
+
+
+def _append_unique(items: list[str], value: str) -> None:
+    if value not in items:
+        items.append(value)
 
 
 def _is_present(value) -> bool:
@@ -303,14 +338,35 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
     confidence_map = extracted.get("confidence_map", {})
     if not isinstance(confidence_map, dict):
         confidence_map = {}
-    unparsed_fields = extracted.get("unparsed_fields", [])
-    if not isinstance(unparsed_fields, list):
-        unparsed_fields = []
+
+    # blank_fields / unreadable_fields 추출 및 정규화
+    blank_fields = _clean_string_list(extracted.get("blank_fields", []))
+    unreadable_fields = _clean_string_list(extracted.get("unreadable_fields", []))
+    existing_unparsed_fields = _clean_string_list(extracted.get("unparsed_fields", []))
+
+    # parsed_fields에 정상 추출된 키는 blank/unreadable에서 제거
+    parsed_keys = set(parsed_fields.keys())
+    blank_fields = [f for f in blank_fields if f not in parsed_keys]
+    unreadable_fields = [f for f in unreadable_fields if f not in parsed_keys]
+    existing_unparsed_fields = [f for f in existing_unparsed_fields if f not in parsed_keys]
+
+    # 양쪽에 걸친 중복은 unreadable_fields 우선 — blank_fields에서 제거
+    unreadable_set = set(unreadable_fields)
+    blank_fields = [f for f in blank_fields if f not in unreadable_set]
+
+    # unparsed_fields = blank_fields + unreadable_fields + existing diagnostics
+    seen: set = set()
+    combined: list = []
+    for f in blank_fields + unreadable_fields + existing_unparsed_fields:
+        if f not in seen:
+            seen.add(f)
+            combined.append(f)
+    unparsed_fields = combined
 
     # doc_category 검증 — enum 밖 값이면 "other"로 강제 보정
     raw_cat = extracted.get("doc_category", "other")
     if not isinstance(raw_cat, str) or raw_cat not in _DOC_CATEGORY_ENUM:
-        unparsed_fields.append(f"invalid_doc_category_corrected:{raw_cat}")
+        _append_unique(unparsed_fields, f"invalid_doc_category_corrected:{raw_cat}")
         doc_category = "other"
     else:
         doc_category = raw_cat
@@ -321,17 +377,18 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
 
     # PDF 파이프라인 플래그
     if pdf_truncated:
-        unparsed_fields.append("pdf_truncated:processed_first_5_pages")
+        _append_unique(unparsed_fields, "pdf_truncated:processed_first_5_pages")
     if pdf_text_truncated:
-        unparsed_fields.append("pdf_text_truncated:max_20000_chars")
+        _append_unique(unparsed_fields, "pdf_text_truncated:max_20000_chars")
     if pdf_text_extract_failed:
-        unparsed_fields.append("pdf_text_extract_failed:fallback_to_images")
+        _append_unique(unparsed_fields, "pdf_text_extract_failed:fallback_to_images")
 
     # provider_type vs doc_category 정합성 (provider_type이 있고 doc_category가 "other"가 아닐 때만)
     if provider_type and provider_type in _PROVIDER_CATEGORY_MAP and doc_category != "other":
         if doc_category not in _PROVIDER_CATEGORY_MAP[provider_type]:
-            unparsed_fields.append(
-                f"category_not_expected_for_provider:{provider_type}:{doc_category}"
+            _append_unique(
+                unparsed_fields,
+                f"category_not_expected_for_provider:{provider_type}:{doc_category}",
             )
 
     # smelter 식별 경고: smelter가 참조 문서 제출 시 식별 필드가 없는 경우
@@ -347,7 +404,7 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
         and doc_category in _SMELTER_REF_CATEGORIES
         and not has_smelter_identity
     ):
-        unparsed_fields.append("missing_reference_document:smelter_identification")
+        _append_unique(unparsed_fields, "missing_reference_document:smelter_identification")
 
     # ── 6) document_extraction_results 적재 (submission repository 위임) ──────
     #   JSONB 컬럼이라 dict/list를 그대로 넘긴다 (json.dumps로 문자열화하면
@@ -360,6 +417,8 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
         parsed_fields=parsed_fields,
         confidence_map=confidence_map,
         unparsed_fields=unparsed_fields,
+        blank_fields=blank_fields,
+        unreadable_fields=unreadable_fields,
         detected_document_type=detected_doc_type or None,
         evidence_summary=evidence_summary or None,
     )
@@ -369,11 +428,13 @@ async def parse_document(document_id: str, db: AsyncSession) -> dict:
         {"cat": doc_category, "doc_id": document_id},
     )
     await db.commit()   # 노드(도구)가 트랜잭션 경계 소유 — repository는 flush까지만
-    
-    
+
+
     return {"parsed_fields": parsed_fields,
             "confidence_map": confidence_map,
             "unparsed_fields": unparsed_fields,
+            "blank_fields": blank_fields,
+            "unreadable_fields": unreadable_fields,
             "doc_category": doc_category,
             "detected_document_type": detected_doc_type,
             "evidence_summary": evidence_summary}
@@ -476,7 +537,7 @@ async def data_gateway_node(state: BatchState) -> BatchState:
     lowest = 1.0
     unconfirmed = 0
     has_missing = False
-    for r, provider_type in results:
+    for r, provider_type, _sid in results:
         cmap = r.confidence_map or {}
         if cmap:
             lowest = min(lowest, min(cmap.values()))
@@ -491,6 +552,27 @@ async def data_gateway_node(state: BatchState) -> BatchState:
  
     low_conf = lowest < CONFIDENCE_THRESHOLD or unconfirmed > 0 or has_missing
     error_reason = "low_confidence" if low_conf else None
+
+    # [§8-A 승격] 게이트 통과(전원 확정·고신뢰·스키마OK) 시에만 확정 AI 추출값을
+    #   provider_type별 상세테이블로 승격한다. 이 시점 parsed_fields는 협력사 확정값이라
+    #   덮어쓰기(clobber) 위험이 없다. 승격 실패는 로깅만 — 파이프라인 진행을 막지 않는다.
+    promoted_suppliers = 0
+    if not low_conf:
+        from backend.domains.supplier.service import promote_extraction_to_details
+        try:
+            async with AsyncSessionLocal() as pdb:
+                for r, provider_type, supplier_id in results:
+                    if not r.supplier_confirmed:
+                        continue
+                    done = await promote_extraction_to_details(
+                        pdb, supplier_id, provider_type,
+                        r.parsed_fields or {}, r.confidence_map or {},
+                    )
+                    if done:
+                        promoted_suppliers += 1
+                await pdb.commit()
+        except Exception as exc:
+            print(f"[data_gateway] §8-A 추출값 승격 실패(파이프라인 계속): {exc}")
  
     return {
         **state,
@@ -505,6 +587,7 @@ async def data_gateway_node(state: BatchState) -> BatchState:
             "lowest_confidence": lowest,
             "unconfirmed": unconfirmed,
             "has_missing": has_missing,
+            "promoted_suppliers": promoted_suppliers,
         },
     }
 
@@ -557,7 +640,7 @@ async def get_integrity_pairs(
     # 키별 '최고 신뢰' 증빙값 집계 (확정 문서만 대상)
     best_doc_value: dict = {}
     best_conf: dict = {}
-    for record, _provider_type in results:
+    for record, _provider_type, _sid in results:
         if not record.supplier_confirmed:
             continue
         parsed = record.parsed_fields or {}

@@ -275,6 +275,11 @@ class SupplierCreateRequest(BaseModel):
     email: str
     # [G1] 협력사→협력사 초대 시 이동 주체(초대한 협력사). 원청 직접 등록이면 None.
     inviter_supplier_id: Optional[uuid.UUID] = None
+    # [초대 시 하위 PIC 저장] 하위 협력사 담당자(PIC 3명)를 stub 생성과 같은 트랜잭션에서
+    #   supplier_contacts 에 저장한다. → 다음 화면("하위 협력사 초대 재확인")에서
+    #   GET /suppliers/{id}/contacts 로 회사명+담당자를 재표기(별도 초대 테이블 불필요).
+    #   MasterFormContact 는 이 모듈 하단 정의 → 전방참조 문자열로 재사용.
+    contacts: list["MasterFormContact"] = []
 
 
 class SupplierBrief(BaseModel):

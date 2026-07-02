@@ -7,7 +7,6 @@ env/
 .venv/
 .env
 .env.local
-.env.example
 # 로컬 전용 compose override (host AWS 자격증명 마운트 등 — 공유 금지)
 docker-compose.override.yml
 

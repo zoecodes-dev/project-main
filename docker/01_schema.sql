@@ -541,7 +541,7 @@ CREATE TABLE batches (
     -- [A-7 상태] batch_stage 접두어 일괄 적용 (verification/readiness/issuance는 스코프 축소로 제거)
     current_stage    VARCHAR(50) DEFAULT 'stage_queued'
         CONSTRAINT chk_batch_stage CHECK (
-            current_stage IN ('stage_queued', 'stage_extraction', 'stage_geo', 'stage_compliance', 'stage_risk')
+            current_stage IN ('stage_queued', 'stage_extraction', 'stage_geo', 'stage_compliance', 'stage_risk', 'stage_judgment')
         ),
 
     -- [A-6 상태] batch_status 접두어 일괄 적용
@@ -722,6 +722,8 @@ CREATE TABLE document_extraction_results (
     unparsed_fields     JSONB, -- 파싱 실패 필드 리스트
     detected_document_type VARCHAR(255),       -- AI가 분류한 문서 유형 (원어 표기)
     evidence_summary       TEXT,               -- 문서 내용 1-2문장 요약
+    blank_fields        JSONB DEFAULT '[]'::jsonb, -- 문서에 라벨은 보이나 값 영역이 확실히 비어 있는 필드
+    unreadable_fields   JSONB DEFAULT '[]'::jsonb, -- 필드를 찾지 못했거나 라벨/값이 불명확한 필드
     supplier_confirmed  BOOLEAN DEFAULT FALSE, -- 협력사가 눈으로 검토하고 확인 버튼 눌렀는지 여부
     confirmed_at        TIMESTAMPTZ,
     created_at          TIMESTAMPTZ DEFAULT now()
@@ -1104,7 +1106,7 @@ CREATE TABLE authority_submissions (
     batch_id           UUID REFERENCES batches(batch_id) ON DELETE CASCADE,
     product_id         UUID REFERENCES products(product_id) ON DELETE CASCADE,
     authority_type     VARCHAR(30) NOT NULL
-        CONSTRAINT chk_auth_type CHECK (authority_type IN ('TRACES_NT', 'IRA_30D', 'CBP_DETENTION')),
+        CONSTRAINT chk_auth_type CHECK (authority_type IN ('TRACES_NT', 'CBP_DETENTION')),
     reference_number   VARCHAR(100), -- TRACES-NT 고유 참조번호 / IRS Safe Harbor 등록번호 등
     status             VARCHAR(20) DEFAULT 'pending'
         CONSTRAINT chk_auth_submission_status CHECK (status IN ('pending', 'submitted', 'approved', 'failed')),
@@ -1209,6 +1211,19 @@ CREATE TABLE geo_audit_results (
     created_at      TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX idx_geo_audit_results_batch ON geo_audit_results(batch_id);
+
+CREATE TABLE batch_final_judgment (
+    judgment_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_id           UUID UNIQUE REFERENCES batches(batch_id) ON DELETE CASCADE,
+    overall_verdict    VARCHAR(20) NOT NULL
+        CONSTRAINT chk_final_verdict CHECK (overall_verdict IN ('pass', 'conditional', 'fail')),
+    executive_summary  TEXT NOT NULL,
+    key_risks          JSONB DEFAULT '[]'::jsonb,
+    recommended_action TEXT NOT NULL,
+    confidence         NUMERIC(5,4),
+    created_at         TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX idx_batch_final_judgment_batch ON batch_final_judgment(batch_id);
 
 
 -- ============================================================

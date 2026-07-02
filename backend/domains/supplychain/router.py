@@ -13,11 +13,13 @@ import 경로를 package 기준으로 수정 (flat → backend.* 패키지).
   - GET /supply-chain/by-bom-depth/{n} : 부품 tier(bom_depth, 0-base) 기준 필터
   - GET /supply-chain/by-hop/{n}       : 공급망 차수(hop_level, 경로 순번) 기준 필터
 """
+import io
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -350,6 +352,57 @@ async def get_supply_chain_map_endpoint(
 
 
 # ============================================================
+# P4  GET /products/{product_id}/supply-chain-map/validation-summary
+#   최종 검증 판정(ready_for_final) + 공급망 요약 롤업(협력사 수/최대 차수/미보유 필드).
+#   원청이 '최종 검증' 전에 확인 + 고객사 제출용 엑셀 다운로드 게이트.
+# ============================================================
+
+@product_supply_chain_router.get("/{product_id}/supply-chain-map/validation-summary")
+async def get_validation_summary_endpoint(
+    product_id: UUID,
+    bom_version_id: Optional[str] = None,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """공급망 최종 검증 요약. products.tenant_id 경로로 tenant 격리."""
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+    return await service.get_validation_summary(
+        product_id=str(product_id),
+        tenant_id=str(current_user.tenant_id),
+        bom_version_id=bom_version_id,
+    )
+
+
+# ============================================================
+# P4  GET /products/{product_id}/supply-chain-map/export
+#   고객사 제출용 공급망 엑셀(xlsx) 서버 생성 다운로드.
+# ============================================================
+
+@product_supply_chain_router.get("/{product_id}/supply-chain-map/export")
+async def export_supply_chain_map_endpoint(
+    product_id: UUID,
+    bom_version_id: Optional[str] = None,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """공급망 맵 엑셀 다운로드(서버 생성). products.tenant_id 경로로 tenant 격리."""
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+    content = await service.export_supply_chain_xlsx(
+        product_id=str(product_id),
+        tenant_id=str(current_user.tenant_id),
+        bom_version_id=bom_version_id,
+    )
+    filename = f"supply_chain_{product_id}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ============================================================
 # 10.2b  POST /supply-chain/maps/{map_id}/confirm
 # ============================================================
 
@@ -379,6 +432,33 @@ async def confirm_supply_chain_map_endpoint(
     if result is None:
         raise HTTPException(status_code=404, detail="Supply chain map not found")
     return result
+
+
+# ============================================================
+# Pool 확정 — POST /supply-chain/maps/{map_id}/pool/confirm
+#   풀 = 맵 그 자체. "확정"은 그 맵의 Tier-1(hop_level=1) 엣지 link_status 전이.
+#   supplier_ids 미지정 시 맵의 모든 Tier-1 엣지 확정.
+# ============================================================
+
+class ConfirmPoolRequest(BaseModel):
+    supplier_ids: Optional[List[str]] = None
+
+
+@router.post("/maps/{map_id}/pool/confirm")
+async def confirm_pool_endpoint(
+    map_id: UUID,
+    body: ConfirmPoolRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: SupplyChainService = Depends(get_supply_chain_service),
+):
+    """1차 협력사 풀 확정. 선택된 Tier-1 협력사(없으면 전체) 엣지를 confirmed 로 전이."""
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=403, detail="테넌트 정보가 없습니다.")
+    return await service.confirm_pool(
+        map_id=str(map_id),
+        tenant_id=str(current_user.tenant_id),
+        supplier_ids=body.supplier_ids,
+    )
 
 
 # [REVERT-NON-SUPPLIER:BEGIN] supplier 외(supplychain) — 공급망 맵 헤더(맵 그 자체) 관리 API.

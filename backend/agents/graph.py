@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from backend.agents.automation import run_risk_scoring
 from backend.agents.compliance import compliance_node
 from backend.agents.data_gateway import data_gateway_node
+from backend.agents.final_judgment import final_judgment_node
 from backend.agents.geo_audit import geo_audit_node
 from backend.agents.state import BatchState
 from backend.agents.supervisor import route
@@ -168,6 +169,7 @@ builder.add_node("data_gateway", traced_graph_node("data_gateway", data_gateway_
 builder.add_node("geo_audit", traced_graph_node("geo_audit", geo_audit_node))
 builder.add_node("compliance", traced_graph_node("compliance", compliance_node))
 builder.add_node("risk_scoring", traced_graph_node("risk_scoring", risk_scoring_node))
+builder.add_node("final_judgment", traced_graph_node("final_judgment", final_judgment_node))
 builder.add_node("hitl_interrupt", traced_graph_node("hitl_interrupt", hitl_interrupt_node, "human"))
 builder.add_node("completed", completed_node)
 
@@ -180,12 +182,13 @@ builder.add_conditional_edges(
         "geo_audit": "geo_audit",
         "compliance": "compliance",
         "risk_scoring": "risk_scoring",
+        "final_judgment": "final_judgment",
         "hitl_interrupt": "hitl_interrupt",
         "completed": "completed",
     },
 )
 
-for node_name in ("data_gateway", "geo_audit", "compliance", "risk_scoring"):
+for node_name in ("data_gateway", "geo_audit", "compliance", "risk_scoring", "final_judgment"):
     builder.add_edge(node_name, "supervisor")
 
 builder.add_edge("hitl_interrupt", "supervisor")

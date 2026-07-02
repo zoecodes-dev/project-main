@@ -159,6 +159,8 @@ async def create_extraction_result(
     parsed_fields: dict,
     confidence_map: dict,
     unparsed_fields: list,
+    blank_fields: Optional[list] = None,
+    unreadable_fields: Optional[list] = None,
     detected_document_type: Optional[str] = None,
     evidence_summary: Optional[str] = None,
 ) -> DocumentExtractionResult:
@@ -171,6 +173,7 @@ async def create_extraction_result(
        변환 책임을 이 경계 한 곳에 모아 호출부가 타입을 신경쓰지 않게 한다.)
     * supplier_confirmed는 기본 FALSE(모델 server_default) — 협력사가 추후
       "확인" 버튼을 누르기 전까지는 미확정 상태로 둡니다.
+    * blank_fields / unreadable_fields는 None 전달 시 빈 배열로 보정한다.
     * extraction_id / created_at은 모델 server_default(uuid_generate_v4 / now())에
       맡깁니다. commit은 호출부 책임(기존 repository 규약 동일).
     """
@@ -180,6 +183,8 @@ async def create_extraction_result(
         parsed_fields=parsed_fields,
         confidence_map=confidence_map,
         unparsed_fields=unparsed_fields,
+        blank_fields=blank_fields if blank_fields is not None else [],
+        unreadable_fields=unreadable_fields if unreadable_fields is not None else [],
         detected_document_type=detected_document_type,
         evidence_summary=evidence_summary,
     )
@@ -191,19 +196,24 @@ async def create_extraction_result(
 async def list_extraction_results_by_suppliers(
     db: AsyncSession,
     supplier_ids: list[uuid.UUID],
-) -> list[tuple[DocumentExtractionResult, str]]:   # ← 반환 타입 변경
+) -> list[tuple[DocumentExtractionResult, str, uuid.UUID]]:   # ← (추출결과, provider_type, supplier_id)
     """
-    [SELECT] 주어진 협력사들의 문서 추출결과를 provider_type과 함께 모은다.
+    [SELECT] 주어진 협력사들의 문서 추출결과를 provider_type·supplier_id와 함께 모은다.
     document_extraction_results → data_request_log(target_supplier_id)
       → suppliers(provider_type) 3-단 조인.
-    node(data_gateway)는 (추출결과, provider_type) 튜플로 신뢰도·확인여부와
-    validate_schema 누락 검사(spec 노드 정의 #2단계)를 집계한다.
+    node(data_gateway)는 (추출결과, provider_type, supplier_id) 튜플로 신뢰도·확인여부와
+    validate_schema 누락 검사(spec 노드 정의 #2단계)를 집계하고, 게이트 통과 시
+    supplier_id로 상세테이블 승격(§8-A)을 수행한다.
     """
     if not supplier_ids:
         return []
 
     stmt = (
-        select(DocumentExtractionResult, _suppliers_tbl.c.provider_type)   # ← 튜플 select
+        select(
+            DocumentExtractionResult,
+            _suppliers_tbl.c.provider_type,
+            DataRequestLog.target_supplier_id,
+        )
         .join(
             DataRequestLog,
             DataRequestLog.request_id == DocumentExtractionResult.request_id,
@@ -224,6 +234,7 @@ async def list_extractions_for_review(db: AsyncSession, tenant_id) -> list[dict]
     """AI 파싱 추출결과 + 협력사명 + 요청유형/상태 + (연결된 경우) hitl_reviews 검토 상태."""
     q = text("""
         SELECT e.request_id, e.parsed_fields, e.confidence_map, e.unparsed_fields,
+               e.blank_fields, e.unreadable_fields,
                e.detected_document_type, e.evidence_summary,
                d.target_supplier_id, d.requested_data_type, d.submission_status, d.batch_id,
                s.company_name,
@@ -316,6 +327,8 @@ async def get_latest_extraction_result_by_document_id(
                 e.parsed_fields,
                 e.confidence_map,
                 e.unparsed_fields,
+                e.blank_fields,
+                e.unreadable_fields,
                 e.detected_document_type,
                 e.evidence_summary,
                 e.supplier_confirmed,
