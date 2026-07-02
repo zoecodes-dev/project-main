@@ -694,6 +694,7 @@ class OnboardingSubmitRequest(BaseModel):
     account: OnboardingAccount
     company: OnboardingCompany
     business_reg_doc: Optional[OnboardingDoc] = None
+    environmental_report: Optional[OnboardingDoc] = None   # 환경성적서(회원가입 수집) — AI 확인은 로그인 후 자료입력에서
     unverified: bool = False
     consent_agreed: bool = False
     contacts: list[OnboardingContact] = []
