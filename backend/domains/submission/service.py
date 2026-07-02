@@ -94,14 +94,18 @@ async def create_and_request_submission(
     3. 이벤트 발행: 모든 트랜잭션이 성공한 후 'SubmissionRequested' 이벤트를 발행합니다.
        (규칙 준수: db 인자 없이 2-인자로 publish를 호출하여 외부 도메인/Notification과 결합도를 낮춥니다.)
     """
-    # [비즈니스 룰 방어] 마감일(due_date) 입력이 없으면 발송일 기준 +14일 자동 설정
+    # [비즈니스 룰 방어] 요청일(requested_at)과 마감일(due_date)을 같은 시각 기준으로 묶는다.
+    #   - requested_at: 생성 시각(now)을 명시적으로 지정해 DB now()/앱 now() 시계 차이를 없앤다.
+    #   - due_date: 클라이언트가 안 주면 requested_at 기준 +3일로 자동 설정.
+    requested_at = datetime.now(timezone.utc)
     if not due_date:
-        due_date = datetime.now(timezone.utc) + timedelta(days=14)
+        due_date = requested_at + timedelta(days=3)
 
     new_log = DataRequestLog(
         requester_user_id=requester_user_id,
         target_supplier_id=target_supplier_id,
         requested_data_type=requested_data_type,
+        requested_at=requested_at,
         due_date=due_date,
         submission_status=SubmissionStatus.REQUESTED.value
     )
