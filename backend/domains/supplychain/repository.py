@@ -788,10 +788,11 @@ class SupplyChainRepository:
             sup_rows = await self.session.execute(sup_query, {"ids": supplier_ids})
             suppliers = [dict(r._mapping) for r in sup_rows]
 
-        # 공장 — supply_ratio에 등장하는 고유 factory_id
-        factory_ids = list({str(r["factory_id"]) for r in supply_chain_map if r["factory_id"]})
+        # 공장 — 맵에 등장하는 협력사의 공장을 supplier_id 기준으로 전부 반환한다.
+        #   (기존: supply_ratio에 연결된 factory_id만 → ratio-공장 연결이 없으면 공장/국가/원산지가
+        #    프론트에서 통째로 비었음. 협력사가 입력한 공장 정보는 ratio 유무와 무관하게 내려줘야 한다.)
         supplier_factories: List[Dict[str, Any]] = []
-        if factory_ids:
+        if supplier_ids:
             fac_query = text("""
                 SELECT
                     sf.factory_id, sf.supplier_id, sf.factory_name, sf.address,
@@ -800,9 +801,9 @@ class SupplyChainRepository:
                     ST_X(sf.location) AS longitude,
                     sf.is_active
                 FROM supplier_factories sf
-                WHERE sf.factory_id = ANY(:ids)
+                WHERE sf.supplier_id = ANY(:ids)
             """)
-            fac_rows = await self.session.execute(fac_query, {"ids": factory_ids})
+            fac_rows = await self.session.execute(fac_query, {"ids": supplier_ids})
             supplier_factories = [dict(r._mapping) for r in fac_rows]
 
         return {
