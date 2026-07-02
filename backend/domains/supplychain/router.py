@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.domains.supplychain.repository import SupplyChainRepository
 from backend.domains.supplychain.service import SupplyChainService
 from backend.domains.submission.service import create_and_request_submission
+from backend.infrastructure.osm_geocode import geocode_candidates, reverse_geocode_osm
 from backend.infrastructure.auth import CurrentUser, get_current_user
 from backend.infrastructure.database import get_db, AsyncSessionLocal
 from backend.infrastructure.trace import trace_tool
@@ -171,6 +172,34 @@ async def get_geo_risks_endpoint(
     """지정학 공간 리스크(신장, 위장공장) 노출 목록."""
     # check_geo_audit_risk_zone(신장) + check_coordinate_authenticity(위장공장) 결과 통합 반환
     return await service.get_geo_risks(session)
+
+
+@router.get("/geocode/search")
+@trace_tool("geocode_search")
+async def geocode_search_endpoint(
+    q: str,
+    country: Optional[str] = None,
+    limit: int = 5,
+):
+    """
+    [픽커용] 지명/주소 → 후보 목록(동명 지명 해소). 프론트가 지도에 띄워 사용자가 선택.
+    - q: 지명/주소 (한글·현지어·영문). country: ISO alpha-2(있으면 그 나라로 한정, 없으면 전세계).
+    - 각 후보: {lat, lon, display_name, admin(행정구역), country_code, is_xinjiang}.
+    """
+    return {"query": q, "candidates": await geocode_candidates(q, country, limit)}
+
+
+@router.get("/geocode/reverse")
+@trace_tool("geocode_reverse")
+async def geocode_reverse_endpoint(
+    lat: float,
+    lon: float,
+):
+    """
+    [픽커용] 확정한 핀 좌표 → {lat, lon, display_name, admin, country_code, is_xinjiang} | null.
+    사용자가 지도에서 고른 위치의 국가·행정구역을 역추출해 폼 자동입력(country/region)에 사용.
+    """
+    return await reverse_geocode_osm(lat, lon)
 
 
 @router.post("/notifications/correction", response_model=Dict[str, Any])
